@@ -1,0 +1,277 @@
+.dialog-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-dialog);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  background: rgba(10, 11, 13, 0.42);
+}
+
+.dialog-card {
+  width: min(100%, 680px);
+  max-height: min(88vh, 860px);
+  border: 1px solid var(--color-hairline);
+  border-radius: var(--radius-xl);
+  overflow: hidden;
+  background: var(--color-canvas);
+  box-shadow: 0 28px 80px rgba(10, 11, 13, 0.18);
+}
+
+.dialog-panel {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.dialog-panel h3,
+.dialog-panel p {
+  margin: 0;
+}
+
+.dialog-header,
+.dialog-actions {
+  flex: 0 0 auto;
+}
+
+.dialog-header {
+  padding: 14px 16px 12px;
+  border-bottom: 1px solid var(--color-hairline-soft);
+}
+
+.dialog-body {
+  min-height: 0;
+  padding: 0 16px;
+}
+
+.dialog-scroll {
+  max-height: min(68vh, 640px);
+  overflow: auto;
+  padding: 12px 4px 14px 0;
+  /* stable（单侧）：滚动条出现时不产生布局跳动，也不在左侧留出永久空槽 */
+  scrollbar-gutter: stable;
+}
+
+.dialog-scroll-content {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.dialog-hero {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.dialog-hero-spacer,
+.dialog-close-button {
+  flex: 0 0 28px;
+  width: 28px;
+  height: 28px;
+}
+
+.dialog-close-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 1px solid var(--color-hairline);
+  border-radius: var(--radius-button);
+  color: var(--color-muted);
+  background: var(--color-canvas);
+  cursor: pointer;
+}
+
+.dialog-close-button:hover {
+  color: var(--color-ink);
+  border-color: var(--color-primary);
+  background: var(--color-surface-soft);
+}
+
+.dialog-close-button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.dialog-close-button svg {
+  width: 18px;
+  height: 18px;
+  fill: currentColor;
+}
+
+.dialog-title-group {
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.dialog-title-group-centered {
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+}
+
+.dialog-title-group h3 {
+  line-height: 1.2;
+}
+
+.dialog-hero-centered {
+  align-items: center;
+}
+
+.dialog-eyebrow {
+  margin-bottom: 2px;
+  color: var(--color-danger);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.dialog-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 10px 16px 12px;
+  border-top: 1px solid var(--color-hairline-soft);
+  background: var(--color-canvas);
+}
+
+.dialog-actions__group {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.primary-button,
+.secondary-button,
+.danger-button,
+.warning-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: var(--button-height);
+  padding: 6px 12px;
+  border-radius: var(--radius-button);
+  cursor: pointer;
+  white-space: nowrap;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.2;
+  transition:
+    border-color 0.16s ease,
+    background 0.16s ease,
+    color 0.16s ease,
+    box-shadow 0.16s ease;
+}
+
+.primary-button {
+  color: var(--color-on-primary);
+  background: var(--color-primary);
+  border-color: var(--color-primary);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.18),
+    0 1px 2px rgba(10, 11, 13, 0.08);
+}
+
+.secondary-button {
+  color: var(--color-ink);
+  background: var(--color-canvas);
+  border-color: var(--color-hairline);
+  box-shadow: 0 1px 2px rgba(10, 11, 13, 0.04);
+}
+
+.danger-button {
+  color: #ffffff;
+  background: var(--color-danger);
+  border-color: var(--color-danger);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.16),
+    0 1px 2px rgba(10, 11, 13, 0.08);
+}
+
+.warning-button {
+  color: var(--color-on-warning);
+  background: var(--color-warning);
+  border-color: var(--color-warning);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.16),
+    0 1px 2px rgba(10, 11, 13, 0.08);
+}
+
+.primary-button:hover:not(:disabled) {
+  background: var(--color-primary-active);
+  border-color: var(--color-primary-active);
+}
+
+.secondary-button:hover:not(:disabled) {
+  background: var(--color-surface-soft);
+  border-color: var(--color-muted-soft);
+}
+
+.danger-button:hover:not(:disabled) {
+  background: #b91c29;
+  border-color: #b91c29;
+}
+
+.warning-button:hover:not(:disabled) {
+  background: #c5771a;
+  border-color: #c5771a;
+}
+
+.primary-button:active {
+  background: var(--color-primary-active);
+  border-color: var(--color-primary-active);
+}
+
+.primary-button:disabled,
+.secondary-button:disabled,
+.danger-button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.dialog-actions .primary-button,
+.dialog-actions .secondary-button,
+.dialog-actions .danger-button {
+  flex: 0 0 auto;
+  min-width: fit-content;
+}
+
+@media (max-width: 1024px) {
+  .dialog-backdrop {
+    padding: 12px;
+  }
+
+  .dialog-header {
+    padding: 12px 14px 10px;
+  }
+
+  .dialog-body {
+    padding: 0 14px;
+  }
+
+  .dialog-scroll {
+    max-height: min(70vh, 640px);
+    padding: 10px 4px 12px 0;
+  }
+
+  .dialog-hero {
+    align-items: stretch;
+  }
+
+  .dialog-hero-centered {
+    align-items: center;
+  }
+
+  .dialog-actions {
+    padding: 10px 14px 12px;
+  }
+}

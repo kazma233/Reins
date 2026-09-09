@@ -1,0 +1,1465 @@
+.manager-shell {
+  display: flex;
+  min-height: 0;
+  flex: 1 1 auto;
+}
+
+.manager-content,
+.manager-panel {
+  border: 1px solid var(--color-hairline);
+  background: rgba(255, 255, 255, 0.8);
+}
+
+.manager-field {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.manager-field-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.manager-field-row > input {
+  flex: 1;
+}
+
+.manager-field__label {
+  color: var(--color-body);
+  font-size: 13px;
+}
+
+.manager-field span {
+  color: var(--color-body);
+  font-size: 13px;
+}
+
+.manager-field__hint {
+  margin: -2px 0 0;
+  color: var(--color-muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.manager-field input,
+.manager-editor {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  padding: 7px 10px;
+  border: 1px solid var(--color-hairline);
+  border-radius: 0;
+  background: rgba(255, 255, 255, 0.88);
+  color: var(--color-ink);
+  font-size: 14px;
+  line-height: 1.4;
+  appearance: none;
+}
+
+.manager-field input {
+  min-height: var(--control-height);
+}
+
+.manager-textarea {
+  min-height: 92px;
+  resize: vertical;
+}
+
+.manager-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.manager-segmented {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.manager-segmented--triple {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.manager-segmented__button {
+  cursor: pointer;
+}
+
+.manager-nav {
+  display: flex;
+  flex: 0 0 auto;
+  flex-direction: row;
+  gap: 8px;
+}
+
+.manager-nav__button {
+  min-height: 32px;
+  padding: 4px 10px;
+  cursor: pointer;
+}
+
+.manager-content {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  min-height: 0;
+  overflow: auto;
+}
+
+.manager-content__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+}
+
+.manager-content__actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+  flex: 0 1 auto;
+  min-width: 0;
+}
+
+.manager-skills-toolbar__search-input {
+  display: block;
+  min-width: 80px;
+  flex: 0 1 220px;
+  max-width: 220px;
+  padding: 7px 10px;
+  border: 1px solid var(--color-hairline);
+  border-radius: var(--radius-md);
+  background: var(--color-canvas);
+  color: var(--color-ink);
+  font-size: 14px;
+  line-height: 1.4;
+  appearance: none;
+  min-height: var(--control-height);
+}
+
+.manager-skills-toolbar__search-input:focus {
+  outline: 2px solid rgba(0, 82, 255, 0.22);
+  outline-offset: 1px;
+  border-color: var(--color-primary);
+}
+
+.manager-stack--stretch {
+  min-height: 0;
+  flex: 1 1 auto;
+}
+
+.manager-panel {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.manager-panel--fill {
+  flex: 1 1 auto;
+}
+
+.manager-panel-section {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.manager-panel-section + .manager-panel-section {
+  padding-top: 18px;
+  border-top: 1px solid var(--color-hairline-soft);
+}
+
+.manager-panel-section--fill {
+  min-height: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+}
+
+.manager-import-shell {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 16px;
+}
+
+.manager-import-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.manager-import-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 12px;
+}
+
+.manager-import-row__field {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.manager-import-row--git-source .manager-import-row__field--repo {
+  flex: 1 1 70%;
+}
+
+.manager-import-row--git-source .manager-import-row__field--ref {
+  flex: 0 1 180px;
+}
+
+.manager-import-row--include-patterns {
+  align-items: flex-start;
+}
+
+.manager-import-row__actions {
+  flex: 0 0 auto;
+}
+
+.manager-inline-hint {
+  display: inline-flex;
+  align-items: center;
+  color: var(--color-body);
+  font-size: 0.92rem;
+  line-height: 1.4;
+}
+
+.manager-picker-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 12px;
+}
+
+.manager-picker-row__field {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.manager-picker-row__actions {
+  flex: 0 0 auto;
+}
+
+.manager-import-dialog {
+  width: min(100%, 760px);
+}
+
+.manager-sync-dialog {
+  width: min(92vw, 1180px);
+}
+
+.manager-import-dialog .manager-import-shell {
+  gap: 16px;
+}
+
+/* Pass dialog-card height down to the two columns so each list scrolls
+   independently and the dialog itself never scrolls as a whole.
+   dialog-body → dialog-scroll → dialog-scroll-content must all be flex
+   bridges; the base styles leave them as non-flex blocks, which would let
+   the columns expand and push the dialog into page-level scrolling. */
+.manager-sync-dialog .dialog-body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.manager-sync-dialog .dialog-scroll {
+  flex: 1;
+  min-height: 0;
+  max-height: none;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  padding-right: 0;
+  scrollbar-gutter: auto;
+}
+
+.manager-sync-dialog .dialog-scroll-content {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  padding-right: 0;
+}
+
+.manager-batch-import-editor {
+  min-height: 220px;
+}
+
+.manager-target-form-shell {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.manager-import-dialog .manager-target-form-shell .manager-stack {
+  gap: 8px;
+}
+
+.manager-import-dialog .manager-target-form-shell .manager-picker-row,
+/* 卡片操作按钮区：无此基础规则时按钮间只有模板空白，视觉上贴在一起 */
+.manager-card-actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 8px;
+}
+
+.manager-import-dialog .manager-target-form-shell .manager-card-actions {
+  gap: 10px;
+}
+
+.manager-scroll-region {
+  min-height: 0;
+  flex: 1 1 auto;
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+
+.manager-card-actions--start {
+  justify-content: flex-start;
+}
+
+.manager-skill-row {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 14px;
+}
+
+.manager-skill-row__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.manager-skill-main {
+  display: flex;
+  min-width: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.manager-skill-headline {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.manager-skill-headline__meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  flex: 1 1 auto;
+  flex-wrap: wrap;
+}
+
+.manager-skill-name {
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 1.3;
+  color: var(--color-ink);
+}
+
+.manager-skill-updated {
+  color: var(--color-body);
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.manager-skill-delete-button {
+  min-height: 26px;
+  padding: 2px 7px;
+  border-radius: 0;
+  font-size: 12px;
+}
+
+.manager-skill-description {
+  margin: 0;
+  color: var(--color-body);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.manager-skill-path-label {
+  color: var(--color-muted);
+  font-size: 12px;
+}
+
+.manager-skill-more-button {
+  min-height: 22px;
+  padding: 1px 7px;
+  border-radius: 0;
+  font-size: 12px;
+}
+
+.manager-target-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.manager-target-button {
+  min-height: 26px;
+  padding: 3px 8px;
+  font-size: 12px;
+}
+
+.manager-target-button.is-active {
+  font-weight: 500;
+}
+
+.manager-target-button.is-warning {
+  border-color: rgba(245, 158, 11, 0.45);
+  background: rgba(255, 251, 235, 1);
+  color: #92400e;
+}
+
+.manager-target-button.is-linked {
+  cursor: default;
+}
+
+.manager-delete-confirm-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.manager-excluded-skill-section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 10px;
+  border: 1px dashed var(--color-hairline);
+  background: var(--color-surface-soft);
+}
+
+.manager-excluded-skill-section__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.manager-excluded-skill-section__title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-ink);
+}
+
+.manager-excluded-skill-section__count {
+  color: var(--color-muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.manager-excluded-skill-section__list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.manager-excluded-skill-section__empty {
+  padding: 8px 0 0;
+}
+
+.manager-excluded-skill-section .manager-import-skill-row {
+  padding: 10px 12px;
+  background: rgba(255, 255, 255, 0.7);
+}
+
+/* Single list style for skill pickers; the sync dialog overrides spacing via
+   its scoped rule below instead of duplicating this block. */
+.manager-import-skill-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.manager-import-skill-row {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 14px;
+  cursor: pointer;
+}
+
+.manager-import-skill-row--readonly {
+  cursor: default;
+}
+
+/* --- SourceSyncDialog target groups --- */
+
+.manager-sync-target-groups {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.manager-sync-target-group__header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 6px 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--color-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.manager-sync-target-group__count {
+  margin-left: auto;
+  font-family: var(--font-mono);
+}
+
+.manager-sync-target-group__actions {
+  display: flex;
+  gap: 4px;
+}
+
+.manager-sync-target-group__action {
+  min-height: 22px;
+  padding: 1px 7px;
+  font-size: 11px;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.manager-sync-target-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background-color 0.12s ease;
+}
+
+.manager-sync-target-entry {
+  border-bottom: 1px solid var(--color-hairline-soft);
+}
+
+.manager-sync-target-entry:last-child {
+  border-bottom: 0;
+}
+
+.manager-sync-target-row:hover {
+  background-color: var(--color-surface-soft);
+}
+
+.manager-sync-target-row input[type="checkbox"] {
+  flex-shrink: 0;
+  width: 16px;
+  height: 16px;
+  accent-color: var(--color-accent);
+  cursor: pointer;
+}
+
+.manager-sync-target-row__body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.manager-sync-target-row__label {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--color-ink);
+}
+
+.manager-sync-target-row__label-line {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+}
+
+.manager-sync-target-row__tags {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.manager-sync-target-row__tag {
+  padding: 1px 5px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 500;
+  line-height: 1.4;
+  white-space: nowrap;
+}
+
+.manager-sync-target-row__tag--unmanaged {
+  background: var(--color-surface-soft);
+  color: var(--color-muted);
+}
+
+.manager-sync-target-row__tag--linked {
+  background: rgba(0, 82, 255, 0.08);
+  color: var(--color-primary);
+}
+
+.manager-sync-target-row__path {
+  font-size: 12px;
+  color: var(--color-body);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.manager-sync-target-row__pill {
+  flex-shrink: 0;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.4;
+}
+
+/* Linked target hint: skillDir is a symlink to another managed target. */
+.manager-sync-target-row__link {
+  font-size: 12px;
+  color: var(--color-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Disabled rows (disabled config or symlinked skillDir) stay readable but
+   clearly unselectable. Opacity on the interactive parts only, so the path
+   and link hint remain fully legible. */
+.manager-sync-target-row--disabled {
+  cursor: not-allowed;
+}
+
+.manager-sync-target-row--disabled:hover {
+  background-color: transparent;
+}
+
+.manager-sync-target-row--disabled input[type="checkbox"] {
+  cursor: not-allowed;
+}
+
+.manager-sync-target-row--disabled .manager-sync-target-row__label {
+  color: var(--color-muted);
+}
+
+.manager-sync-target-links {
+  margin: 0 0 8px 26px;
+  padding: 0 0 0 12px;
+  border-left: 2px solid var(--color-hairline-soft);
+}
+
+.manager-sync-target-links > summary {
+  cursor: pointer;
+  color: var(--color-body);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.manager-sync-target-links__cleanup {
+  margin-left: 6px;
+  color: var(--color-danger);
+}
+
+.manager-sync-target-links__list {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin-top: 6px;
+}
+
+.manager-sync-target-link {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+
+.manager-sync-target-link--current-source {
+  background: rgba(0, 82, 255, 0.06);
+}
+
+.manager-sync-target-link__main {
+  display: grid;
+  grid-template-columns: minmax(72px, auto) minmax(0, 1fr);
+  column-gap: 8px;
+  min-width: 0;
+}
+
+.manager-sync-target-link__name {
+  color: var(--color-ink);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.manager-sync-target-link__source {
+  overflow: hidden;
+  color: var(--color-body);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.manager-sync-target-link__path {
+  grid-column: 1 / -1;
+  overflow: hidden;
+  color: var(--color-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.manager-sync-target-link__state {
+  flex: 0 0 auto;
+  padding: 1px 6px;
+  border-radius: var(--radius-pill);
+  font-size: 11px;
+  line-height: 1.5;
+  white-space: nowrap;
+}
+
+.manager-sync-target-link__state--linked {
+  background: rgba(5, 177, 105, 0.06);
+  color: var(--color-success);
+}
+
+.manager-sync-target-link__state--cleanup {
+  background: rgba(207, 32, 47, 0.06);
+  color: var(--color-danger);
+}
+
+.manager-sync-target-link__state--unmanaged {
+  background: var(--color-surface-soft);
+  color: var(--color-muted);
+}
+
+.pill--on {
+  background: #ecfdf5;
+  color: #059669;
+}
+
+.pill--off {
+  background: #f3f4f6;
+  color: #9ca3af;
+}
+
+/* --- sync columns --- */
+
+.manager-sync-columns {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+  align-items: stretch;
+  flex: 1;
+  min-height: 0;
+}
+
+.manager-sync-column {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+  min-height: 0;
+}
+
+.manager-sync-column__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 0 4px;
+}
+
+.manager-sync-column__title {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-body);
+}
+
+.manager-sync-column__actions {
+  display: flex;
+  gap: 6px;
+}
+
+.manager-sync-column__action {
+  min-height: 24px;
+  padding: 2px 8px;
+  font-size: 12px;
+}
+
+.manager-sync-dialog .manager-import-skill-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  border: 1px solid var(--color-hairline-soft);
+  border-radius: 6px;
+  padding: 4px;
+}
+
+.manager-sync-dialog .manager-sync-target-groups {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.manager-sync-dialog .manager-import-skill-row {
+  border: 1px solid var(--color-hairline-soft);
+  border-radius: 6px;
+  gap: 0;
+  padding: 7px 9px;
+}
+
+.manager-sync-dialog .manager-import-skill-row .manager-skill-name {
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.25;
+}
+
+.manager-sync-source-location {
+  margin: -4px 0 8px;
+  font-size: 12px;
+  color: var(--color-muted);
+  word-break: break-all;
+}
+
+/* Search input inside sync dialog's skill column. */
+.manager-search-input {
+  width: 100%;
+  padding: 6px 10px;
+  border: 1px solid var(--color-hairline);
+  border-radius: 6px;
+  font-size: 13px;
+  background: var(--color-canvas);
+  color: var(--color-ink);
+  margin: 0 0 6px;
+  box-sizing: border-box;
+}
+
+/* Collapsed section showing skills excluded by the include patterns. */
+.manager-sync-unmatched {
+  border: 1px dashed var(--color-hairline);
+  border-radius: 6px;
+  padding: 6px 10px;
+  font-size: 12px;
+  color: var(--color-muted);
+}
+
+.manager-sync-unmatched > summary {
+  cursor: pointer;
+  font-weight: 500;
+  list-style: none;
+}
+
+.manager-sync-unmatched > summary::-webkit-details-marker {
+  display: none;
+}
+
+.manager-sync-unmatched__list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+/* --- Targets tab: flat list --- */
+
+.manager-target-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.manager-target-group__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 4px 8px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--color-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.manager-target-group__header .secondary-button {
+  min-height: 24px;
+  padding: 2px 8px;
+  font-size: 12px;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.manager-target-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--color-hairline-soft);
+  transition: background-color 0.12s ease;
+}
+
+.manager-target-row--project {
+  align-items: flex-start;
+}
+
+.manager-target-row:last-child {
+  border-bottom: none;
+}
+
+.manager-target-row:hover {
+  background-color: var(--color-surface-soft);
+}
+
+.manager-target-row__icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.manager-target-row__icon.icon--on {
+  background: #ecfdf5;
+  color: #059669;
+}
+
+.manager-target-row__icon.icon--off {
+  background: #f3f4f6;
+  color: #9ca3af;
+}
+
+.manager-target-row__icon.icon--project {
+  background: #eef2ff;
+  color: #4f46e5;
+}
+
+.manager-target-row__body {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.manager-target-row__headline {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.manager-target-row__headline--project {
+  flex-wrap: wrap;
+}
+
+.manager-target-row__actions--project {
+  margin-left: auto;
+}
+
+.manager-target-row__name {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--color-ink);
+}
+
+.manager-target-row__pill {
+  padding: 1px 7px;
+  border-radius: 10px;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.5;
+  white-space: nowrap;
+}
+
+.manager-target-row__meta {
+  font-size: 12px;
+  color: var(--color-body);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.manager-target-row__meta--paths {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+  font-family: var(--font-mono);
+  line-height: 1.45;
+  white-space: normal;
+}
+
+.manager-target-row__meta--paths span {
+  overflow-wrap: anywhere;
+}
+
+.manager-project-target-paths {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.manager-project-target-path {
+  display: grid;
+  grid-template-columns: minmax(92px, auto) minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+  padding-top: 8px;
+  border-top: 1px solid var(--color-hairline-soft);
+}
+
+.manager-project-target-path__headline {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.manager-project-target-path__name {
+  color: var(--color-ink);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.manager-project-target-path__items {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+  color: var(--color-body);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.manager-project-target-path__items span {
+  overflow-wrap: anywhere;
+}
+
+.manager-target-row__actions {
+  display: flex;
+  flex-shrink: 0;
+  gap: 6px;
+}
+
+.manager-target-row__actions .secondary-button,
+.manager-target-row__actions .warning-button,
+.manager-target-row__actions .danger-button {
+  min-height: 26px;
+  padding: 3px 8px;
+  font-size: 12px;
+}
+
+.manager-skill-source-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--color-hairline-soft);
+  transition: background-color 0.15s ease;
+}
+
+.manager-skill-source-groups {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+.manager-skill-source-group {
+  min-width: 0;
+}
+
+.manager-skill-source-group__header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding-bottom: 8px;
+  padding-right: 14px;
+  border-bottom: 1px solid var(--color-hairline);
+  color: var(--color-muted);
+  font-size: 12px;
+}
+
+.manager-skill-source-group__header h2 {
+  margin: 0;
+  color: var(--color-ink);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.manager-skill-source-group__list .manager-skill-source-row:first-child {
+  padding-top: 12px;
+}
+
+.manager-skill-source-row:last-child {
+  border-bottom: none;
+}
+
+.manager-skill-source-row:hover {
+  background-color: var(--color-surface-soft);
+}
+
+.manager-skill-source-row__icon--git,
+.manager-skill-source-row__icon--local {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 32px;
+  height: 32px;
+  border-radius: 6px;
+  font-size: 15px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.manager-skill-source-row__icon--git {
+  background: #eef2ff;
+  color: #4f46e5;
+}
+
+.manager-skill-source-row__icon--local {
+  background: #ecfdf5;
+  color: #059669;
+}
+
+.manager-skill-source-row__main {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.manager-skill-source-row__checkbox {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.manager-skill-source-row__label {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--color-ink);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.manager-skill-source-row__meta {
+  color: var(--color-body);
+  font-size: 12px;
+}
+
+.manager-skill-source-row__patterns {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 2px;
+}
+
+.manager-skill-source-row__pattern-group {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.manager-skill-source-row__pattern-label {
+  color: var(--color-muted);
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.manager-skill-source-row__pattern-chip {
+  padding: 1px 6px;
+  border-radius: var(--radius-pill);
+  background: var(--color-surface-soft);
+  border: 1px solid var(--color-hairline-soft);
+  color: var(--color-body);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.manager-skill-source-row__pattern-empty {
+  color: var(--color-muted-soft);
+  font-size: 12px;
+}
+
+.manager-skill-source-row__actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 6px;
+}
+
+.manager-skill-source-row__actions-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.manager-skill-source-row__actions-row > .manager-skill-source-row__action {
+  flex: 0 0 auto;
+}
+
+.manager-skill-source-row__action {
+  min-height: 26px;
+  padding: 3px 8px;
+  font-size: 12px;
+}
+
+.manager-pre {
+  display: block;
+  margin: 0;
+  padding: 10px 12px;
+  font-size: 12px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.manager-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+@media (max-width: 1240px) {
+  .manager-shell,
+  .manager-content {
+    height: auto;
+  }
+}
+
+@media (max-width: 720px) {
+  .manager-content__header {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .manager-picker-row {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .manager-skill-row__header {
+    flex-direction: column;
+  }
+}
+
+/* Theme flattening keeps the workspace dense without stacking card borders. */
+.manager-shell {
+  background: var(--color-canvas);
+}
+
+.manager-content {
+  gap: 24px;
+  padding: 24px 32px 32px;
+  border: 0;
+  border-radius: 0;
+  background: var(--color-canvas);
+  box-shadow: none;
+}
+
+.manager-content__header {
+  padding-bottom: 20px;
+  border-bottom: 1px solid var(--color-hairline-soft);
+}
+
+.manager-field__label,
+.manager-field span,
+.manager-field__hint,
+.manager-inline-hint,
+.manager-panel p,
+.manager-skill-description,
+.manager-skill-path-label,
+.manager-skill-updated {
+  color: var(--color-body);
+}
+
+.manager-required-mark {
+  color: var(--color-danger);
+}
+
+.manager-panel {
+  gap: 20px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.manager-panel-section + .manager-panel-section {
+  padding-top: 24px;
+  border-top: 1px solid var(--color-hairline-soft);
+}
+
+.manager-field input,
+.manager-editor {
+  border-color: var(--color-hairline);
+  border-radius: var(--radius-md);
+  background: var(--color-canvas);
+  color: var(--color-ink);
+}
+
+.manager-field input:focus,
+.manager-editor:focus {
+  outline: 2px solid rgba(0, 82, 255, 0.22);
+  outline-offset: 1px;
+  border-color: var(--color-primary);
+}
+
+.manager-segmented__button,
+.manager-nav__button,
+.manager-target-button,
+.manager-skill-delete-button,
+.manager-skill-more-button {
+  border-color: var(--color-hairline);
+  border-radius: var(--radius-button);
+  background: var(--color-surface-soft);
+  color: var(--color-body);
+}
+
+.manager-segmented__button.is-active,
+.manager-nav__button.is-active,
+.manager-target-button.is-active {
+  border-color: var(--color-primary);
+  background: var(--color-primary);
+  color: var(--color-on-primary);
+}
+
+.manager-segmented__button:focus-visible,
+.manager-nav__button:focus-visible {
+  outline: 2px solid rgba(0, 82, 255, 0.22);
+  outline-offset: 1px;
+}
+
+.manager-import-shell,
+.manager-skill-row,
+.manager-import-skill-row,
+.manager-skill-source-row {
+  border: 0;
+  border-bottom: 1px solid var(--color-hairline-soft);
+  border-radius: 0;
+  background: transparent;
+}
+
+.manager-import-shell {
+  padding: 16px 0;
+}
+
+.manager-skill-row,
+.manager-import-skill-row,
+.manager-skill-source-row {
+  padding: 14px 0;
+}
+
+/* 行满宽排版，但右侧要给纵向滚动条留出间距，避免操作按钮被滚动条压住 */
+.manager-skill-row,
+.manager-skill-source-row {
+  padding-right: 14px;
+}
+
+.manager-import-skill-list--compact {
+  gap: 0;
+}
+
+.manager-import-skill-row--compact {
+  gap: 0;
+  padding: 6px 0;
+  cursor: default;
+}
+
+.manager-import-skill-row--compact .manager-skill-name {
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.25;
+}
+
+.manager-excluded-skill-section--compact {
+  gap: 6px;
+  padding: 8px;
+}
+
+.manager-skill-source-row {
+  align-items: flex-start;
+}
+
+.pill {
+  background: var(--color-surface-strong);
+  color: var(--color-ink);
+}
+
+.success-pill,
+.manager-target-button.is-installed {
+  border-color: rgba(5, 177, 105, 0.28);
+  background: rgba(5, 177, 105, 0.06);
+  color: var(--color-success);
+}
+
+.danger-pill {
+  background: rgba(207, 32, 47, 0.06);
+  color: var(--color-danger);
+}
+
+.manager-target-button.is-partial {
+  background: rgba(0, 82, 255, 0.08);
+  color: var(--color-primary);
+}
+
+.manager-target-button.is-linked {
+  border-style: solid;
+  border-color: var(--color-hairline);
+  background: var(--color-canvas);
+  color: var(--color-muted);
+}
+
+.manager-pre {
+  border-radius: var(--radius-md);
+  background: var(--color-surface-soft);
+  font-family: var(--font-mono);
+}
+
+.manager-skill-name,
+.manager-skill-source-row__label {
+  color: var(--color-ink);
+}
+
+@media (max-width: 720px) {
+  .manager-project-target-path {
+    grid-template-columns: 1fr;
+    gap: 5px;
+  }
+
+  .manager-sync-columns {
+    grid-template-columns: 1fr;
+  }
+}

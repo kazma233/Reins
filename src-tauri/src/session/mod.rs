@@ -1,0 +1,139 @@
+use std::path::{Path, PathBuf};
+
+use anyhow::Result;
+
+pub(crate) mod catalog;
+pub(crate) mod commands;
+pub(crate) mod delete;
+pub(crate) mod import;
+pub(crate) mod jsonl;
+pub(crate) mod model;
+pub(crate) mod text;
+pub(crate) mod timeline;
+
+pub(crate) mod claude_code;
+pub(crate) mod codex;
+pub(crate) mod family_index;
+pub(crate) mod family_timeline;
+pub(crate) mod opencode;
+pub(crate) mod pi;
+pub(crate) mod summary_cache;
+
+use self::catalog::*;
+use self::family_timeline::*;
+use self::jsonl::*;
+use self::model::*;
+use self::text::*;
+use self::timeline::*;
+
+pub(crate) trait SessionReader {
+    fn list_entries(&self) -> Result<Vec<SessionFileEntry>>;
+
+    fn clear_cache(&self) -> Result<()> {
+        Ok(())
+    }
+
+    fn resolve_path(&self, source_session_id: &str) -> Result<PathBuf>;
+
+    fn parse_summary(&self, path: &Path) -> Result<SessionSummary>;
+
+    fn parse_overview(&self, path: &Path) -> Result<SessionOverview>;
+
+    fn parse_messages_page(
+        &self,
+        path: &Path,
+        offset: usize,
+        limit: usize,
+    ) -> Result<SessionMessagePage>;
+
+    fn parse_events_page(
+        &self,
+        path: &Path,
+        offset: usize,
+        limit: usize,
+    ) -> Result<SessionEventPage>;
+
+    fn parse_detail(&self, path: &Path) -> Result<SessionDetail>;
+}
+
+pub(crate) trait SessionExporter {
+    fn planned_import_paths(
+        &self,
+        summary: &SessionSummary,
+        session_id: &str,
+    ) -> Result<Vec<String>>;
+
+    fn export_session(
+        &self,
+        detail: &SessionDetail,
+        new_session_id: &str,
+    ) -> Result<(String, Vec<String>)>;
+}
+
+pub(crate) fn reader(source_app: SourceApp) -> &'static dyn SessionReader {
+    match source_app {
+        SourceApp::Codex => &codex::BACKEND,
+        SourceApp::ClaudeCode => &claude_code::BACKEND,
+        SourceApp::OpenCode => &opencode::BACKEND,
+        SourceApp::Pi => &pi::BACKEND,
+    }
+}
+
+pub(crate) fn clear_all_caches() -> Result<()> {
+    reader(SourceApp::Codex).clear_cache()?;
+    reader(SourceApp::ClaudeCode).clear_cache()?;
+    reader(SourceApp::OpenCode).clear_cache()?;
+    reader(SourceApp::Pi).clear_cache()?;
+    // 持久缓存一并清空：用户触发的刷新是"全量重建"的逃生通道。
+    summary_cache::clear_all();
+    Ok(())
+}
+
+pub(crate) fn exporter(source_app: SourceApp) -> &'static dyn SessionExporter {
+    match source_app {
+        SourceApp::Codex => &codex::BACKEND,
+        SourceApp::ClaudeCode => &claude_code::BACKEND,
+        SourceApp::OpenCode => &opencode::BACKEND,
+        SourceApp::Pi => &pi::BACKEND,
+    }
+}
+
+pub(crate) fn delete_session(source_app: SourceApp, path: &Path) -> Result<()> {
+    match source_app {
+        SourceApp::Codex => codex::delete_session(path),
+        SourceApp::ClaudeCode => claude_code::delete_session(path),
+        SourceApp::OpenCode => opencode::delete_session(path),
+        SourceApp::Pi => pi::delete_session(path),
+    }
+}
+
+fn sort_entries(entries: &mut [SessionFileEntry]) {
+    entries.sort_by(|left, right| {
+        right
+            .sort_timestamp
+            .cmp(&left.sort_timestamp)
+            .then_with(|| left.path.cmp(&right.path))
+    });
+}
+
+// 导出时外层 entry timestamp 跟随消息时间;同值或倒序时前进 1ms,保证文件内单调。
+pub(crate) struct ExportClock {
+    last_ms: i64,
+}
+
+impl ExportClock {
+    pub(crate) fn new(seed_ms: i64) -> Self {
+        Self {
+            last_ms: seed_ms.saturating_sub(1),
+        }
+    }
+
+    pub(crate) fn next_iso(&mut self, desired_ms: i64) -> String {
+        self.last_ms = desired_ms.max(self.last_ms.saturating_add(1));
+        crate::support::time::utc_timestamp_from_millis(self.last_ms)
+    }
+
+    pub(crate) fn last_ms(&self) -> i64 {
+        self.last_ms
+    }
+}

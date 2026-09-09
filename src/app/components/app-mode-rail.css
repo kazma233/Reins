@@ -1,0 +1,54 @@
+.app-mode-rail {
+  display: flex;
+  flex: 0 0 auto;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  width: 48px;
+  padding: 12px 0;
+  border-right: 1px solid var(--color-hairline);
+  background: var(--color-surface-soft);
+}
+
+.app-mode-rail__button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-button);
+  background: transparent;
+  color: var(--color-body);
+  cursor: pointer;
+  transition:
+    background 0.18s ease,
+    color 0.18s ease;
+}
+
+.app-mode-rail__button svg {
+  width: 20px;
+  height: 20px;
+}
+
+.app-mode-rail__button:hover {
+  background: var(--color-surface-strong);
+  color: var(--color-ink);
+}
+
+.app-mode-rail__button.is-active {
+  background: var(--color-primary);
+  color: var(--color-on-primary);
+}
+
+.app-mode-rail__button:focus-visible {
+  outline: 2px solid rgba(0, 82, 255, 0.24);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .app-mode-rail__button {
+    transition: none;
+  }
+}
