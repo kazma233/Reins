@@ -410,20 +410,13 @@
   display: flex;
   flex-direction: column;
   gap: 12px;
-  padding: 16px 0;
   border: 0;
-  border-bottom: 1px solid var(--color-hairline-soft);
   border-radius: 0;
   background: transparent;
 }
 
 .timeline-card.compact {
   gap: 8px;
-}
-
-/* The trailing hairline reads as a stray line above the pagination label. */
-.timeline-card:last-child {
-  border-bottom: 0;
 }
 
 .detail-pagination {
@@ -448,6 +441,11 @@
 .message-card-meta {
   min-width: 0;
   flex-wrap: wrap;
+}
+
+/* 用户消息的角色标签用主题色凸显，助手保持中性色不抢视觉 */
+.message-card-meta strong.message-role-user {
+  color: var(--color-primary);
 }
 
 .message-source-chip {
@@ -488,23 +486,41 @@
   background: var(--color-surface-soft);
 }
 
-.message-block-text {
+.message-block-body {
   position: relative;
-  max-height: calc(1.5em * 10);
-  overflow: hidden;
 }
 
-.message-block-text:not(.expanded)::after {
+/* markstream 段落默认 margin 1.5em，块内首尾不归零会导致单行消息上下大片留白；
+   真实段落元素 .paragraph-node 包在 .node-slot 内层，需对内层首尾段落归零 */
+.message-block-body .message-markdown > :first-child {
+  margin-top: 0;
+}
+
+.message-block-body .message-markdown > :last-child {
+  margin-bottom: 0;
+}
+
+.message-block-body .message-markdown > :first-child .paragraph-node:first-child {
+  margin-top: 0;
+}
+
+.message-block-body .message-markdown > :last-child .paragraph-node:last-child {
+  margin-bottom: 0;
+}
+
+.message-block-body.collapsed {
+  max-height: calc(1.5em * 10);
+  overflow: hidden;
+  cursor: pointer;
+}
+
+.message-block-body.collapsed::after {
   content: "";
   position: absolute;
   inset: auto 0 0;
   height: 3.2em;
   background: linear-gradient(180deg, rgba(255, 255, 255, 0) 0%, rgba(255, 255, 255, 0.96) 100%);
   pointer-events: none;
-}
-
-.message-block-text.expanded {
-  max-height: none;
 }
 
 .text-button {

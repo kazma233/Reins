@@ -81,6 +81,10 @@ export function blockContentText(block: SessionMessage["blocks"][number]): strin
   return renderPayload(block.payload);
 }
 
+export function isMarkdownBlock(kind: string): boolean {
+  return CONVERSATION_BLOCK_KINDS.has(kind);
+}
+
 export function blockNeedsExpand(block: SessionMessage["blocks"][number]): boolean {
   const content = blockContentText(block);
   if (!content) {
@@ -452,10 +456,6 @@ export function messageCardClassName(
     return "timeline-card subagent-message-card";
   }
   return "timeline-card";
-}
-
-export function blockClassName(isExpanded: boolean): string {
-  return isExpanded ? "message-block-text expanded" : "message-block-text";
 }
 
 export function shouldShowEventAgentChip(

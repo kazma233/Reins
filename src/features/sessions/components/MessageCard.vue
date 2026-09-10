@@ -4,12 +4,12 @@ import { joinClasses } from "@shared/lib/join-classes";
 import { formatTimestamp } from "@shared/lib/format";
 import {
   agentDisplayLabel,
-  blockClassName,
   extractSubagentLabel,
   messageCardClassName,
   type VisibleTimelineMessage
 } from "../composables/session-detail-helpers";
 import type { SessionAgent } from "../types";
+import MessageBlockContent from "./MessageBlockContent.vue";
 
 type MessageCardProps = {
   agentOptions: SessionAgent[];
@@ -51,7 +51,9 @@ const subagentLabel = computed(() =>
     </div>
     <header v-else class="message-card-header">
       <div class="message-card-meta">
-        <strong>{{ message.message.role === "user" ? "用户" : "助手" }}</strong>
+        <strong :class="message.message.role === 'user' ? 'message-role-user' : undefined">
+          {{ message.message.role === "user" ? "用户" : "助手" }}
+        </strong>
         <small>{{ formatTimestamp(message.message.timestamp) }}</small>
         <span v-if="isInSubagent" class="message-source-chip">
           <span class="message-source-chip-label">Agent</span>
@@ -81,10 +83,14 @@ const subagentLabel = computed(() =>
       :key="`${message.key}-${index}`"
       class="block-card"
     >
-      <pre
+      <MessageBlockContent
         v-if="block.contentText"
-        :class="block.needsExpand ? blockClassName(isExpanded) : 'message-block-text expanded'"
-      >{{ block.contentText }}</pre>
+        :content-text="block.contentText"
+        :expanded="isExpanded"
+        :kind="block.block.kind"
+        :needs-expand="block.needsExpand"
+        @expand="emit('toggleExpanded', message.key)"
+      />
     </div>
   </article>
 </template>
