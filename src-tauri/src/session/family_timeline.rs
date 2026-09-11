@@ -142,6 +142,18 @@ impl<Row: FamilyRow> Family<Row> {
     }
 }
 
+/// 子代理弹窗的数据口径：family 消息里按 session id 归属于该子代理的部分
+/// （marker 消息与子会话消息同 session id）。
+pub(crate) fn agent_messages(
+    messages: Vec<SessionMessage>,
+    agent_session_id: &str,
+) -> Vec<SessionMessage> {
+    messages
+        .into_iter()
+        .filter(|message| message.session_id.as_deref() == Some(agent_session_id))
+        .collect()
+}
+
 /// Label policy a backend supplies per member. The roster builder derives
 /// `is_root` from the variant so the flag and the displayed label can never
 /// disagree.

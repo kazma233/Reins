@@ -11,11 +11,13 @@ use super::catalog::{
 use super::delete::delete_session_inner;
 use super::import::{import_session_inner, preview_import_inner};
 use super::model::{
-    DeleteSessionResult, ImportPreview, ImportResult, SessionEventPage, SessionMessagePage,
-    SessionOverview, SessionPage, SessionRefreshResult, SourceApp, SourceStatus,
+    DeleteSessionResult, ImportPreview, ImportResult, SessionEventPage, SessionMessage,
+    SessionMessagePage, SessionOverview, SessionPage, SessionRefreshResult, SourceApp,
+    SourceStatus,
 };
 use super::timeline::{
-    get_session_events_inner, get_session_messages_inner, get_session_overview_inner,
+    get_session_agent_messages_inner, get_session_events_inner, get_session_messages_inner,
+    get_session_overview_inner,
 };
 
 const DEFAULT_SESSION_PAGE_SIZE: usize = 20;
@@ -138,6 +140,26 @@ pub(crate) async fn get_session_messages(
             transcript_path.as_deref(),
             offset,
             limit,
+        )
+    })
+    .await
+}
+
+#[tauri::command]
+pub(crate) async fn get_session_agent_messages(
+    source_app: String,
+    source_session_id: String,
+    agent_session_id: String,
+    transcript_path: Option<String>,
+) -> std::result::Result<Vec<SessionMessage>, String> {
+    let source = SourceApp::from_str(&source_app).map_err(|error| error.to_string())?;
+
+    run_blocking(move || {
+        get_session_agent_messages_inner(
+            source,
+            &source_session_id,
+            &agent_session_id,
+            transcript_path.as_deref(),
         )
     })
     .await

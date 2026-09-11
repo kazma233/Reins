@@ -757,6 +757,33 @@ fn codex_root_session_aggregates_subagent_sessions() -> Result<()> {
             .any(|path| path.ends_with(&format!("{child_id}.jsonl")))
     );
 
+    // 子代理弹窗取数：只返回该 agent 的消息(marker + 子会话消息),与分页进度无关。
+    // 走命令层入口而非 reader,连 resolve_session_path 一起覆盖
+    let child_messages = session::timeline::get_session_agent_messages_inner(
+        SourceApp::Codex,
+        root_id,
+        child_id,
+        Some(root_path.to_string_lossy().as_ref()),
+    )?;
+    assert_eq!(child_messages.len(), 3);
+    assert!(
+        child_messages
+            .iter()
+            .all(|message| message.session_id.as_deref() == Some(child_id))
+    );
+    assert!(child_messages.iter().any(|message| {
+        message
+            .blocks
+            .iter()
+            .any(|block| block.text.as_deref() == Some("Child answer"))
+    }));
+    assert!(!child_messages.iter().any(|message| {
+        message
+            .blocks
+            .iter()
+            .any(|block| block.text.as_deref() == Some("Main answer"))
+    }));
+
     fs::remove_dir_all(&temp_home).ok();
     Ok(())
 }

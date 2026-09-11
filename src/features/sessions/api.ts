@@ -4,6 +4,7 @@ import type {
   DeleteSessionResult,
   ImportResult,
   ImportPreview,
+  SessionMessage,
   SessionPage,
   SessionEventPage,
   SessionOverview,
@@ -81,6 +82,21 @@ export function getSessionMessages(
     transcriptPath: input.transcriptPath,
     offset: input.offset,
     limit: input.limit
+  });
+}
+
+// 子代理弹窗取数：一次返回该 agent 的完整消息,与时间线分页进度无关
+export function getSessionAgentMessages(
+  sourceApp: SourceApp,
+  sourceSessionId: string,
+  agentSessionId: string,
+  transcriptPath?: string
+): Promise<SessionMessage[]> {
+  return invoke("get_session_agent_messages", {
+    sourceApp,
+    sourceSessionId,
+    agentSessionId,
+    transcriptPath
   });
 }
 

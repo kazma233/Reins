@@ -259,8 +259,7 @@
   margin: 0;
 }
 
-.pill,
-.block-kind {
+.pill {
   display: inline-flex;
   align-items: center;
   padding: 4px 8px;
@@ -272,23 +271,8 @@
   letter-spacing: 0.06em;
 }
 
-.block-tag,
-.message-header-tags {
-  display: inline-flex;
-  align-items: center;
-}
 
-.message-header-tags {
-  flex-wrap: wrap;
-  gap: 8px;
-}
 
-.block-tag {
-  padding: 4px 8px;
-  border-radius: 999px;
-  font-size: 12px;
-  letter-spacing: 0.04em;
-}
 
 .tool-tag {
   color: var(--color-primary);
@@ -427,21 +411,8 @@
   margin-top: 14px;
 }
 
-.message-card-header,
-.message-card-meta {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
 
-.message-card-header {
-  justify-content: space-between;
-}
 
-.message-card-meta {
-  min-width: 0;
-  flex-wrap: wrap;
-}
 
 /* 用户消息的角色标签用主题色凸显，助手保持中性色不抢视觉 */
 .message-card-meta strong.message-role-user {
@@ -477,18 +448,6 @@
   font-weight: 600;
 }
 
-.block-card {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  padding: 12px;
-  border-radius: var(--radius-md);
-  background: var(--color-surface-soft);
-}
-
-.message-block-body {
-  position: relative;
-}
 
 /* markstream 段落默认 margin 1.5em，块内首尾不归零会导致单行消息上下大片留白；
    真实段落元素 .paragraph-node 包在 .node-slot 内层，需对内层首尾段落归零 */
@@ -506,21 +465,6 @@
 
 .message-block-body .message-markdown > :last-child .paragraph-node:last-child {
   margin-bottom: 0;
-}
-
-.message-block-body.collapsed {
-  max-height: calc(1.5em * 10);
-  overflow: hidden;
-  cursor: pointer;
-}
-
-.message-block-body.collapsed::after {
-  content: "";
-  position: absolute;
-  inset: auto 0 0;
-  height: 3.2em;
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0) 0%, rgba(255, 255, 255, 0.96) 100%);
-  pointer-events: none;
 }
 
 .text-button {
@@ -581,18 +525,7 @@
   overflow: auto;
 }
 
-.subagent-marker-header {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 8px;
-}
 
-.subagent-marker-title-row {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
 
 .subagent-badge {
   display: inline-flex;
@@ -612,10 +545,6 @@
   color: var(--color-primary);
 }
 
-.subagent-marker-title {
-  color: var(--color-primary);
-  font-size: 15px;
-}
 
 /* Neutral summary (title + session id) for dialogs without danger context,
    e.g. the import preview dialog. The delete dialog keeps .delete-dialog-summary. */
@@ -727,3 +656,296 @@
     max-height: min(92vh, 860px);
   }
 }
+
+/* --- 文档流时间线 --- */
+
+/* 助手/工具内容靠左,用户输入右侧气泡;工具与思考默认折叠成一行 */
+.flow {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  overflow: visible;
+}
+
+.flow-user {
+  align-self: flex-end;
+  max-width: min(85%, 720px);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 14px;
+  border-radius: var(--radius-md);
+  background: rgba(0, 82, 255, 0.07);
+}
+
+.flow-text {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 2px 4px;
+}
+
+.flow-tool-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  text-align: left;
+  padding: 5px 10px;
+  border: 0;
+  border-radius: var(--radius-control);
+  background: var(--color-surface-soft);
+  color: var(--color-body);
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.flow-tool-row:hover {
+  background: var(--color-surface-strong);
+}
+
+.flow-tool-dot {
+  flex: 0 0 auto;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--color-muted-soft);
+}
+
+.flow-tool-dot.ok {
+  background: var(--color-success);
+}
+
+.flow-tool-dot.error {
+  background: var(--color-danger);
+}
+
+.flow-tool-summary {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.flow-tool-status {
+  flex: 0 0 auto;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.flow-tool-status.error {
+  color: var(--color-danger);
+}
+
+.flow-tool-status.no-result {
+  color: var(--color-muted);
+}
+
+.flow-tool-chevron {
+  flex: 0 0 auto;
+  margin-left: auto;
+  color: var(--color-muted-soft);
+  font-size: 11px;
+}
+
+.flow-tool-detail {
+  margin: 4px 0 0;
+  padding: 10px 12px;
+  border-radius: var(--radius-control);
+  background: var(--color-surface-soft);
+  color: var(--color-body);
+  font-size: 12px;
+  max-height: 320px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.flow-thinking-label {
+  flex: 0 0 auto;
+  padding: 1px 8px;
+  border-radius: var(--radius-pill);
+  background: rgba(124, 130, 138, 0.15);
+  color: var(--color-muted);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.flow-thinking-body {
+  padding: 6px 12px;
+}
+
+.flow-thinking-pre {
+  margin: 0;
+  color: var(--color-body);
+  font-size: 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.flow-subagent-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  text-align: left;
+  padding: 6px 10px;
+  border: 1px solid rgba(0, 82, 255, 0.14);
+  border-radius: var(--radius-control);
+  background: rgba(0, 82, 255, 0.05);
+  cursor: pointer;
+}
+
+.flow-subagent-row:hover {
+  background: rgba(0, 82, 255, 0.09);
+}
+
+.flow-subagent-name {
+  flex: 0 0 auto;
+  color: var(--color-primary);
+  font-size: 13px;
+}
+
+.flow-subagent-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--color-body);
+  font-size: 12px;
+}
+
+.flow-marker {
+  align-self: flex-start;
+  padding: 3px 10px;
+  border-radius: var(--radius-pill);
+  background: var(--color-surface-strong);
+  color: var(--color-muted);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+/* --- 子代理入口/过程弹窗共用 --- */
+
+.subagent-run-state {
+  flex: 0 0 auto;
+  padding: 2px 8px;
+  border-radius: var(--radius-pill);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.subagent-run-state.ok {
+  color: var(--color-success);
+  background: rgba(5, 177, 105, 0.1);
+}
+
+.subagent-run-state.error {
+  color: var(--color-danger);
+  background: rgba(207, 32, 47, 0.08);
+}
+
+/* 弹窗顶部的单次运行概况：代理名 + 状态 + 退出码 + 模型 */
+.subagent-run-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.subagent-run-exit {
+  font-size: 11px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--color-danger);
+}
+
+.subagent-run-stderr {
+  margin: 0 0 8px;
+  max-height: 160px;
+  overflow: auto;
+  padding: 6px 8px;
+  border-radius: 6px;
+  color: var(--color-danger);
+  background: rgba(207, 32, 47, 0.06);
+  font-size: 11px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.subagent-run-usage {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.subagent-usage-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: var(--radius-pill);
+  background: rgba(124, 130, 138, 0.12);
+  font-size: 11px;
+}
+
+.subagent-usage-label {
+  color: var(--color-muted);
+}
+
+.subagent-usage-value {
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+/* 子代理过程大弹窗：单次运行可达上百条嵌套消息，高度要跟着窗口走。
+   .dialog-card 默认的 min(88vh, 860px) 会在高屏上被 860px 封顶，这里改成
+   撜满 backdrop 可用高度（100% = 视口高 − backdrop 上下 padding，随断点自适应）*/
+.subagent-run-dialog {
+  width: min(96vw, 1100px);
+  height: 100%;
+  max-height: 100%;
+}
+
+/* 高度固定后改由 flex 分配：滚动区吃掉表头以外的全部剩余空间 */
+.subagent-run-dialog .dialog-body {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.subagent-run-dialog .dialog-scroll {
+  height: 100%;
+  max-height: none;
+}
+
+.subagent-dialog-usage {
+  margin-bottom: 4px;
+}
+
+/* 弹窗顶部的完整任务描述,不截断 */
+.subagent-dialog-task {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0 0 8px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: rgba(0, 82, 255, 0.04);
+}
+
+.subagent-dialog-task-label {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--color-primary);
+}
+
+.subagent-dialog-task > span:last-child {
+  font-size: 13px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+

@@ -155,6 +155,19 @@ impl SessionReader for CodexBackend {
         self::parse_events_page(path, offset, limit)
     }
 
+    fn parse_agent_messages(
+        &self,
+        path: &Path,
+        agent_session_id: &str,
+    ) -> Result<Vec<SessionMessage>> {
+        let family = session_family_for_path(path)?;
+        let messages = cached_messages_for_family(&family)?;
+        Ok(super::family_timeline::agent_messages(
+            messages,
+            agent_session_id,
+        ))
+    }
+
     fn parse_detail(&self, path: &Path) -> Result<SessionDetail> {
         self::parse_detail(path)
     }
@@ -222,7 +235,11 @@ fn parse_overview(path: &Path) -> Result<SessionOverview> {
     })
 }
 
-fn parse_messages_page(path: &Path, offset: usize, limit: usize) -> Result<SessionMessagePage> {
+fn parse_messages_page(
+    path: &Path,
+    offset: usize,
+    limit: usize,
+) -> Result<SessionMessagePage> {
     let family = session_family_for_path(path)?;
     let all_messages = cached_messages_for_family(&family)?;
     let (messages, start, next_offset, total_count) =

@@ -2,7 +2,9 @@ use std::path::PathBuf;
 
 use anyhow::Result;
 
-use super::{SessionDetail, SessionEventPage, SessionMessagePage, SessionOverview, SourceApp};
+use super::{
+    SessionDetail, SessionEventPage, SessionMessage, SessionMessagePage, SessionOverview, SourceApp,
+};
 
 pub(crate) fn get_session_overview_inner(
     source_app: SourceApp,
@@ -22,6 +24,17 @@ pub(crate) fn get_session_messages_inner(
 ) -> Result<SessionMessagePage> {
     let path = resolve_session_path(source_app, source_session_id, transcript_path)?;
     super::reader(source_app).parse_messages_page(&path, offset, limit)
+}
+
+// 子代理弹窗的取数入口：一次返回该 agent 的完整消息，与时间线分页进度无关
+pub(crate) fn get_session_agent_messages_inner(
+    source_app: SourceApp,
+    source_session_id: &str,
+    agent_session_id: &str,
+    transcript_path: Option<&str>,
+) -> Result<Vec<SessionMessage>> {
+    let path = resolve_session_path(source_app, source_session_id, transcript_path)?;
+    super::reader(source_app).parse_agent_messages(&path, agent_session_id)
 }
 
 pub(crate) fn get_session_events_inner(

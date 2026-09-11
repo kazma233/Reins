@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use anyhow::Result;
+use anyhow::{bail, Result};
 
 pub(crate) mod catalog;
 pub(crate) mod commands;
@@ -54,6 +54,19 @@ pub(crate) trait SessionReader {
     ) -> Result<SessionEventPage>;
 
     fn parse_detail(&self, path: &Path) -> Result<SessionDetail>;
+
+    // family 聚合来源（Codex/Claude Code/OpenCode）按 agent session id 取该子代理
+    // 的全部消息。子代理入口弹窗用它,不再依赖分页已加载的范围。
+    // Pi 的 subagent 内嵌在 toolResult.details 里、不产生子会话，其入口行走的是
+    // 块内 payload 而非本方法；这里报错而不返回空，是为了让“来源不支持”
+    // 与“子会话确实没消息”保持可区分。
+    fn parse_agent_messages(
+        &self,
+        _path: &Path,
+        _agent_session_id: &str,
+    ) -> Result<Vec<SessionMessage>> {
+        bail!("该来源的子代理不以独立会话存储，无法按 agent session id 取消息")
+    }
 }
 
 pub(crate) trait SessionExporter {

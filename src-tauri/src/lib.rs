@@ -18,6 +18,7 @@ pub fn run() {
             session::commands::refresh_sessions,
             session::commands::get_session_overview,
             session::commands::get_session_messages,
+            session::commands::get_session_agent_messages,
             session::commands::get_session_events,
             session::commands::preview_import,
             session::commands::import_session,

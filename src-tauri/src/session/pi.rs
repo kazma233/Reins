@@ -135,18 +135,7 @@ impl SessionReader for PiBackend {
         offset: usize,
         limit: usize,
     ) -> Result<SessionMessagePage> {
-        let (messages, _) = cached_timeline(path)?;
-        let (messages, start, next_offset, total_count) =
-            crate::support::paging::slice_page(&messages, offset, limit);
-
-        Ok(SessionMessagePage {
-            messages,
-            offset: start,
-            limit,
-            next_offset,
-            total_count,
-            has_more: next_offset.is_some(),
-        })
+        self::parse_messages_page(path, offset, limit)
     }
 
     fn parse_events_page(
@@ -180,6 +169,25 @@ impl SessionReader for PiBackend {
             events,
         })
     }
+}
+
+fn parse_messages_page(
+    path: &Path,
+    offset: usize,
+    limit: usize,
+) -> Result<SessionMessagePage> {
+    let (messages, _) = cached_timeline(path)?;
+    let (messages, start, next_offset, total_count) =
+        crate::support::paging::slice_page(&messages, offset, limit);
+
+    Ok(SessionMessagePage {
+        messages,
+        offset: start,
+        limit,
+        next_offset,
+        total_count,
+        has_more: next_offset.is_some(),
+    })
 }
 
 impl SessionExporter for PiBackend {
@@ -760,6 +768,13 @@ fn parse_message_entry(entry: &PiEntry, session_id: &str) -> SessionMessage {
 
     if role == "toolResult" {
         let is_error = message.get("isError").and_then(Value::as_bool);
+        // subagent 扩展(pi --no-session)把子代理完整对话内嵌在 toolResult.details 里,
+        // 这是官方留给扩展的元数据通道;存在时用结构化块替代普通 tool_result 块。
+        if super::json_string(message, &["toolName"]).as_deref() == Some("subagent") {
+            if let Some(block) = parse_subagent_run_block(&entry.id, message, session_id) {
+                blocks = vec![block];
+            }
+        }
         for block in &mut blocks {
             block.tool_name = block
                 .tool_name
@@ -795,6 +810,74 @@ fn parse_message_entry(entry: &PiEntry, session_id: &str) -> SessionMessage {
         blocks,
         session_id: Some(session_id.to_string()),
     }
+}
+
+// 子代理运行结果的结构化块：details.results[].messages 是扩展捕获的标准
+// AgentMessage 线性流,复用 parse_message_entry 解析成嵌套消息;原始 messages
+// 数组不进 payload,由解析结果替代,其余 run 元数据原样保留。
+fn parse_subagent_run_block(
+    entry_id: &str,
+    message: &Value,
+    session_id: &str,
+) -> Option<ContentBlock> {
+    let details = message.get("details")?;
+    let results = details.get("results")?.as_array()?;
+    if results.is_empty() {
+        return None;
+    }
+
+    let runs = results
+        .iter()
+        .enumerate()
+        .map(|(run_index, run)| {
+            let mut run = run.clone();
+            let nested_messages = run
+                .get("messages")
+                .and_then(Value::as_array)
+                .map(|messages| {
+                    messages
+                        .iter()
+                        .enumerate()
+                        .map(|(message_index, nested_message)| {
+                            let nested_entry = PiEntry {
+                                id: format!("{entry_id}-r{run_index}-m{message_index}"),
+                                parent_id: None,
+                                timestamp: None,
+                                value: json!({ "type": "message", "message": nested_message }),
+                            };
+                            parse_message_entry(&nested_entry, session_id)
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            if let Some(object) = run.as_object_mut() {
+                object.remove("messages");
+                object.insert(
+                    "nestedMessages".to_string(),
+                    serde_json::to_value(nested_messages)
+                        .expect("SessionMessage 序列化不会失败"),
+                );
+            }
+            run
+        })
+        .collect::<Vec<_>>();
+
+    let report = parse_message_content("toolResult", message.get("content"))
+        .into_iter()
+        .filter_map(|block| block.text)
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    Some(ContentBlock {
+        kind: "subagent_run".to_string(),
+        text: (!report.is_empty()).then_some(report),
+        tool_name: Some("subagent".to_string()),
+        tool_call_id: super::json_string(message, &["toolCallId"]),
+        is_error: None,
+        payload: Some(json!({
+            "runs": runs,
+        })),
+    })
 }
 
 fn parse_custom_message_entry(entry: &PiEntry, session_id: &str) -> SessionMessage {

@@ -61,23 +61,19 @@ export function useSessionTimeline(
     );
   });
 
-  // Race guard for async loaders: a response is only applied while the
-  // detail key is unchanged since the request was issued.
+  // 切换会话后，未完成的消息/事件请求都要作废
   const requestGuard = createKeyGuard(() => detailKey.value);
 
   async function loadMoreMessages() {
     const currentOverview = overview.value;
+    const requestKey = requestGuard.capture();
     if (
       !currentOverview ||
+      requestKey === null ||
       messagesLoading.value ||
       messagesLoadingMore.value ||
       nextMessageOffset.value === null
     ) {
-      return;
-    }
-
-    const requestKey = requestGuard.capture();
-    if (!requestKey) {
       return;
     }
 
@@ -169,6 +165,55 @@ export function useSessionTimeline(
     }
   }
 
+  // 事件在 overview 变化时清空，随后由事件 tab 打开时懒加载。
+  function resetEventState() {
+    events.value = [];
+    eventError.value = null;
+    eventsLoading.value = false;
+    eventsLoadingMore.value = false;
+    nextEventOffset.value = null;
+  }
+
+  async function loadInitialMessages(activeOverview: SessionOverview) {
+    const requestKey = requestGuard.capture();
+    if (requestKey === null) {
+      return;
+    }
+
+    messagesLoading.value = true;
+    messageError.value = null;
+
+    try {
+      const bundle = await getSessionMessages(
+        activeOverview.summary.sourceApp,
+        activeOverview.summary.sourceSessionId,
+        {
+          transcriptPath: activeOverview.summary.transcriptPath,
+          offset: 0,
+          limit: DETAIL_PAGE_SIZE
+        }
+      );
+
+      if (!requestGuard.isCurrent(requestKey)) {
+        return;
+      }
+
+      messages.value = bundle.messages;
+      nextMessageOffset.value = bundle.nextOffset;
+    } catch (error) {
+      if (!requestGuard.isCurrent(requestKey)) {
+        return;
+      }
+      const message = extractErrorMessage(error, "加载会话时间线失败。");
+      messageError.value = message;
+      eventError.value = message;
+    } finally {
+      if (requestGuard.isCurrent(requestKey)) {
+        messagesLoading.value = false;
+      }
+    }
+  }
+
   // Reset and load the initial message batch whenever the overview changes.
   // Events are loaded lazily via loadMoreEvents when the events tab is opened.
   watch(
@@ -176,70 +221,30 @@ export function useSessionTimeline(
     (currentOverview, _oldOverview, onCleanup) => {
       const activeDetailKey = detailKey.value;
       if (!currentOverview || !activeDetailKey) {
+        resetEventState();
         messages.value = [];
-        events.value = [];
         messageError.value = null;
-        eventError.value = null;
         messagesLoading.value = false;
-        eventsLoading.value = false;
         messagesLoadingMore.value = false;
-        eventsLoadingMore.value = false;
         nextMessageOffset.value = null;
-        nextEventOffset.value = null;
         return;
       }
 
       let cancelled = false;
 
-      // Snapshot the overview so the nested async function retains the
-      // narrowed (non-null) type — TS can't carry narrowing into closures.
-      const activeOverview: SessionOverview = currentOverview;
-
       messages.value = [];
-      events.value = [];
+      resetEventState();
       messageError.value = null;
-      eventError.value = null;
       messagesLoading.value = true;
-      eventsLoading.value = false;
       messagesLoadingMore.value = false;
-      eventsLoadingMore.value = false;
       nextMessageOffset.value = null;
-      nextEventOffset.value = null;
 
-      async function loadInitialMessages() {
-        try {
-          const bundle = await getSessionMessages(
-            activeOverview.summary.sourceApp,
-            activeOverview.summary.sourceSessionId,
-            {
-              transcriptPath: activeOverview.summary.transcriptPath,
-              offset: 0,
-              limit: DETAIL_PAGE_SIZE
-            }
-          );
-
-          if (cancelled || !requestGuard.isCurrent(activeDetailKey)) {
-            return;
-          }
-
-          messages.value = bundle.messages;
-          nextMessageOffset.value = bundle.nextOffset;
+      void loadInitialMessages(currentOverview).then(() => {
+        if (!cancelled && requestGuard.isCurrent(activeDetailKey)) {
+          // 首页消息就绪后事件才可按需加载。
           nextEventOffset.value = 0;
-        } catch (error) {
-          if (cancelled || !requestGuard.isCurrent(activeDetailKey)) {
-            return;
-          }
-          const message = extractErrorMessage(error, "加载会话时间线失败。");
-          messageError.value = message;
-          eventError.value = message;
-        } finally {
-          if (!cancelled && requestGuard.isCurrent(activeDetailKey)) {
-            messagesLoading.value = false;
-          }
         }
-      }
-
-      void loadInitialMessages();
+      });
 
       onCleanup(() => {
         cancelled = true;

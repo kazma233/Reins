@@ -338,6 +338,162 @@ fn pi_active_branch_and_events_follow_the_last_entry_chain() -> Result<()> {
 }
 
 #[test]
+fn pi_parses_subagent_tool_result_into_structured_run_block() -> Result<()> {
+    let temp_home = env::temp_dir().join(format!("reins-test-{}", Uuid::new_v4()));
+    fs::create_dir_all(&temp_home)?;
+    let _guard = TestEnvGuard::set_home(&temp_home);
+    let path = pi_path(
+        &temp_home,
+        "/tmp/pi-project",
+        "2026-09-04T12-00-00-000Z",
+        "pi-subagent",
+    );
+    let subagent_details = json!({
+        "mode": "single",
+        "agentScope": "both",
+        "results": [{
+            "agent": "scout",
+            "agentSource": "project",
+            "task": "梳理代码库",
+            "exitCode": 0,
+            "stderr": "",
+            "usage": { "input": 636783, "output": 31284, "cacheRead": 2916352, "turns": 18 },
+            "model": "fanggeek/gpt-5.6-terra",
+            "stopReason": "stop",
+            "messages": [
+                { "role": "user", "content": "Task: 梳理代码库", "timestamp": 1789091776409_i64 },
+                {
+                    "role": "assistant",
+                    "content": [
+                        { "type": "thinking", "thinking": "先看目录结构" },
+                        { "type": "text", "text": "结论：只读调查完成" },
+                    ],
+                    "usage": { "input": 100, "output": 20 },
+                    "stopReason": "stop",
+                    "timestamp": 1789091776480_i64,
+                },
+            ],
+        }],
+    });
+    let mut lines = vec![pi_header(
+        "pi-subagent",
+        "/tmp/pi-project",
+        "2026-09-04T12:00:00.000Z",
+    )];
+    lines.push(pi_entry(
+        "message",
+        "sa-u1",
+        None,
+        "2026-09-04T12:00:01.000Z",
+        json!({ "message": { "role": "user", "content": "派个 scout 调查" } }),
+    ));
+    lines.push(pi_entry(
+        "message",
+        "sa-a1",
+        Some("sa-u1"),
+        "2026-09-04T12:00:02.000Z",
+        json!({
+            "message": {
+                "role": "assistant",
+                "content": [{
+                    "type": "toolCall",
+                    "id": "call-sub-1",
+                    "name": "subagent",
+                    "arguments": { "agent": "scout", "task": "梳理代码库" },
+                }],
+            }
+        }),
+    ));
+    lines.push(pi_entry(
+        "message",
+        "sa-t1",
+        Some("sa-a1"),
+        "2026-09-04T12:00:03.000Z",
+        json!({
+            "message": {
+                "role": "toolResult",
+                "toolCallId": "call-sub-1",
+                "toolName": "subagent",
+                "content": [{ "type": "text", "text": "## 结论\n整体判断…" }],
+                "details": subagent_details,
+                "isError": false,
+            }
+        }),
+    ));
+    write_jsonl(&path, &lines)?;
+
+    let reader = session::reader(SourceApp::Pi);
+    let detail = reader.parse_detail(&path)?;
+    assert_eq!(detail.messages.len(), 3);
+
+    // subagent toolResult 解析为单个结构化块,报告文本保留。
+    let run_message = &detail.messages[2];
+    assert_eq!(run_message.blocks.len(), 1);
+    let block = &run_message.blocks[0];
+    assert_eq!(block.kind, "subagent_run");
+    assert_eq!(block.tool_name.as_deref(), Some("subagent"));
+    assert_eq!(block.tool_call_id.as_deref(), Some("call-sub-1"));
+    assert_eq!(block.text.as_deref(), Some("## 结论\n整体判断…"));
+
+    // payload.runs 携带 run 元数据,原始 messages 数组被解析后的嵌套消息替代。
+    let payload = block.payload.as_ref().expect("subagent payload");
+    assert_eq!(payload["runs"][0]["agent"], "scout");
+    assert_eq!(payload["runs"][0]["agentSource"], "project");
+    assert_eq!(payload["runs"][0]["usage"]["turns"], 18);
+    assert!(payload["runs"][0].get("messages").is_none());
+    let nested = payload["runs"][0]["nestedMessages"]
+        .as_array()
+        .expect("nested messages");
+    assert_eq!(nested.len(), 2);
+    assert_eq!(nested[0]["role"], "user");
+    assert_eq!(nested[1]["role"], "assistant");
+    assert_eq!(nested[1]["timestamp"], 1789091776480_i64);
+    let nested_blocks = nested[1]["blocks"].as_array().expect("nested blocks");
+    assert_eq!(nested_blocks[0]["kind"], "thinking");
+    assert_eq!(nested_blocks[1]["kind"], "output_text");
+
+    // 嵌套消息 id 全局唯一,可与主会话消息共存于同一列表。
+    assert_eq!(nested[0]["id"], "sa-t1-r0-m0");
+    assert_eq!(nested[1]["id"], "sa-t1-r0-m1");
+
+    // 普通 toolResult 不受影响,仍是 tool_result 块。
+    let normal_path = pi_path(
+        &temp_home,
+        "/tmp/pi-project",
+        "2026-09-04T12-10-00-000Z",
+        "pi-normal-tool",
+    );
+    let mut normal_lines = vec![pi_header(
+        "pi-normal-tool",
+        "/tmp/pi-project",
+        "2026-09-04T12:10:00.000Z",
+    )];
+    normal_lines.push(pi_entry(
+        "message",
+        "nt-t1",
+        None,
+        "2026-09-04T12:10:01.000Z",
+        json!({
+            "message": {
+                "role": "toolResult",
+                "toolCallId": "call-1",
+                "toolName": "bash",
+                "content": [{ "type": "text", "text": "output" }],
+                "isError": false,
+            }
+        }),
+    ));
+    write_jsonl(&normal_path, &normal_lines)?;
+    let normal_detail = reader.parse_detail(&normal_path)?;
+    assert_eq!(normal_detail.messages[0].blocks[0].kind, "tool_result");
+
+    // Pi 的 subagent 内嵌在 toolResult.details 里,没有子会话可查:
+    // 必须报错而不是返回空,否则调用方无法区分"不支持"与"空子会话"
+    assert!(reader.parse_agent_messages(&path, "any-agent-id").is_err());
+    Ok(())
+}
+
+#[test]
 fn pi_preserves_tool_custom_unknown_and_broken_chain_content() -> Result<()> {
     let temp_home = env::temp_dir().join(format!("reins-test-{}", Uuid::new_v4()));
     fs::create_dir_all(&temp_home)?;
