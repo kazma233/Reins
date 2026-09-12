@@ -297,8 +297,9 @@
   gap: 8px;
 }
 
-.manager-import-dialog .manager-target-form-shell .manager-picker-row,
-/* 卡片操作按钮区：无此基础规则时按钮间只有模板空白，视觉上贴在一起 */
+/* 卡片操作按钮区：无此基础规则时按钮间只有模板空白，视觉上贴在一起。
+   不要把 .manager-picker-row 并进来：它的 align-items: center 会覆盖
+   picker-row 基础规则的 flex-end，让行内按钮不再与输入框底部对齐。 */
 .manager-card-actions {
   display: flex;
   flex: 0 0 auto;
