@@ -312,7 +312,9 @@
   flex-direction: column;
   gap: 8px;
   margin: -24px -32px 14px;
-  padding: 0 32px 14px;
+  /* 顶部留白必须由工具栏自身的 padding 提供：吸附时条带背景盖住顶端，
+     若改用 sticky top 留缝，滚动内容会从缝隙里穿出来。 */
+  padding: 8px 32px 14px;
   border-bottom: 1px solid var(--color-hairline-soft);
   background: var(--color-canvas);
 }
