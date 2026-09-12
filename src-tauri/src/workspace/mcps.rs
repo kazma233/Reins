@@ -513,10 +513,17 @@ fn remove_mcp_from_target_config(
     target: &ResolvedTargetConfig,
     server_name: &str,
 ) -> Result<McpTargetMutationResult> {
-    let config_path = target
-        .config_path
-        .as_ref()
-        .ok_or_else(|| anyhow!("目标 {} 没有 MCP 配置路径。", target.id.as_str()))?;
+    // 未配置 MCP 的 target（如 pi）无配置可清理；必须返回 noop 而非报错，
+    // 否则删除 MCP 时遍历全部 target 会被这类 target 中断。
+    let Some(config_path) = target.config_path.as_ref() else {
+        return Ok(McpTargetMutationResult {
+            server_name: server_name.to_string(),
+            target_id: target.id.clone(),
+            updated_path: None,
+            action: "noop".to_string(),
+            detail: "目标未配置 MCP，跳过。".to_string(),
+        });
+    };
 
     let removed = match detect_mcp_file_format(config_path)? {
         McpConfigFileFormat::Toml => {

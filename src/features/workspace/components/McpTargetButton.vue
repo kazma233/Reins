@@ -20,6 +20,8 @@ defineEmits<{
 }>();
 
 const installed = computed(() => props.targetItem?.state === "present");
+// 未配置 MCP 的 target（如 pi）没有可写入的配置文件，禁用而不是点击后报错。
+const unconfigured = computed(() => props.targetItem?.state === "unconfigured");
 const warning = computed(
   () => props.targetItem?.state === "error" || props.targetItem?.state === "unconfigured",
 );
@@ -37,7 +39,7 @@ const detail = computed(
 <template>
   <button
     :class="joinClasses('secondary-button', 'manager-target-button', buttonStateClass)"
-    :disabled="loading"
+    :disabled="loading || unconfigured"
     :title="detail"
     type="button"
     @click="$emit('toggle', serverName, targetId)"

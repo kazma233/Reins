@@ -142,6 +142,11 @@ fn default_config_template() -> String {
       config_prefix: mcp.servers
       config_type: common
 
+  # pi 暂不主动支持 MCP，省略 mcp 段即可；需要时补 mcp.config_path 和 config_prefix。
+  pi:
+    enabled: true
+    skill_dir: ~/.pi/agent/skills
+
 mcps: []
 
 # projects:
@@ -397,7 +402,9 @@ fn parse_manager_config(raw_content: &str, config_path: &Path) -> Result<Resolve
             .trim()
             .to_string();
 
-        if config_prefix.is_empty() {
+        // 与 normalize_raw_target_input 的契约一致：configPrefix 只在
+        // 真正有 MCP 配置文件可写时才必填（pi 这类 target 两者皆空）。
+        if config_file_path.is_some() && config_prefix.is_empty() {
             bail!("目标 {} 的 mcp.config_prefix 不能为空。", id);
         }
 

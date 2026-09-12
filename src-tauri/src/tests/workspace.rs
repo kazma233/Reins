@@ -414,7 +414,7 @@ fn default_config_template_parses_with_builtin_targets() -> Result<()> {
     let config_path = PathBuf::from("/tmp/reins-default-template-test.yaml");
     let config = parse_manager_config(&default_config_template(), &config_path)?;
 
-    assert_eq!(config.targets.len(), 4);
+    assert_eq!(config.targets.len(), 5);
     assert!(
         config
             .targets
@@ -435,11 +435,15 @@ fn default_config_template_parses_with_builtin_targets() -> Result<()> {
             .targets
             .contains_key(&AgentTargetId("zcode".to_string()))
     );
+    assert!(
+        config
+            .targets
+            .contains_key(&AgentTargetId("pi".to_string()))
+    );
 
     for target in config.targets.values() {
         assert!(target.enabled, "target {} should be enabled", target.id);
         assert!(!target.skill_dir.as_os_str().is_empty());
-        assert!(target.config_path.is_some());
     }
 
     let opencode = config
@@ -469,6 +473,37 @@ fn default_config_template_parses_with_builtin_targets() -> Result<()> {
     );
     assert_eq!(zcode.mcp_config_prefix, "mcp.servers");
     assert_eq!(zcode.mcp_config_type, McpConfigType::Common);
+
+    let pi = config
+        .targets
+        .get(&AgentTargetId("pi".to_string()))
+        .expect("pi target exists");
+    assert!(pi.skill_dir.ends_with(".pi/agent/skills"));
+    // pi 不主动支持 MCP：默认没有配置文件和 configPrefix。
+    assert!(pi.config_path.is_none());
+    assert_eq!(pi.mcp_config_prefix, "");
+    assert_eq!(pi.mcp_config_type, McpConfigType::Common);
+
+    Ok(())
+}
+
+#[test]
+fn global_pi_target_parses_without_mcp_config() -> Result<()> {
+    let config_path = PathBuf::from("/tmp/reins-pi-target-parse-test.yaml");
+    let raw = r#"targets:
+  pi:
+    enabled: true
+    skill_dir: ~/.pi/agent/skills
+"#;
+
+    let config = parse_manager_config(raw, &config_path)?;
+    let pi = config
+        .targets
+        .get(&AgentTargetId("pi".to_string()))
+        .expect("pi target exists");
+
+    assert!(pi.config_path.is_none());
+    assert_eq!(pi.mcp_config_prefix, "");
 
     Ok(())
 }
@@ -531,6 +566,51 @@ fn project_zcode_agent_uses_zcode_project_layout() -> Result<()> {
     assert_eq!(target.config_path.as_ref(), Some(&mcp_config_path));
     assert_eq!(target.mcp_config_prefix, "mcp.servers");
     assert_eq!(target.mcp_config_type, McpConfigType::Common);
+
+    Ok(())
+}
+
+#[test]
+fn delete_workspace_mcp_skips_targets_without_mcp_config() -> Result<()> {
+    let root = TestDir::new("mcp-delete-skips-unconfigured")?;
+    let store = WorkspaceConfigStore::at(root.path());
+    let claude_config = root.path().join("claude.json");
+    fs::write(
+        store.config_path(),
+        format!(
+            r#"targets:
+  pi:
+    enabled: true
+    skill_dir: {}
+  claude:
+    enabled: true
+    skill_dir: {}
+    mcp:
+      enabled: true
+      config_path: {}
+      config_prefix: mcpServers
+      config_type: common
+mcps:
+- name: test-server
+  transport: stdio
+  command: node
+"#,
+            root.path().join("pi-skills").display(),
+            root.path().join("claude-skills").display(),
+            claude_config.display(),
+        ),
+    )?;
+    fs::write(
+        &claude_config,
+        r#"{"mcpServers": {"test-server": {"type": "stdio", "command": "node"}}}"#,
+    )?;
+
+    let result = delete_workspace_mcp_inner(&store, "test-server")?;
+
+    assert_eq!(result.server_name, "test-server");
+    // pi 没有 MCP 配置文件，删除时必须被跳过而不是中断整个删除流程。
+    let cleaned = fs::read_to_string(&claude_config)?;
+    assert!(!cleaned.contains("test-server"));
 
     Ok(())
 }

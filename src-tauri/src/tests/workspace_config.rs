@@ -171,6 +171,74 @@ fn create_workspace_target_inner_writes_target_to_config() -> Result<()> {
 }
 
 #[test]
+fn create_workspace_target_inner_allows_target_without_mcp_config() -> Result<()> {
+    let root = TestDir::new("config-create-target-no-mcp")?;
+    let store = WorkspaceConfigStore::at(root.path());
+    fs::write(
+        store.config_path(),
+        serde_yaml::to_string(&RawManagerConfig::default())?,
+    )?;
+
+    create_workspace_target_inner(
+        &store,
+        RawTargetInput {
+            target_id: "pi".to_string(),
+            enabled: true,
+            skill_dir: root.path().join("pi-skills").display().to_string(),
+            config_path: None,
+            mcp_config_prefix: String::new(),
+            mcp_config_type: McpConfigType::Common,
+        },
+    )?;
+
+    let raw: RawManagerConfig = serde_yaml::from_str(&fs::read_to_string(store.config_path())?)?;
+    let pi = &raw.targets["pi"];
+    assert!(pi.mcp.config_path.is_none());
+    assert!(pi.mcp.config_prefix.is_none());
+    Ok(())
+}
+
+#[test]
+fn create_workspace_target_inner_requires_mcp_path_and_prefix_in_pairs() -> Result<()> {
+    let root = TestDir::new("config-create-target-mcp-pair")?;
+    let store = WorkspaceConfigStore::at(root.path());
+    fs::write(
+        store.config_path(),
+        serde_yaml::to_string(&RawManagerConfig::default())?,
+    )?;
+
+    let missing_prefix = create_workspace_target_inner(
+        &store,
+        RawTargetInput {
+            target_id: "cursor".to_string(),
+            enabled: true,
+            skill_dir: root.path().join("skills").display().to_string(),
+            config_path: Some("~/.cursor/config.json".to_string()),
+            mcp_config_prefix: String::new(),
+            mcp_config_type: McpConfigType::Common,
+        },
+    )
+    .expect_err("config path without prefix must fail");
+    assert!(missing_prefix.to_string().contains("configPrefix"));
+
+    let missing_path = create_workspace_target_inner(
+        &store,
+        RawTargetInput {
+            target_id: "cursor".to_string(),
+            enabled: true,
+            skill_dir: root.path().join("skills").display().to_string(),
+            config_path: None,
+            mcp_config_prefix: "mcpServers".to_string(),
+            mcp_config_type: McpConfigType::Common,
+        },
+    )
+    .expect_err("prefix without config path must fail");
+    assert!(missing_path.to_string().contains("MCP 配置文件路径"));
+
+    Ok(())
+}
+
+#[test]
 fn concurrent_mutations_do_not_lose_updates() -> Result<()> {
     let root = TestDir::new("config-concurrent")?;
     let store = Arc::new(store_with_local_sources(&root, &[])?);
@@ -275,13 +343,13 @@ fn first_load_bootstraps_template_that_parses() -> Result<()> {
             .expect("template parses")
             .targets
             .len(),
-        4
+        5
     );
 
     let again = store.load_document()?;
     assert_eq!(again.raw_content, document.raw_content);
     assert!(again.exists);
     assert!(again.validation.valid, "bootstrapped template must parse");
-    assert_eq!(again.config.expect("template parses").targets.len(), 4);
+    assert_eq!(again.config.expect("template parses").targets.len(), 5);
     Ok(())
 }

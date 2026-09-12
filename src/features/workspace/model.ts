@@ -37,7 +37,7 @@ export function formatMcpConfigType(type: McpConfigType): string {
   }
 }
 
-export type BuiltinTargetPresetId = "codex" | "claude" | "opencode" | "zcode";
+export type BuiltinTargetPresetId = "codex" | "claude" | "opencode" | "zcode" | "pi";
 
 export const BUILTIN_TARGET_PRESETS: Record<
   BuiltinTargetPresetId,
@@ -73,6 +73,15 @@ export const BUILTIN_TARGET_PRESETS: Record<
     skillDir: "~/.zcode/skills",
     configPath: "~/.zcode/cli/config.json",
     mcpConfigPrefix: "mcp.servers",
+    mcpConfigType: "common",
+  },
+  // pi 不主动支持 MCP：默认不带 MCP 配置文件，只分发 skill。
+  pi: {
+    targetId: "pi",
+    enabled: true,
+    skillDir: "~/.pi/agent/skills",
+    configPath: "",
+    mcpConfigPrefix: "",
     mcpConfigType: "common",
   },
 };
@@ -247,7 +256,7 @@ export const DEFAULT_MCP_APPLY_PREVIEW_DIALOG: McpApplyPreviewDialogState = {
 };
 
 
-export const AVAILABLE_PROJECT_AGENTS = ["claude", "codex", "opencode", "zcode"] as const;
+export const AVAILABLE_PROJECT_AGENTS = ["claude", "codex", "opencode", "zcode", "pi"] as const;
 
 export type ProjectFormState = {
   originalProjectId: string | null;

@@ -291,12 +291,17 @@ fn normalize_raw_target_input(
         .map(ToString::to_string);
     let config_prefix = input.mcp_config_prefix.trim().to_string();
 
-    if config_prefix.is_empty() {
-        bail!("target {} 的 MCP configPrefix 不能为空。", target_id);
-    }
-
-    if normalized_config_path.is_none() {
-        bail!("target {} 必须提供 MCP 配置文件路径。", target_id);
+    // MCP 配置文件和 configPrefix 必须成对出现：只有前缀没有路径无处可写，
+    // 只有路径没有前缀无法定位写入节点。pi 这类不主动支持 MCP 的 target
+    // 允许两者都为空，此时只做 skill 分发。
+    match normalized_config_path.as_deref() {
+        Some(_) if config_prefix.is_empty() => {
+            bail!("target {} 的 MCP configPrefix 不能为空。", target_id);
+        }
+        None if !config_prefix.is_empty() => {
+            bail!("target {} 填写了 configPrefix，必须同时提供 MCP 配置文件路径。", target_id);
+        }
+        _ => {}
     }
 
     Ok((
@@ -373,6 +378,16 @@ fn builtin_target_defaults() -> Vec<TargetDefaults> {
             config_prefix: "mcp.servers",
             config_type: McpConfigType::Common,
         },
+        // pi 不主动支持 MCP：默认只分发 skill，不写任何 MCP 配置文件。
+        TargetDefaults {
+            id: AgentTargetId("pi".to_string()),
+            skill_dir: home_dir()
+                .map(|h| h.join(".pi/agent/skills"))
+                .unwrap_or_default(),
+            config_path: None,
+            config_prefix: "",
+            config_type: McpConfigType::Common,
+        },
     ]
 }
 
@@ -411,6 +426,13 @@ pub(super) fn project_agent_defaults(project_path: &Path) -> Vec<TargetDefaults>
             skill_dir: project_path.join(".zcode/skills"),
             config_path: Some(project_path.join(".zcode/config.json")),
             config_prefix: "mcp.servers",
+            config_type: McpConfigType::Common,
+        },
+        TargetDefaults {
+            id: AgentTargetId("pi".to_string()),
+            skill_dir: project_path.join(".pi/skills"),
+            config_path: None,
+            config_prefix: "",
             config_type: McpConfigType::Common,
         },
     ]
