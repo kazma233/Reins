@@ -11,24 +11,23 @@
 
 - 自动发现本机的 Codex、Claude Code、OpenCode、Pi 会话
 - 按来源浏览会话列表、消息、事件和工具调用
-- 支持搜索、排序和增量加载
+- 支持搜索和排序
+- 会话列表滚动到底部自动加载更多
 - 支持跨工具导入历史会话
-- OpenCode root session 会自动聚合子会话；Pi 按工作目录读取 `~/.pi/agent/sessions/` 下的 JSONL
-- Pi 的 subagent 每次运行在时间线内各占一行入口（代理名、状态、任务标题），并行派出的多个子代理不合并；点击在大弹窗中查看该次运行的任务、用量、失败原因与完整过程
-- 消息页为文档流布局：用户输入右侧气泡，助手文本靠左，工具调用按 toolCallId 配对合并为一行可展开摘要；时间线始终展示完整消息流
+- OpenCode 会话自动聚合子会话
+- 可单独查看 Pi subagent 每次运行的任务、用量、失败原因与完整过程
+- 消息页完整展示消息流，工具调用合并为可展开查看的摘要
 
 ### 配置与分发
 
-- 维护全局单一配置 `config.yaml`
+- 集中管理 Skills 和 MCP 配置
 - 管理多个 target，例如 `codex`、`claude`、`opencode`、`zcode`
-- 从本地目录或 Git 仓库发现、导入和同步 Skills
-- 在 skills tab 顶部点击 `新增来源` 导入 source；每个 source 行内提供 `编辑` / `删除` / `同步` / `移除同步`
-- 预览并写入 MCP 配置到各 target 的配置文件
-- 在界面里检查 MCP 在各 target 上的安装状态
-
-`config.yaml` 与 git cache 都存放在 Reins 数据目录下，按各系统标准配置目录 + `reins` 解析：macOS 为 `~/Library/Application Support/reins`，Linux 为 `~/.config/reins`（遵循 `XDG_CONFIG_HOME`），Windows 为 `%APPDATA%\reins`。下文用 `<reins 目录>` 指代该目录。
+- 从本地目录或 Git 仓库导入 Skills，并同步到选定的 target
+- 预览并写入 MCP 配置，检查其在各 target 上的安装状态
 
 ### Skills 导入项管理
+
+`config.yaml` 与 git cache 都存放在 Reins 数据目录下，按各系统标准配置目录 + `reins` 解析：macOS 为 `~/Library/Application Support/reins`，Linux 为 `~/.config/reins`（遵循 `XDG_CONFIG_HOME`），Windows 为 `%APPDATA%\reins`。下文用 `<reins 目录>` 指代该目录。
 
 skills tab 直接列出全部已配置来源。顶部 `新增来源` 用于导入本地目录或 Git 仓库；本地来源行提供 `编辑` / `删除` / `同步` / `移除同步`，Git 来源额外提供 `强制拉取`。
 
@@ -71,113 +70,9 @@ skills tab 直接列出全部已配置来源。顶部 `新增来源` 用于导�
 - 导入到 OpenCode 时通过官方 CLI 完成
 - 导入到 Pi 时按 cwd 编码目录写入 Pi v3 session JSONL
 
-## 配置文件
+## 开发与构建
 
-配置采用全局单一文件：`<reins 目录>/config.yaml`（目录在各系统下的具体位置见「配置与分发」）。文件由程序维护，用户也可以手动编辑，承载 sources / targets / projects / mcps 的定义；skill 的实际分发状态由各 target 目录中的软链接表示。
-
-> 该文件取代了旧版本中的 workspace 级 `nyleen.yaml`（历史命名）。旧字段 `workspace_name` 已废弃，skill 条目中的 `workspace_path` / `missing` 字段也一并移除。
-
-最小示例：
-
-```yaml
-targets:
-  codex:
-    enabled: true
-    skill_dir: ~/.agents/skills
-    mcp:
-      enabled: true
-      config_path: ~/.codex/config.toml
-      config_prefix: mcp_servers
-      config_type: common
-
-  claude:
-    enabled: true
-    skill_dir: ~/.claude/skills
-    mcp:
-      enabled: true
-      config_path: ~/.claude.json
-      config_prefix: mcpServers
-      config_type: common
-
-  opencode:
-    enabled: true
-    skill_dir: ~/.config/opencode/skills
-    mcp:
-      enabled: true
-      config_path: ~/.config/opencode/opencode.json
-      config_prefix: mcp
-      config_type: opencode
-
-  zcode:
-    enabled: true
-    skill_dir: ~/.zcode/skills
-    mcp:
-      enabled: true
-      config_path: ~/.zcode/cli/config.json
-      config_prefix: mcp.servers
-      config_type: common
-
-skill_sources: []
-projects:
-  my-app:
-    path: ~/code/my-app
-    agents:
-      opencode:
-        enabled: true
-mcps: []
-```
-
-OpenCode 的全局 target 写入 `~/.config/opencode/skills/<name>/SKILL.md` 与 `~/.config/opencode/opencode.json`；项目 target 写入 `<project>/.opencode/skills/<name>/SKILL.md` 与 `<project>/opencode.json`。
-
-ZCode 的全局 target 写入 `~/.zcode/skills/<name>/SKILL.md` 与 `~/.zcode/cli/config.json` 的 `mcp.servers`；项目 target 写入 `<project>/.zcode/skills/<name>/SKILL.md` 与 `<project>/.zcode/config.json` 的 `mcp.servers`。
-
-## 开发
-
-要求：
-
-- Node.js
-- pnpm
-- Rust toolchain
-- Tauri 桌面依赖
-
-常用命令：
-
-```bash
-pnpm install
-pnpm check
-pnpm tauri dev
-```
-
-运行 Rust 测试：
-
-```bash
-cargo test --manifest-path src-tauri/Cargo.toml
-```
-
-运行前端测试：
-
-```bash
-pnpm test
-```
-
-端到端测试依赖真实环境和对应 CLI：
-
-```bash
-OPENCODE_SESSION_ID=ses_xxx cargo test --manifest-path src-tauri/Cargo.toml imports_real_opencode_session_into_codex_and_resumes -- --ignored --nocapture
-```
-
-## 构建
-
-```bash
-pnpm tauri build
-```
-
-## 运行约定
-
-- 顶部模式切换分为“历史会话”和“配置与分发”
-- 历史会话详情页只展示跨程序导入目标
-- 会话列表滚动到底部会自动加载更多
-- OpenCode 会聚合 root session 与子会话
+环境准备、本地开发与打包遵循 Tauri v2 官方文档：[https://v2.tauri.app/](https://v2.tauri.app/)
 
 ## 图标
 
