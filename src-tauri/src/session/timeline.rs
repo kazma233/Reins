@@ -63,6 +63,18 @@ fn resolve_session_path(
     transcript_path: Option<&str>,
 ) -> Result<PathBuf> {
     if let Some(path) = transcript_path {
+        if source_app == SourceApp::GrokBuild {
+            // 折叠后的子代理会话路径仍属于同一 family，按成员 id 放行。
+            let overview = super::reader(source_app).parse_overview(std::path::Path::new(path))?;
+            anyhow::ensure!(
+                overview.summary.source_session_id == source_session_id
+                    || overview
+                        .agents
+                        .iter()
+                        .any(|agent| agent.session_id == source_session_id),
+                "Grok Build session id mismatch"
+            );
+        }
         return Ok(PathBuf::from(path));
     }
 

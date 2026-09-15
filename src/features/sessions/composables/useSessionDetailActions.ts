@@ -1,6 +1,6 @@
 import { computed, ref, watch, type Ref } from "vue";
 import { deleteSession, importSession, previewImport } from "../api";
-import { defaultImportTarget } from "../model";
+import { canDeleteSession, defaultImportTarget } from "../model";
 import type {
   ImportPreview,
   ImportResult,
@@ -189,7 +189,12 @@ export function useSessionDetailActions(
 
   function openDeleteDialog() {
     const detail = overview.value;
-    if (!detail || deleteLoading.value || importLoading.value) {
+    if (
+      !detail ||
+      !canDeleteSession(detail.summary.sourceApp) ||
+      deleteLoading.value ||
+      importLoading.value
+    ) {
       return;
     }
     deleteError.value = null;
@@ -208,6 +213,7 @@ export function useSessionDetailActions(
     if (
       !detail ||
       !detailKey.value ||
+      !canDeleteSession(detail.summary.sourceApp) ||
       deleteLoading.value ||
       importLoading.value
     ) {

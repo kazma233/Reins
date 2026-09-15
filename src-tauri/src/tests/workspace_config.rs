@@ -343,13 +343,13 @@ fn first_load_bootstraps_template_that_parses() -> Result<()> {
             .expect("template parses")
             .targets
             .len(),
-        5
+        6
     );
 
     let again = store.load_document()?;
     assert_eq!(again.raw_content, document.raw_content);
     assert!(again.exists);
     assert!(again.validation.valid, "bootstrapped template must parse");
-    assert_eq!(again.config.expect("template parses").targets.len(), 5);
+    assert_eq!(again.config.expect("template parses").targets.len(), 6);
     Ok(())
 }

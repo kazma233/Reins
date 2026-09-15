@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
   AgentTargetId,
+  TargetConfigView,
   WorkspaceState,
   McpConfigType,
   McpTransport,
@@ -71,6 +72,10 @@ function buildWorkspaceTargetPayload(payload: WorkspaceTargetPayload) {
     mcpConfigPrefix: payload.mcpConfigPrefix,
     mcpConfigType: payload.mcpConfigType,
   };
+}
+
+export function getBuiltinTargetPreset(targetId: string): Promise<TargetConfigView> {
+  return invoke("get_builtin_target_preset", { targetId });
 }
 
 export function getWorkspaceState(): Promise<WorkspaceState> {

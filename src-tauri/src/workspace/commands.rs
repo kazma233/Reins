@@ -26,6 +26,13 @@ use super::{
 };
 
 #[tauri::command]
+pub(crate) async fn get_builtin_target_preset(
+    target_id: String,
+) -> std::result::Result<super::TargetConfigView, String> {
+    run_blocking(move || super::targets::builtin_target_preset_inner(&target_id)).await
+}
+
+#[tauri::command]
 pub(crate) async fn get_workspace_state(
     store: tauri::State<'_, WorkspaceConfigStore>,
 ) -> std::result::Result<WorkspaceState, String> {

@@ -131,7 +131,7 @@ fn read_existing_mcp_entries_for_target(
     target: &ResolvedTargetConfig,
     config_path: &Path,
 ) -> Result<BTreeMap<String, JsonValue>> {
-    match detect_mcp_file_format(config_path)? {
+    match detect_target_mcp_file_format(target, config_path)? {
         McpConfigFileFormat::Toml => {
             let mut root = read_toml_config(config_path)?;
             let Some(table) = get_toml_table_path_mut(&mut root, &target.mcp_config_prefix) else {
@@ -191,6 +191,17 @@ fn inferred_target_layout(
     })
 }
 
+fn detect_target_mcp_file_format(
+    target: &ResolvedTargetConfig,
+    config_path: &Path,
+) -> Result<McpConfigFileFormat> {
+    let format = detect_mcp_file_format(config_path)?;
+    if target.mcp_config_type == McpConfigType::GrokBuild && format != McpConfigFileFormat::Toml {
+        bail!("Grok Build config type 仅支持 TOML。");
+    }
+    Ok(format)
+}
+
 fn detect_mcp_file_format(config_path: &Path) -> Result<McpConfigFileFormat> {
     if config_path.exists() {
         let raw = fs::read_to_string(config_path)?;
@@ -235,6 +246,7 @@ fn desired_toml_mcp_entry(
 ) -> Result<TomlValue> {
     match target.mcp_config_type {
         McpConfigType::Common => desired_openai_toml_mcp(server),
+        McpConfigType::GrokBuild => desired_grok_toml_mcp(server),
         McpConfigType::OpenCode => bail!("OpenCode config type 不支持 TOML。"),
     }
 }
@@ -246,6 +258,7 @@ fn desired_json_mcp_entry(
     match target.mcp_config_type {
         McpConfigType::Common => desired_openai_json_mcp(server),
         McpConfigType::OpenCode => desired_opencode_mcp(server),
+        McpConfigType::GrokBuild => bail!("Grok Build config type 仅支持 TOML。"),
     }
 }
 
@@ -253,7 +266,8 @@ fn preview_mcp_entry(
     target: &ResolvedTargetConfig,
     server: &ResolvedMcpConfig,
 ) -> Result<(String, String)> {
-    match detect_mcp_file_format(
+    match detect_target_mcp_file_format(
+        target,
         target
             .config_path
             .as_ref()
@@ -274,7 +288,7 @@ fn preview_mcp_entry(
 
 fn default_json_root_for_target(target: &ResolvedTargetConfig) -> JsonValue {
     match target.mcp_config_type {
-        McpConfigType::Common => JsonValue::Object(JsonMap::new()),
+        McpConfigType::Common | McpConfigType::GrokBuild => JsonValue::Object(JsonMap::new()),
         McpConfigType::OpenCode => JsonValue::Object(JsonMap::from_iter([(
             "$schema".to_string(),
             JsonValue::String("https://opencode.ai/config.json".to_string()),
@@ -283,14 +297,39 @@ fn default_json_root_for_target(target: &ResolvedTargetConfig) -> JsonValue {
 }
 
 fn desired_openai_toml_mcp(server: &ResolvedMcpConfig) -> Result<TomlValue> {
+    desired_toml_mcp(
+        server,
+        "http_headers",
+        server
+            .timeout
+            .map(|timeout| TomlValue::Float((timeout as f64) / 1000.0)),
+    )
+}
+
+fn desired_grok_toml_mcp(server: &ResolvedMcpConfig) -> Result<TomlValue> {
+    let timeout = server
+        .timeout
+        .map(|milliseconds| {
+            // Grok 1.0.30 要求 u64 秒，不能静默丢弃毫秒精度。
+            if milliseconds % 1000 != 0 {
+                bail!("Grok Build MCP timeout 必须是整秒（毫秒值须为 1000 的倍数）。");
+            }
+            Ok(TomlValue::Integer(i64::try_from(milliseconds / 1000)?))
+        })
+        .transpose()?;
+    desired_toml_mcp(server, "headers", timeout)
+}
+
+fn desired_toml_mcp(
+    server: &ResolvedMcpConfig,
+    headers_key: &str,
+    timeout: Option<TomlValue>,
+) -> Result<TomlValue> {
     let mut table = toml::map::Map::new();
     table.insert("enabled".to_string(), TomlValue::Boolean(server.enabled));
 
-    if let Some(timeout) = server.timeout {
-        table.insert(
-            "tool_timeout_sec".to_string(),
-            TomlValue::Float((timeout as f64) / 1000.0),
-        );
+    if let Some(timeout) = timeout {
+        table.insert("tool_timeout_sec".to_string(), timeout);
     }
 
     match server.transport {
@@ -338,7 +377,7 @@ fn desired_openai_toml_mcp(server: &ResolvedMcpConfig) -> Result<TomlValue> {
                     .iter()
                     .map(|(key, value)| (key.clone(), TomlValue::String(value.clone())))
                     .collect();
-                table.insert("http_headers".to_string(), TomlValue::Table(headers));
+                table.insert(headers_key.to_string(), TomlValue::Table(headers));
             }
         }
     }
@@ -486,7 +525,7 @@ fn apply_mcp_to_target_config(
         .as_ref()
         .ok_or_else(|| anyhow!("目标 {} 没有 MCP 配置路径。", target.id.as_str()))?;
 
-    match detect_mcp_file_format(config_path)? {
+    match detect_target_mcp_file_format(target, config_path)? {
         McpConfigFileFormat::Toml => {
             let mut root = read_toml_config(config_path)?;
             let server_map = ensure_toml_table_path(&mut root, &target.mcp_config_prefix)?;
@@ -525,7 +564,7 @@ fn remove_mcp_from_target_config(
         });
     };
 
-    let removed = match detect_mcp_file_format(config_path)? {
+    let removed = match detect_target_mcp_file_format(target, config_path)? {
         McpConfigFileFormat::Toml => {
             let mut root = read_toml_config(config_path)?;
             match get_toml_table_path_mut(&mut root, &target.mcp_config_prefix) {

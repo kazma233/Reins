@@ -18,7 +18,7 @@ export type ImportTargetCopy = {
   manualLabel: string;
 };
 
-export const IMPORT_TARGET_COPY: Record<SourceApp, ImportTargetCopy> = {
+export const IMPORT_TARGET_COPY: Partial<Record<SourceApp, ImportTargetCopy>> = {
   codex: {
     optionLabel: "Codex",
     methodLabel: "兼容写入",
@@ -54,7 +54,9 @@ export const IMPORT_TARGET_COPY: Record<SourceApp, ImportTargetCopy> = {
 };
 
 export function importTargetCopy(app: SourceApp): ImportTargetCopy {
-  return IMPORT_TARGET_COPY[app];
+  const copy = IMPORT_TARGET_COPY[app];
+  if (!copy) throw new Error("不支持导入到 Grok Build");
+  return copy;
 }
 
 export function defaultImportTarget(sourceApp: SourceApp): SourceApp {
@@ -113,6 +115,8 @@ export function manualOpenCommand(
       return claudeResumeCommand(sessionId, cwd);
     case "opencode":
       return opencodeResumeCommand(sessionId, cwd);
+    case "grokbuild":
+      return `grok${cwd ? ` --cwd ${shellQuote(cwd)}` : ""} --resume ${shellQuote(sessionId)}`;
     case "pi":
       return piResumeCommand(sessionId, cwd, transcriptPath);
     default:
@@ -138,6 +142,10 @@ export function formatImportLevel(value: ImportPreview["importLevel"]): string {
 // fix is stable warning codes from the backend (contracts ADR, step 3).
 export function translateWarning(warning: string): string {
   switch (warning) {
+    case "This target exporter preserves tool output text but not tool failure flags.":
+      return "该目标导出器会保留工具输出文本，但不保留工具失败标记。";
+    case "Import to Grok Build is unsupported":
+      return "暂不支持导入到 Grok Build。";
     case "The source session has no importable messages.":
       return "源会话中没有可导入的消息。";
     case "OpenCode support is limited to source detection until real transcript samples are available.":
@@ -181,7 +189,16 @@ export type DeleteMethodCopy = {
   commandLabel: string;
 };
 
+export function canDeleteSession(app: SourceApp): boolean {
+  return app !== "grokbuild";
+}
+
 export const DELETE_METHOD_COPY: Record<SourceApp, DeleteMethodCopy> = {
+  grokbuild: {
+    description: "暂不支持删除 Grok Build 会话。",
+    details: [],
+    commandLabel: "不支持删除"
+  },
   codex: {
     description:
       "Codex 目前没有确认可用的单会话官方删除命令，这里按本地 transcript 和状态库清理。",
@@ -269,6 +286,8 @@ export function deleteCommandPreview(detail: SessionOverview): string[] {
   const sessionIds = deleteTargetSessionIds(detail);
 
   switch (detail.summary.sourceApp) {
+    case "grokbuild":
+      return [];
     case "opencode":
       return [
         ...sessionIds.map(

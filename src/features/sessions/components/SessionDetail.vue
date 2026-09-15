@@ -22,6 +22,7 @@ import {
 import { extractErrorMessage } from "@shared/lib/errors";
 import { createRequestGuard } from "@shared/lib/request-guard";
 import { formatTimestamp } from "@shared/lib/format";
+import { canDeleteSession } from "../model";
 import { formatSourceAppName } from "../source-app";
 import SessionDetailDialogs from "./SessionDetailDialogs.vue";
 import MessageTimeline from "./MessageTimeline.vue";
@@ -423,6 +424,7 @@ watch(
             导入预览
           </button>
           <button
+            v-if="canDeleteSession(overview.summary.sourceApp)"
             class="danger-button"
             :disabled="deleteLoading || importLoading"
             type="button"

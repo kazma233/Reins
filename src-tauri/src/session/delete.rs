@@ -10,6 +10,9 @@ pub(crate) fn delete_session_inner(
     source_session_id: &str,
     transcript_path: Option<&str>,
 ) -> Result<DeleteSessionResult> {
+    if source_app == SourceApp::GrokBuild {
+        anyhow::bail!("Grok Build session deletion is unsupported");
+    }
     let path = if let Some(path) = transcript_path {
         std::path::PathBuf::from(path)
     } else {

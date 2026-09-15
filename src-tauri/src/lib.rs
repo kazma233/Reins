@@ -24,6 +24,7 @@ pub fn run() {
             session::commands::import_session,
             session::commands::delete_session,
             workspace::commands::get_workspace_state,
+            workspace::commands::get_builtin_target_preset,
             workspace::commands::select_project_path,
             workspace::commands::select_local_skill_source_directory,
             workspace::commands::select_target_skill_directory,

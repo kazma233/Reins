@@ -34,15 +34,19 @@ export function formatMcpConfigType(type: McpConfigType): string {
       return "通用 MCP 配置格式（标准 command/args/env）";
     case "opencode":
       return "OpenCode 配置格式（带 $schema 标头）";
+    case "grokbuild":
+      return "Grok Build TOML 配置格式（远端 headers）";
   }
 }
 
-export type BuiltinTargetPresetId = "codex" | "claude" | "opencode" | "zcode" | "pi";
+export type BuiltinTargetPresetId = "codex" | "claude" | "opencode" | "zcode" | "pi" | "grokbuild";
 
 export const BUILTIN_TARGET_PRESETS: Record<
   BuiltinTargetPresetId,
-  Omit<TargetFormState, "originalTargetId">
+  Omit<TargetFormState, "originalTargetId"> | null
 > = {
+  // Grok 路径由后端解析 GROK_HOME，不能用静态路径覆盖运行时默认值。
+  grokbuild: null,
   codex: {
     targetId: "codex",
     enabled: true,
@@ -256,7 +260,7 @@ export const DEFAULT_MCP_APPLY_PREVIEW_DIALOG: McpApplyPreviewDialogState = {
 };
 
 
-export const AVAILABLE_PROJECT_AGENTS = ["claude", "codex", "opencode", "zcode", "pi"] as const;
+export const AVAILABLE_PROJECT_AGENTS = ["claude", "codex", "opencode", "zcode", "pi", "grokbuild"] as const;
 
 export type ProjectFormState = {
   originalProjectId: string | null;

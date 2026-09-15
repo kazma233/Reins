@@ -7,6 +7,15 @@ use anyhow::{Context, Result, anyhow};
 use serde_json::Value;
 use walkdir::WalkDir;
 
+pub(crate) fn grok_home_path(
+    grok_home: Option<std::ffi::OsString>,
+    home: Option<PathBuf>,
+) -> Option<PathBuf> {
+    grok_home
+        .map(PathBuf::from)
+        .or_else(|| home.map(|path| path.join(".grok")))
+}
+
 pub(crate) fn effective_cwd(cwd: Option<&str>) -> Result<String> {
     if let Some(cwd) = cwd {
         return Ok(cwd.to_string());

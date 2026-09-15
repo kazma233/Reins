@@ -5,6 +5,7 @@ const SOURCE_APP_LABELS: Record<SourceApp, string> = {
   claude_code: "Claude Code",
   opencode: "OpenCode",
   pi: "Pi",
+  grokbuild: "Grok Build",
 };
 
 export function formatSourceAppName(app: SourceApp): string {

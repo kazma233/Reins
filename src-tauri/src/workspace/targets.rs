@@ -340,8 +340,51 @@ pub(super) struct TargetDefaults {
     pub(super) config_type: McpConfigType,
 }
 
+use crate::support::fs::grok_home_path;
+
+#[cfg(test)]
+#[test]
+fn grokbuild_home_uses_environment_before_home_default() {
+    let home = PathBuf::from("/synthetic-home");
+    let custom = PathBuf::from("/custom-grok");
+    assert_eq!(
+        grok_home_path(None, Some(home.clone())),
+        Some(home.join(".grok"))
+    );
+    assert_eq!(
+        grok_home_path(Some(custom.clone().into_os_string()), Some(home)),
+        Some(custom)
+    );
+}
+
+pub(crate) fn builtin_target_preset_inner(target_id: &str) -> Result<TargetConfigView> {
+    let id = normalize_target_id(target_id)?;
+    let defaults = builtin_target_defaults_map()
+        .remove(&id)
+        .ok_or_else(|| anyhow!("未知内置 target：{id}"))?;
+    Ok(TargetConfigView {
+        id,
+        enabled: true,
+        skill_dir: display_path(&defaults.skill_dir),
+        config_path: defaults.config_path.as_deref().map(display_path),
+        mcp_config_prefix: defaults.config_prefix.to_string(),
+        mcp_config_type: defaults.config_type,
+    })
+}
+
 fn builtin_target_defaults() -> Vec<TargetDefaults> {
+    let grok_home = grok_home_path(std::env::var_os("GROK_HOME"), home_dir());
     vec![
+        TargetDefaults {
+            id: AgentTargetId("grokbuild".to_string()),
+            skill_dir: grok_home
+                .as_ref()
+                .map(|h| h.join("skills"))
+                .unwrap_or_default(),
+            config_path: grok_home.map(|h| h.join("config.toml")),
+            config_prefix: "mcp_servers",
+            config_type: McpConfigType::GrokBuild,
+        },
         TargetDefaults {
             id: AgentTargetId("codex".to_string()),
             skill_dir: home_dir()
@@ -400,6 +443,13 @@ pub(super) fn builtin_target_defaults_map() -> HashMap<AgentTargetId, TargetDefa
 
 pub(super) fn project_agent_defaults(project_path: &Path) -> Vec<TargetDefaults> {
     vec![
+        TargetDefaults {
+            id: AgentTargetId("grokbuild".to_string()),
+            skill_dir: project_path.join(".grok/skills"),
+            config_path: Some(project_path.join(".grok/config.toml")),
+            config_prefix: "mcp_servers",
+            config_type: McpConfigType::GrokBuild,
+        },
         TargetDefaults {
             id: AgentTargetId("claude".to_string()),
             skill_dir: project_path.join(".claude/skills"),

@@ -19,6 +19,7 @@ use crate::state;
 use crate::support;
 use crate::test_support::TestEnvGuard;
 
+mod grokbuild;
 mod pi;
 mod session_cache;
 mod session_delete;

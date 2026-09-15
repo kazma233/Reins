@@ -241,6 +241,8 @@ pub(crate) enum McpConfigType {
     Common,
     #[serde(rename = "opencode")]
     OpenCode,
+    #[serde(rename = "grokbuild")]
+    GrokBuild,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]

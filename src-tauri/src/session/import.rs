@@ -6,7 +6,9 @@ use super::{ImportLevel, ImportPreview, ImportResult, SessionDetail, SourceApp};
 pub(crate) fn generate_target_session_id(target_app: SourceApp) -> String {
     match target_app {
         SourceApp::OpenCode => format!("ses_{}", Uuid::new_v4().simple()),
-        SourceApp::Codex | SourceApp::ClaudeCode | SourceApp::Pi => Uuid::new_v4().to_string(),
+        SourceApp::Codex | SourceApp::ClaudeCode | SourceApp::Pi | SourceApp::GrokBuild => {
+            Uuid::new_v4().to_string()
+        }
     }
 }
 
@@ -27,8 +29,12 @@ pub(crate) fn preview_import_inner(
         supported: assessment.supported,
         import_level: assessment.import_level,
         warnings: assessment.warnings,
-        created_paths: super::exporter(target_app)
-            .planned_import_paths(&detail.summary, placeholder_session_id)?,
+        created_paths: if assessment.supported {
+            super::exporter(target_app)?
+                .planned_import_paths(&detail.summary, placeholder_session_id)?
+        } else {
+            Vec::new()
+        },
         backup_paths: Vec::new(),
     })
 }
@@ -39,6 +45,9 @@ pub(crate) fn import_session_inner(
     target_app: SourceApp,
     transcript_path: Option<&str>,
 ) -> Result<ImportResult> {
+    if target_app == SourceApp::GrokBuild {
+        bail!("Import to Grok Build is unsupported");
+    }
     let detail = super::get_session_inner(source_app, source_session_id, transcript_path)?;
     let assessment = assess_import(&detail, target_app);
 
@@ -52,7 +61,7 @@ pub(crate) fn import_session_inner(
 
     let new_session_id = generate_target_session_id(target_app);
     let (created_session_id, created_paths) =
-        super::exporter(target_app).export_session(&detail, &new_session_id)?;
+        super::exporter(target_app)?.export_session(&detail, &new_session_id)?;
 
     super::get_session_inner(target_app, &created_session_id, None).with_context(|| {
         format!(
@@ -79,6 +88,14 @@ struct ImportAssessment {
 
 fn assess_import(detail: &SessionDetail, target_app: SourceApp) -> ImportAssessment {
     let source_app = detail.summary.source_app;
+
+    if target_app == SourceApp::GrokBuild {
+        return ImportAssessment {
+            supported: false,
+            import_level: ImportLevel::Unsupported,
+            warnings: vec!["Import to Grok Build is unsupported".to_string()],
+        };
+    }
 
     if detail.messages.is_empty() {
         return ImportAssessment {
@@ -108,6 +125,19 @@ fn assess_import(detail: &SessionDetail, target_app: SourceApp) -> ImportAssessm
             .to_string(),
     ];
 
+    if matches!(target_app, SourceApp::Codex | SourceApp::OpenCode)
+        && detail
+            .messages
+            .iter()
+            .flat_map(|m| &m.blocks)
+            .any(|b| b.is_error == Some(true))
+    {
+        warnings.push(
+            "This target exporter preserves tool output text but not tool failure flags."
+                .to_string(),
+        );
+    }
+
     if detail.summary.cwd.is_none() {
         warnings.push(
             "The source session does not expose a cwd, so the importer will fall back to the home directory."
@@ -120,13 +150,13 @@ fn assess_import(detail: &SessionDetail, target_app: SourceApp) -> ImportAssessm
     }
 
     match (source_app, target_app) {
-        (SourceApp::Codex | SourceApp::OpenCode | SourceApp::Pi, SourceApp::ClaudeCode) => {
+        (SourceApp::Codex | SourceApp::OpenCode | SourceApp::Pi | SourceApp::GrokBuild, SourceApp::ClaudeCode) => {
             warnings.push(
                 "Tool calls are mapped into Claude tool_use/tool_result records on a best-effort basis."
                     .to_string(),
             )
         }
-        (SourceApp::ClaudeCode | SourceApp::OpenCode | SourceApp::Pi, SourceApp::Codex) => {
+        (SourceApp::ClaudeCode | SourceApp::OpenCode | SourceApp::Pi | SourceApp::GrokBuild, SourceApp::Codex) => {
             warnings.push(
                 "Codex import writes transcript JSONL only. Reins validates the written transcript, but Codex still needs to resume the session once before its internal SQLite state is populated."
                     .to_string(),

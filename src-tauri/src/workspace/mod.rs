@@ -142,6 +142,14 @@ fn default_config_template() -> String {
       config_prefix: mcp.servers
       config_type: common
 
+  # 留空路径以跟随 GROK_HOME；默认 ~/.grok/skills 和 ~/.grok/config.toml。
+  grokbuild:
+    enabled: true
+    skill_dir: ""
+    mcp:
+      config_prefix: mcp_servers
+      config_type: grokbuild
+
   # pi 暂不主动支持 MCP，省略 mcp 段即可；需要时补 mcp.config_path 和 config_prefix。
   pi:
     enabled: true
@@ -160,6 +168,8 @@ mcps: []
 #       opencode:
 #         enabled: true
 #       zcode:
+#         enabled: true
+#       grokbuild:
 #         enabled: true
 "#
     .to_string()

@@ -3,6 +3,7 @@ use std::path::Path;
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
 pub(crate) struct TestEnvGuard {
+    original_grok_home: Option<std::ffi::OsString>,
     original_home: Option<String>,
     original_path: Option<String>,
     original_pi_agent_dir: Option<String>,
@@ -17,6 +18,7 @@ impl TestEnvGuard {
             .unwrap_or_else(|poisoned| poisoned.into_inner());
 
         Self {
+            original_grok_home: env::var_os("GROK_HOME"),
             original_home: env::var("HOME").ok(),
             original_path: env::var("PATH").ok(),
             original_pi_agent_dir: env::var("PI_CODING_AGENT_DIR").ok(),
@@ -29,6 +31,7 @@ impl TestEnvGuard {
         let guard = Self::lock();
         // The override isolates the Rust backends on every platform; HOME also
         // redirects child processes (opencode CLI, git) on Unix.
+        unsafe { env::remove_var("GROK_HOME") };
         unsafe { env::set_var("HOME", temp_home) };
         crate::support::fs::set_home_override(Some(temp_home.to_path_buf()));
         guard
@@ -43,6 +46,10 @@ impl Drop for TestEnvGuard {
     fn drop(&mut self) {
         crate::support::fs::set_home_override(None);
 
+        match &self.original_grok_home {
+            Some(path) => unsafe { env::set_var("GROK_HOME", path) },
+            None => unsafe { env::remove_var("GROK_HOME") },
+        }
         match &self.original_home {
             Some(home) => unsafe { env::set_var("HOME", home) },
             None => unsafe { env::remove_var("HOME") },

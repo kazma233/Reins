@@ -15,6 +15,7 @@ pub(crate) fn detect_sources_inner(state: &SessionIndexState) -> Result<Vec<Sour
     let claude_root = super::claude_code::root()?;
     let opencode_root = super::opencode::root()?;
     let pi_root = super::pi::sessions_root()?;
+    let grok_root = super::grokbuild::root()?;
 
     let inspections = thread::scope(|scope| {
         let codex_state = state.clone();
@@ -54,11 +55,17 @@ pub(crate) fn detect_sources_inner(state: &SessionIndexState) -> Result<Vec<Sour
             )
         });
 
+        let grok_state = state.clone();
+        let grok_handle = scope.spawn(move || {
+            inspect_source(&grok_state, SourceApp::GrokBuild, grok_root, None)
+        });
+
         vec![
             codex_handle.join(),
             claude_handle.join(),
             opencode_handle.join(),
             pi_handle.join(),
+            grok_handle.join(),
         ]
     });
 
@@ -124,6 +131,7 @@ fn available_sources() -> Vec<SourceApp> {
         (SourceApp::ClaudeCode, super::claude_code::root()),
         (SourceApp::OpenCode, super::opencode::root()),
         (SourceApp::Pi, super::pi::sessions_root()),
+        (SourceApp::GrokBuild, super::grokbuild::root()),
     ]
     .into_iter()
     .filter_map(|(app, root)| root.ok().filter(|root| root.exists()).map(|_| app))

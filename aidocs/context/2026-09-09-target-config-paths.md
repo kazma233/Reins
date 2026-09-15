@@ -15,3 +15,5 @@
 - 项目 skills：`<project>/.zcode/skills/<name>/SKILL.md`
 - 全局 MCP：`~/.zcode/cli/config.json` 的 `mcp.servers`
 - 项目 MCP：`<project>/.zcode/config.json` 的 `mcp.servers`
+
+节点路径相同不代表字段名相同（例如 Grok 的远端 `headers`、timeout 类型与 Codex 不一致），字段差异与后续动态映射方向见 `2026-09-15-mcp-config-mapping.md`。

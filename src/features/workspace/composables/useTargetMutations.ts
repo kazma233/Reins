@@ -2,6 +2,7 @@ import { reactive } from "vue";
 import {
   createWorkspaceTarget,
   deleteWorkspaceTarget,
+  getBuiltinTargetPreset,
   selectTargetMcpConfigFile,
   selectTargetSkillDirectory,
   updateWorkspaceTarget,
@@ -60,9 +61,30 @@ export function useTargetMutations() {
     targetCreateDialog.form = { ...DEFAULT_TARGET_FORM };
   }
 
-  function handleApplyBuiltinTargetPreset(presetId: BuiltinTargetPresetId) {
+  async function handleApplyBuiltinTargetPreset(presetId: BuiltinTargetPresetId) {
+    if (targetCreateDialog.loading) return;
     const preset = BUILTIN_TARGET_PRESETS[presetId];
-    Object.assign(targetCreateDialog.form, preset);
+    if (preset) {
+      Object.assign(targetCreateDialog.form, preset);
+      return;
+    }
+    targetCreateDialog.loading = true;
+    try {
+      await runWorkspaceAction({
+        action: () => getBuiltinTargetPreset(presetId),
+        after: (target) => Object.assign(targetCreateDialog.form, {
+          targetId: target.id,
+          enabled: target.enabled,
+          skillDir: target.skillDir,
+          configPath: target.configPath ?? "",
+          mcpConfigPrefix: target.mcpConfigPrefix,
+          mcpConfigType: target.mcpConfigType,
+        }),
+        error: "读取内置 target 默认值失败。",
+      });
+    } finally {
+      targetCreateDialog.loading = false;
+    }
   }
 
   async function toggleTargetEnabled(target: TargetConfigView) {

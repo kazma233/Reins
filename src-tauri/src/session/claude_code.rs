@@ -823,7 +823,7 @@ fn parse_message_blocks(content: Option<&Value>, role: &str) -> Vec<ContentBlock
                     tool_name: super::json_string(item, &["name"]),
                     tool_call_id: super::json_string(item, &["id"])
                         .or_else(|| super::json_string(item, &["tool_use_id"])),
-                    is_error: None,
+                    is_error: item.get("is_error").and_then(Value::as_bool),
                     payload: Some(item.clone()),
                 })
             })
@@ -963,6 +963,7 @@ fn append_records(
                         prompt_id,
                         &call_id,
                         &tool_text,
+                        block.is_error.unwrap_or(false),
                         source_tool_assistant_uuid.as_deref(),
                     );
                     push_record(
@@ -1073,6 +1074,7 @@ fn append_records(
                         prompt_id,
                         &call_id,
                         &tool_text,
+                        block.is_error.unwrap_or(false),
                         source_tool_assistant_uuid.as_deref(),
                     );
                     push_record(
@@ -1162,6 +1164,7 @@ fn tool_result_record(
     prompt_id: &str,
     call_id: &str,
     content: &str,
+    is_error: bool,
     source_tool_assistant_uuid: Option<&str>,
 ) -> Value {
     let mut record = base_record(
@@ -1183,7 +1186,7 @@ fn tool_result_record(
               "tool_use_id": call_id,
               "type": "tool_result",
               "content": content,
-              "is_error": false
+              "is_error": is_error
             }
           ]
         }),

@@ -58,7 +58,7 @@ const presetIds = computed(() => Object.keys(BUILTIN_TARGET_PRESETS) as BuiltinT
             type="button"
             @click="$emit('applyBuiltinPreset', presetId)"
           >
-            {{ presetId }}
+            {{ presetId === 'grokbuild' ? 'Grok Build' : presetId }}
           </button>
         </div>
       </div>
@@ -139,6 +139,13 @@ const presetIds = computed(() => Object.keys(BUILTIN_TARGET_PRESETS) as BuiltinT
               @click="form.mcpConfigType = 'opencode'"
             >
               OpenCode
+            </button>
+            <button
+              :class="`manager-segmented__button${form.mcpConfigType === 'grokbuild' ? ' is-active' : ''}`"
+              type="button"
+              @click="form.mcpConfigType = 'grokbuild'"
+            >
+              Grok Build
             </button>
           </div>
         </div>

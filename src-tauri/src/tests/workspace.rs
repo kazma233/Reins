@@ -1,6 +1,9 @@
 use super::*;
 use std::time::{Duration, UNIX_EPOCH};
 
+#[path = "workspace_grokbuild.rs"]
+mod grokbuild;
+
 struct TestDir {
     path: PathBuf,
 }
@@ -414,7 +417,7 @@ fn default_config_template_parses_with_builtin_targets() -> Result<()> {
     let config_path = PathBuf::from("/tmp/reins-default-template-test.yaml");
     let config = parse_manager_config(&default_config_template(), &config_path)?;
 
-    assert_eq!(config.targets.len(), 5);
+    assert_eq!(config.targets.len(), 6);
     assert!(
         config
             .targets

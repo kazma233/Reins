@@ -16,6 +16,7 @@ pub(crate) mod codex;
 pub(crate) mod family_index;
 pub(crate) mod family_timeline;
 pub(crate) mod opencode;
+pub(crate) mod grokbuild;
 pub(crate) mod pi;
 pub(crate) mod summary_cache;
 
@@ -89,6 +90,7 @@ pub(crate) fn reader(source_app: SourceApp) -> &'static dyn SessionReader {
         SourceApp::ClaudeCode => &claude_code::BACKEND,
         SourceApp::OpenCode => &opencode::BACKEND,
         SourceApp::Pi => &pi::BACKEND,
+        SourceApp::GrokBuild => &grokbuild::BACKEND,
     }
 }
 
@@ -97,18 +99,20 @@ pub(crate) fn clear_all_caches() -> Result<()> {
     reader(SourceApp::ClaudeCode).clear_cache()?;
     reader(SourceApp::OpenCode).clear_cache()?;
     reader(SourceApp::Pi).clear_cache()?;
+    reader(SourceApp::GrokBuild).clear_cache()?;
     // 持久缓存一并清空：用户触发的刷新是"全量重建"的逃生通道。
     summary_cache::clear_all();
     Ok(())
 }
 
-pub(crate) fn exporter(source_app: SourceApp) -> &'static dyn SessionExporter {
-    match source_app {
+pub(crate) fn exporter(source_app: SourceApp) -> Result<&'static dyn SessionExporter> {
+    Ok(match source_app {
         SourceApp::Codex => &codex::BACKEND,
         SourceApp::ClaudeCode => &claude_code::BACKEND,
         SourceApp::OpenCode => &opencode::BACKEND,
         SourceApp::Pi => &pi::BACKEND,
-    }
+        SourceApp::GrokBuild => bail!("Import to Grok Build is unsupported"),
+    })
 }
 
 pub(crate) fn delete_session(source_app: SourceApp, path: &Path) -> Result<()> {
@@ -117,6 +121,7 @@ pub(crate) fn delete_session(source_app: SourceApp, path: &Path) -> Result<()> {
         SourceApp::ClaudeCode => claude_code::delete_session(path),
         SourceApp::OpenCode => opencode::delete_session(path),
         SourceApp::Pi => pi::delete_session(path),
+        SourceApp::GrokBuild => bail!("Grok Build session deletion is unsupported"),
     }
 }
 
