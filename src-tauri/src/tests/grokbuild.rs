@@ -509,6 +509,32 @@ fn grokbuild_normalizes_messages_without_stream_duplicates_or_encrypted_content(
 }
 
 #[test]
+fn grokbuild_truncated_tool_arguments_stay_readable() -> Result<()> {
+    // 模型输出中断会落盘截断的 arguments，会话必须照常可读并保留原文。
+    let home = env::temp_dir().join(format!("reins-test-{}", Uuid::new_v4()));
+    fs::create_dir_all(&home)?;
+    let _guard = TestEnvGuard::set_home(home.as_path());
+    let path = fixture(home.as_path(), "truncated")?;
+    write_jsonl(
+        &path.with_file_name("chat_history.jsonl"),
+        &[
+            json!({"type":"user","content":[{"type":"text","text":"Synthetic request"}]}),
+            json!({"type":"assistant","content":"","tool_calls":[{"id":"trunc","name":"use_tool","arguments":"{\"tool_name\": \"create_comment\", \"description\": \"**问题原因"}]}),
+            json!({"type":"tool_result","tool_call_id":"trunc","content":"Failed to parse arguments for tool `use_tool`"}),
+        ],
+    )?;
+    let detail = session::reader(SourceApp::GrokBuild).parse_detail(&path)?;
+    let tool = &detail.messages[1].blocks[0];
+    assert_eq!(tool.kind, "tool_use");
+    assert_eq!(tool.tool_name.as_deref(), Some("use_tool"));
+    assert_eq!(
+        tool.payload.as_ref().unwrap()["input"]["raw"],
+        "{\"tool_name\": \"create_comment\", \"description\": \"**问题原因"
+    );
+    Ok(())
+}
+
+#[test]
 fn grokbuild_listing_reads_only_summary_and_refreshes_index() -> Result<()> {
     let home = env::temp_dir().join(format!("reins-test-{}", Uuid::new_v4()));
     fs::create_dir_all(&home)?;

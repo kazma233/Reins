@@ -4,7 +4,7 @@ use std::fs::{self, File};
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, anyhow, bail};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -483,7 +483,10 @@ fn scan(path: &Path, name: &str, mut visit: impl FnMut(usize, Value) -> Result<(
         }
         let value = serde_json::from_str(&line)
             .with_context(|| format!("Invalid Grok Build {name} JSON at line {}", index + 1))?;
-        visit(index, value)?;
+        // 前端只展示最外层错误消息，行号必须和原因拼在同一层，否则报错无法定位。
+        visit(index, value).map_err(|error| {
+            anyhow!("Invalid Grok Build {name} entry at line {}: {error}", index + 1)
+        })?;
     }
     Ok(())
 }
@@ -622,8 +625,11 @@ fn messages(path: &Path) -> Result<Vec<SessionMessage>> {
                 for call in calls.as_array().context("Invalid Grok Build tool_calls")? {
                     let id = required(call, "id")?;
                     let name = required(call, "name")?;
-                    let arguments: Value = serde_json::from_str(required(call, "arguments")?)
-                        .context("Invalid Grok Build tool arguments JSON")?;
+                    // 模型输出中断会把截断的 arguments 落盘，Grok Build 已把该调用记为
+                    // 失败并继续会话；按 {raw} 原文降级展示，不让单条坏数据导致整个会话不可读。
+                    let raw = required(call, "arguments")?;
+                    let arguments =
+                        serde_json::from_str::<Value>(raw).unwrap_or_else(|_| json!({"raw": raw}));
                     let mut tool = block("tool_use", None);
                     tool.tool_call_id = Some(id.into());
                     tool.tool_name = Some(name.into());
