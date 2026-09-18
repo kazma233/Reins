@@ -406,10 +406,52 @@
   gap: 6px;
 }
 
+/* 标签 + 按钮行的分组：标签固定宽度，两行的按钮左边缘因此对齐。
+   不要叫 manager-target-group —— 那是 Targets 面板的分组容器类。 */
+.manager-target-buttons-group {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.manager-target-buttons-group__label {
+  flex: 0 0 auto;
+  min-width: 30px;
+  /* 与按钮同高，换行时标签仍与第一行对齐 */
+  line-height: 26px;
+  color: var(--color-muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+
+.manager-target-buttons-group .manager-target-buttons {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
 .manager-target-button {
   min-height: 26px;
-  padding: 3px 8px;
+  padding: 3px 10px;
   font-size: 12px;
+  transition: box-shadow 0.16s ease;
+}
+
+/* 悬停只加浮起阴影：底色由 is-installed / is-warning / is-partial 等状态类
+   决定，这里覆盖会在 hover 时抹掉状态色 */
+.manager-target-button:hover:not(:disabled) {
+  box-shadow: 0 1px 4px rgba(10, 11, 13, 0.12);
+}
+
+/* 已安装用圆点标记：扫视一列按钮时比底色更快识别 */
+.manager-target-button.is-installed::before {
+  content: "";
+  flex: 0 0 auto;
+  width: 6px;
+  height: 6px;
+  margin-right: 5px;
+  border-radius: 50%;
+  background: currentColor;
 }
 
 .manager-target-button.is-active {

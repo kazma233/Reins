@@ -87,25 +87,35 @@ const targetItemById = computed(() =>
         </div>
         <p class="manager-skill-description">{{ summary }}</p>
         <p v-if="mcp.homepage" class="manager-skill-description">主页 · {{ mcp.homepage }}</p>
-        <div class="manager-target-buttons">
-          <McpTargetButton
-            v-for="targetId in targetIds"
-            :key="targetId"
-            :server-name="mcp.name"
-            :target-id="targetId"
-            :target-item="targetItemById.get(targetId) ?? null"
-            :loading="loading"
-            @toggle="(serverName: string, tid: AgentTargetId) => $emit('toggleMcpTarget', serverName, tid)"
-          />
-          <ProjectMcpTargetButton
-            v-for="entry in projects"
-            :key="entry.id"
-            :server-name="mcp.name"
-            :project-entry="entry"
-            :inspection="inspection"
-            :loading="loading"
-            @click="(serverName: string, projectId: string) => $emit('openProjectAgentPicker', serverName, projectId)"
-          />
+        <!-- 全局 target 与项目分组各占一行：项目按钮显示的是项目名，与全局的
+             agent 名混排时难以区分 -->
+        <div v-if="targetIds.length > 0" class="manager-target-buttons-group">
+          <span class="manager-target-buttons-group__label">全局</span>
+          <div class="manager-target-buttons">
+            <McpTargetButton
+              v-for="targetId in targetIds"
+              :key="targetId"
+              :server-name="mcp.name"
+              :target-id="targetId"
+              :target-item="targetItemById.get(targetId) ?? null"
+              :loading="loading"
+              @toggle="(serverName: string, tid: AgentTargetId) => $emit('toggleMcpTarget', serverName, tid)"
+            />
+          </div>
+        </div>
+        <div v-if="projects.length > 0" class="manager-target-buttons-group">
+          <span class="manager-target-buttons-group__label">项目</span>
+          <div class="manager-target-buttons">
+            <ProjectMcpTargetButton
+              v-for="entry in projects"
+              :key="entry.id"
+              :server-name="mcp.name"
+              :project-entry="entry"
+              :inspection="inspection"
+              :loading="loading"
+              @click="(serverName: string, projectId: string) => $emit('openProjectAgentPicker', serverName, projectId)"
+            />
+          </div>
         </div>
       </div>
     </div>
