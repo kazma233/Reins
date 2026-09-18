@@ -1,22 +1,15 @@
 import { reactive } from "vue";
-import {
-  getSyncTargetOptions,
-  previewSourceSyncConflicts,
-  removeSourceSync,
-  syncSourceToTargets,
-} from "../api";
+import { previewSourceSyncConflicts, syncSourceToTargets } from "../api";
 import type {
   SkillSourceConfigView,
   SourceSyncConflict,
   SourceSyncInput,
   SourceSyncResult,
   SyncSkillOption,
-  SyncTargetOption,
 } from "../types";
 import { extractErrorMessage } from "@shared/lib/errors";
 import { useWorkspaceNotice } from "./useWorkspaceNotice";
 import { useWorkspaceState } from "./useWorkspaceState";
-import { useWorkspaceAction } from "./useWorkspaceAction";
 
 type SourceSyncSnapshot = {
   sourceRoot: string;
@@ -33,11 +26,10 @@ type PendingSourceSync = {
 export function useSourceSync() {
   const { showNotice } = useWorkspaceNotice();
   const { reloadWorkspaceState } = useWorkspaceState();
-  const { runWorkspaceAction } = useWorkspaceAction();
 
   // SourceSyncDialog is self-managing — we only track its open state and the
-  // source it is operating on. The skill/target selection lives inside the
-  // dialog itself.
+  // source it is operating on. Skill/target selection and the remove-sync
+  // action for the picked targets all live inside the dialog itself.
   const sourceSyncDialog = reactive<{
     open: boolean;
     source: SkillSourceConfigView | null;
@@ -58,24 +50,6 @@ export function useSourceSync() {
     loading: false,
     conflicts: [],
     pending: null,
-  });
-
-  // RemoveSyncDialog state is parent-managed because the target options are
-  // loaded asynchronously by the parent before the dialog opens.
-  const removeSyncDialog = reactive<{
-    open: boolean;
-    loading: boolean;
-    source: SkillSourceConfigView | null;
-    targets: SyncTargetOption[];
-    targetsLoading: boolean;
-    selectedTargetIds: Set<string>;
-  }>({
-    open: false,
-    loading: false,
-    source: null,
-    targets: [],
-    targetsLoading: false,
-    selectedTargetIds: new Set(),
   });
 
   function buildSourceSyncInput(
@@ -175,86 +149,13 @@ export function useSourceSync() {
     }
   }
 
-  function handleOpenSourceRemoveSync(source: SkillSourceConfigView) {
-    removeSyncDialog.open = true;
-    removeSyncDialog.loading = false;
-    removeSyncDialog.source = source;
-    removeSyncDialog.targets = [];
-    removeSyncDialog.targetsLoading = true;
-    removeSyncDialog.selectedTargetIds = new Set();
-
-    void getSyncTargetOptions()
-      .then((options) => {
-        if (removeSyncDialog.source?.id !== source.id) return;
-        const enabledIds = options
-          .filter((t) => t.enabled && !t.linkedTargetId)
-          .map((t) => t.id);
-        removeSyncDialog.targets = options;
-        removeSyncDialog.targetsLoading = false;
-        removeSyncDialog.selectedTargetIds = new Set(enabledIds);
-      })
-      .catch((error) => {
-        if (removeSyncDialog.source?.id !== source.id) return;
-        removeSyncDialog.targetsLoading = false;
-        showNotice(extractErrorMessage(error, "读取同步目标失败。"), "error");
-      });
-  }
-
-  function closeRemoveSyncDialog() {
-    removeSyncDialog.open = false;
-    removeSyncDialog.loading = false;
-    removeSyncDialog.source = null;
-    removeSyncDialog.targets = [];
-    removeSyncDialog.targetsLoading = false;
-    removeSyncDialog.selectedTargetIds = new Set();
-  }
-
-  function handleToggleRemoveSyncTarget(id: string) {
-    const next = new Set(removeSyncDialog.selectedTargetIds);
-    if (next.has(id)) next.delete(id);
-    else next.add(id);
-    removeSyncDialog.selectedTargetIds = next;
-  }
-
-  function handleSetRemoveSyncTargets(targetIds: string[], selected: boolean) {
-    const next = new Set(removeSyncDialog.selectedTargetIds);
-    for (const id of targetIds) {
-      if (selected) next.add(id);
-      else next.delete(id);
-    }
-    removeSyncDialog.selectedTargetIds = next;
-  }
-
-  async function handleConfirmRemoveSourceSync() {
-    const source = removeSyncDialog.source;
-    if (!source || removeSyncDialog.selectedTargetIds.size === 0) return;
-
-    removeSyncDialog.loading = true;
-    await runWorkspaceAction({
-      action: () => removeSourceSync(source.id, Array.from(removeSyncDialog.selectedTargetIds)),
-      success: (result) =>
-        result.removed.length > 0
-          ? { message: `已移除 ${result.removed.length} 个软链接。` }
-          : { message: "没有需要移除的软链接。", tone: "info" },
-      error: `移除 ${source.label} 同步失败。`,
-      after: () => closeRemoveSyncDialog(),
-    });
-    removeSyncDialog.loading = false;
-  }
-
   return {
     sourceSyncDialog,
     sourceSyncOverwriteDialog,
-    removeSyncDialog,
     handleOpenSourceSync,
     handleConfirmSourceSync,
     closeSourceSyncDialog,
     closeSourceSyncOverwriteDialog,
     confirmSourceSyncOverwrite,
-    handleOpenSourceRemoveSync,
-    closeRemoveSyncDialog,
-    handleToggleRemoveSyncTarget,
-    handleSetRemoveSyncTargets,
-    handleConfirmRemoveSourceSync,
   };
 }

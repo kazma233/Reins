@@ -66,6 +66,12 @@ export function hasCurrentSourceSkillLinks(
   );
 }
 
+// 只有非受管来源的链接可以逐条移除：它们不属于任何已配置来源，没有来源级的
+// 清理入口；待清理项仍归属当前来源，由移除同步或下次同步统一处理。
+export function canRemoveSkillLink(link: SkillLinkAssociation): boolean {
+  return link.state === "unmanaged";
+}
+
 function normalizePathForDisplay(path: string): { value: string; windows: boolean } {
   let value = path.trim().replace(/\\/g, "/");
   if (value.startsWith("//?/UNC/")) value = `//${value.slice("//?/UNC/".length)}`;

@@ -1,5 +1,5 @@
 import { reactive } from "vue";
-import { deleteSkillSource, refreshGitSkillSource, updateSkillSource } from "../api";
+import { deleteSkillSource, updateSkillSource } from "../api";
 import {
   createSkillSourceEditDialogState,
   parseCommaSeparatedList,
@@ -107,16 +107,6 @@ export function useSkillSourceEdit() {
     skillSourceEditDialog.loading = false;
   }
 
-  async function handleRefreshGitSkillSource(source: SkillSourceConfigView) {
-    if (source.type !== "git") return;
-
-    await runWorkspaceAction({
-      action: () => refreshGitSkillSource(source.id),
-      success: `已从远端拉取 ${source.label}。`,
-      error: "拉取远端来源失败。",
-    });
-  }
-
   function openSkillSourceDeleteDialog(source: SkillSourceConfigView) {
     skillSourceDeleteDialog.open = true;
     skillSourceDeleteDialog.loading = false;
@@ -153,7 +143,6 @@ export function useSkillSourceEdit() {
     closeSkillSourceEditDialog,
     handleRefreshSkillSourceEditPreview,
     handleConfirmSkillSourceEdit,
-    handleRefreshGitSkillSource,
     openSkillSourceDeleteDialog,
     closeSkillSourceDeleteDialog,
     handleConfirmDeleteSkillSource,

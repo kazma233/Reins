@@ -25,6 +25,10 @@ export type RunWorkspaceActionOptions<T> = {
   // after the reload so panels never render stale store data behind the
   // dialog; it is skipped entirely when the action fails.
   after?: (result: T) => void;
+  // Skips the reload for mutations that only rewrite files on disk without
+  // touching the config document or the inspection results; without it the
+  // whole workspace flashes its loading state for nothing.
+  skipReload?: boolean;
 };
 
 export function useWorkspaceAction() {
@@ -39,7 +43,7 @@ export function useWorkspaceAction() {
     try {
       const result = await options.action();
 
-      if (options.success !== undefined) {
+      if (options.success !== undefined && !options.skipReload) {
         // preserveNotice keeps the reload's own clearNotice() from racing the
         // success toast; the toast is shown last so it always survives.
         await reloadWorkspaceState({ preserveNotice: true });

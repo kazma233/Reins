@@ -5,7 +5,6 @@ import SkillSourceGroup from "../SkillSourceGroup.vue";
 import SkillImportDialog from "../dialogs/SkillImportDialog.vue";
 import SkillSourceEditDialog from "../dialogs/SkillSourceEditDialog.vue";
 import SourceSyncDialog from "../dialogs/SourceSyncDialog.vue";
-import RemoveSyncDialog from "../dialogs/RemoveSyncDialog.vue";
 import ConfirmDialog from "@shared/ui/ConfirmDialog.vue";
 import { formatTargetLabel } from "../../model";
 import { buildSkillLinkSourceLabels } from "../../syncAssociations";
@@ -41,7 +40,6 @@ const {
   closeSkillSourceEditDialog,
   handleRefreshSkillSourceEditPreview,
   handleConfirmSkillSourceEdit,
-  handleRefreshGitSkillSource,
   openSkillSourceDeleteDialog,
   closeSkillSourceDeleteDialog,
   handleConfirmDeleteSkillSource,
@@ -50,17 +48,11 @@ const {
 const {
   sourceSyncDialog,
   sourceSyncOverwriteDialog,
-  removeSyncDialog,
   handleOpenSourceSync,
   handleConfirmSourceSync,
   closeSourceSyncDialog,
   closeSourceSyncOverwriteDialog,
   confirmSourceSyncOverwrite,
-  handleOpenSourceRemoveSync,
-  closeRemoveSyncDialog,
-  handleToggleRemoveSyncTarget,
-  handleSetRemoveSyncTargets,
-  handleConfirmRemoveSourceSync,
 } = useSourceSync();
 
 // --- local filter state ---
@@ -119,8 +111,6 @@ const remoteSources = computed(() =>
                 @edit="openSkillSourceEditDialog"
                 @delete="openSkillSourceDeleteDialog"
                 @sync="handleOpenSourceSync"
-                @remove-sync="handleOpenSourceRemoveSync"
-                @refresh="handleRefreshGitSkillSource"
               />
               <SkillSourceGroup
                 heading="远端 Skills"
@@ -130,8 +120,6 @@ const remoteSources = computed(() =>
                 @edit="openSkillSourceEditDialog"
                 @delete="openSkillSourceDeleteDialog"
                 @sync="handleOpenSourceSync"
-                @remove-sync="handleOpenSourceRemoveSync"
-                @refresh="handleRefreshGitSkillSource"
               />
             </div>
           </template>
@@ -224,20 +212,5 @@ const remoteSources = computed(() =>
         </div>
       </div>
     </ConfirmDialog>
-
-    <RemoveSyncDialog
-      :open="removeSyncDialog.open"
-      :loading="removeSyncDialog.loading || runningAction"
-      :source-id="removeSyncDialog.source?.id ?? ''"
-      :source-labels="sourceLabels"
-      :targets-loading="removeSyncDialog.targetsLoading"
-      :source-label="removeSyncDialog.source?.label ?? ''"
-      :targets="removeSyncDialog.targets"
-      :selected-target-ids="removeSyncDialog.selectedTargetIds"
-      @close="closeRemoveSyncDialog"
-      @confirm="handleConfirmRemoveSourceSync"
-      @set-targets="handleSetRemoveSyncTargets"
-      @toggle-target="handleToggleRemoveSyncTarget"
-    />
   </section>
 </template>

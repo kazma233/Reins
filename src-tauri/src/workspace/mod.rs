@@ -33,7 +33,7 @@ pub(crate) use self::skills::{
     delete_skill_sources_inner, discover_git_skills_inner, discover_local_skills_inner,
     filter_discovered_skills_inner, import_batch_git_skills_inner, import_discovered_skills_inner,
     preview_source_sync_conflicts_inner, refresh_git_skill_source_inner, remove_source_sync_inner,
-    sync_source_to_targets_inner, update_skill_source_inner,
+    remove_target_skill_link_inner, sync_source_to_targets_inner, update_skill_source_inner,
 };
 pub(crate) use self::targets::{
     create_workspace_project_inner, create_workspace_target_inner, delete_workspace_project_inner,

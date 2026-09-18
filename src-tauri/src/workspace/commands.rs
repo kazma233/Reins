@@ -9,7 +9,8 @@ use crate::state::skill_discovery::SkillDiscoveryState;
 use super::{
     BatchGitSkillImportInput, BatchGitSkillImportResult, McpConfigType, McpTargetMutationResult,
     McpTargetPreviewResult, McpTransport, ProjectMutationInput, RawMcpConfig, RawTargetInput,
-    SkillDiscoveryResultView, SkillSourceMutationInput, SourceSyncConflict, SourceSyncInput,
+    SkillDiscoveryResultView, SkillSourceMutationInput, SkillSyncItem, SourceSyncConflict,
+    SourceSyncInput,
     SourceSyncResult, SyncSkillOptionsResult, SyncTargetOption, WorkspaceConfigStore,
     WorkspaceMcpMutationResult, WorkspaceState, WorkspaceTargetMutationResult,
     apply_mcp_to_target_inner, build_sync_skill_options, build_sync_target_options,
@@ -19,7 +20,8 @@ use super::{
     discover_local_skills_inner, filter_discovered_skills_inner, import_batch_git_skills_inner,
     import_discovered_skills_inner, preview_mcp_target_inner, preview_source_sync_conflicts_inner,
     refresh_git_skill_source_inner, remove_mcp_from_target_inner, remove_source_sync_inner,
-    select_local_skill_source_directory_inner, select_project_path_inner,
+    remove_target_skill_link_inner, select_local_skill_source_directory_inner,
+    select_project_path_inner,
     select_target_mcp_config_file_inner, select_target_skill_directory_inner,
     sync_source_to_targets_inner, update_skill_source_inner, update_workspace_mcp_inner,
     update_workspace_project_inner, update_workspace_target_inner, workspace_state_inner,
@@ -429,6 +431,16 @@ pub(crate) async fn remove_source_sync(
 ) -> std::result::Result<SourceSyncResult, String> {
     let store = store.inner().clone();
     run_blocking(move || remove_source_sync_inner(&store, &source_id, &target_ids)).await
+}
+
+#[tauri::command]
+pub(crate) async fn remove_target_skill_link(
+    store: tauri::State<'_, WorkspaceConfigStore>,
+    target_id: String,
+    destination_path: String,
+) -> std::result::Result<SkillSyncItem, String> {
+    let store = store.inner().clone();
+    run_blocking(move || remove_target_skill_link_inner(&store, &target_id, &destination_path)).await
 }
 
 #[tauri::command]

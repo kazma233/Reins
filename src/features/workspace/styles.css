@@ -694,6 +694,7 @@
 
 .manager-sync-target-link__main {
   display: grid;
+  flex: 1;
   grid-template-columns: minmax(72px, auto) minmax(0, 1fr);
   column-gap: 8px;
   min-width: 0;
@@ -747,6 +748,37 @@
   color: var(--color-muted);
 }
 
+.manager-sync-target-link__remove {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  color: var(--color-muted);
+  background: transparent;
+  cursor: pointer;
+}
+
+.manager-sync-target-link__remove:hover:not(:disabled) {
+  color: var(--color-danger);
+  border-color: var(--color-danger);
+}
+
+.manager-sync-target-link__remove:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.manager-sync-target-link__remove svg {
+  width: 14px;
+  height: 14px;
+  fill: currentColor;
+}
+
 .pill--on {
   background: #ecfdf5;
   color: #059669;
@@ -792,6 +824,21 @@
   color: var(--color-body);
 }
 
+/* info 图标标出提示入口，气泡由 AppTooltip 渲染 */
+.manager-sync-column__info {
+  display: inline-flex;
+  flex: 0 0 auto;
+  margin-right: 4px;
+  color: var(--color-muted);
+  cursor: help;
+}
+
+.manager-sync-column__info svg {
+  width: 14px;
+  height: 14px;
+  fill: currentColor;
+}
+
 .manager-sync-column__actions {
   display: flex;
   gap: 6px;
@@ -801,6 +848,11 @@
   min-height: 24px;
   padding: 2px 8px;
   font-size: 12px;
+}
+
+/* 破坏性操作靠左，与右下角的“取消/开始同步”拉开距离，避免误点 */
+.manager-sync-dialog__remove {
+  margin-right: auto;
 }
 
 .manager-sync-dialog .manager-import-skill-list {
@@ -829,13 +881,6 @@
   font-size: 13px;
   font-weight: 500;
   line-height: 1.25;
-}
-
-.manager-sync-source-location {
-  margin: -4px 0 8px;
-  font-size: 12px;
-  color: var(--color-muted);
-  word-break: break-all;
 }
 
 /* Search input inside sync dialog's skill column. */
@@ -1220,17 +1265,8 @@
   gap: 6px;
 }
 
-.manager-skill-source-row__actions-row {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.manager-skill-source-row__actions-row > .manager-skill-source-row__action {
-  flex: 0 0 auto;
-}
-
 .manager-skill-source-row__action {
+  flex: 0 0 auto;
   min-height: 26px;
   padding: 3px 8px;
   font-size: 12px;

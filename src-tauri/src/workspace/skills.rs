@@ -1103,12 +1103,10 @@ pub(super) fn remove_source_symlinks_from_targets_with_root(
     source_root: &Path,
     target_ids: Option<&HashSet<&str>>,
 ) -> Result<Vec<SkillSyncItem>> {
-    // Canonicalize so it matches the canonicalized link target from
-    // resolve_symlink_target_path; otherwise starts_with can fail when the
-    // configured root_path differs in case/links from its real path.
-    let source_root = source_root
-        .canonicalize()
-        .unwrap_or_else(|_| source_root.to_path_buf());
+    // 两侧都走 normalize_link_path：来源目录被删时 canonicalize 会失败并退回
+    // 原始配置路径，与同样退回原始路径的链接目标在 /var → /private/var 这类
+    // 系统软链接下失配，导致该来源的链接删不掉。
+    let source_root = normalize_link_path(source_root);
 
     let global_targets = config
         .targets
@@ -1128,15 +1126,27 @@ pub(super) fn remove_source_symlinks_from_targets_with_root(
                 continue;
             }
         }
-        let Ok(entries) = fs::read_dir(&target.skill_dir) else {
-            continue;
+        // 目录不存在说明该 target 没有可清理的链接；其他读取错误（如权限不足、
+        // 路径不是目录）会让链接留在磁盘上，必须上报，否则调用方会把部分成功
+        // 当成成功，界面也会据此错误地更新本地状态。
+        let entries = match fs::read_dir(&target.skill_dir) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => {
+                return Err(error).with_context(|| {
+                    format!("读取 target skills 目录失败：{}", target.skill_dir.display())
+                });
+            }
         };
-        for entry in entries.flatten() {
+        for entry in entries {
+            let entry = entry.with_context(|| {
+                format!("读取 target skills 目录项失败：{}", target.skill_dir.display())
+            })?;
             let path = entry.path();
             let Some(resolved) = read_directory_link_target(&path)? else {
                 continue;
             };
-            if relative_to_source_root(&resolved, &source_root).is_some() {
+            if relative_to_source_root(&normalize_link_path(&resolved), &source_root).is_some() {
                 let skill_name = path
                     .file_name()
                     .and_then(|n| n.to_str())
@@ -1156,6 +1166,45 @@ pub(super) fn remove_source_symlinks_from_targets_with_root(
     }
 
     Ok(removed)
+}
+
+// 移除单个 target 上的目录链接，用于同步弹窗里逐条清理非受管控条目。
+// 只删链接本身：先确认目标确实是目录链接，再删，真实目录/文件一律拒绝。
+pub(crate) fn remove_target_skill_link_inner(
+    store: &WorkspaceConfigStore,
+    target_id: &str,
+    destination_path: &str,
+) -> Result<SkillSyncItem> {
+    let config = store.parse()?;
+    let target = resolve_target_from_id(&config, target_id)
+        .ok_or_else(|| anyhow!("未找到 target：{target_id}"))?;
+
+    let destination = PathBuf::from(destination_path);
+    // 只规范化父目录：对链接自身 canonicalize 会把链接解析到目标路径，
+    // 无法再判断它位于哪个 skill_dir 下。
+    let parent = destination
+        .parent()
+        .ok_or_else(|| anyhow!("路径无效：{destination_path}"))?;
+    if normalize_link_path(parent) != normalize_link_path(&target.skill_dir) {
+        bail!("路径不属于该 target 的 skills 目录：{destination_path}");
+    }
+
+    let resolved = read_directory_link_target(&destination)?
+        .ok_or_else(|| anyhow!("目标不是软链接，已跳过：{destination_path}"))?;
+    remove_existing_path(&destination)?;
+
+    Ok(SkillSyncItem {
+        skill_name: destination
+            .file_name()
+            .and_then(OsStr::to_str)
+            .unwrap_or("skill")
+            .to_string(),
+        target_id: AgentTargetId(target_id.to_string()),
+        source_path: display_path(&resolved),
+        destination_path: display_path(&destination),
+        action: "remove".to_string(),
+        detail: String::new(),
+    })
 }
 
 // ---------------------------------------------------------------------------

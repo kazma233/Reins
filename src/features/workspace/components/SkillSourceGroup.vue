@@ -15,8 +15,6 @@ defineEmits<{
   edit: [source: SkillSourceConfigView];
   delete: [source: SkillSourceConfigView];
   sync: [source: SkillSourceConfigView];
-  removeSync: [source: SkillSourceConfigView];
-  refresh: [source: SkillSourceConfigView];
 }>();
 </script>
 
@@ -35,8 +33,6 @@ defineEmits<{
         @edit="$emit('edit', $event)"
         @delete="$emit('delete', $event)"
         @sync="$emit('sync', $event)"
-        @remove-sync="$emit('removeSync', $event)"
-        @refresh="$emit('refresh', $event)"
       />
     </div>
   </section>

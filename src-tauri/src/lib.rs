@@ -53,6 +53,7 @@ pub fn run() {
             workspace::commands::sync_source_to_targets,
             workspace::commands::preview_source_sync_conflicts,
             workspace::commands::remove_source_sync,
+            workspace::commands::remove_target_skill_link,
             workspace::commands::refresh_git_skill_source,
             workspace::commands::update_skill_source,
         ])

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { SkillLinkAssociation } from "./types";
 import {
   buildSkillLinkSourceLabels,
+  canRemoveSkillLink,
   hasCurrentSourceSkillLinks,
   hasUnmanagedSkillLinks,
   pendingSkillLinkCleanupCount,
@@ -87,6 +88,13 @@ describe("skill link association presentation", () => {
     expect(hasCurrentSourceSkillLinks(links, "source-a")).toBe(true);
     expect(hasCurrentSourceSkillLinks(links, "source-b")).toBe(false);
     expect(hasCurrentSourceSkillLinks(links)).toBe(false);
+  });
+
+  it("allows removing only unmanaged links one by one", () => {
+    expect(canRemoveSkillLink(makeLink("unmanaged"))).toBe(true);
+    expect(canRemoveSkillLink(makeLink("linked", ["source-a"]))).toBe(false);
+    expect(canRemoveSkillLink(makeLink("excluded", ["source-a"]))).toBe(false);
+    expect(canRemoveSkillLink(makeLink("sourceMissing", ["source-a"]))).toBe(false);
   });
 
   it("shows the source path relative to the current source root", () => {

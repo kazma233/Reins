@@ -14,6 +14,7 @@ import type {
   WorkspaceTargetMutationResult,
   SyncTargetOption,
   SyncSkillOptionsResult,
+  SkillSyncItem,
   SourceSyncInput,
   SourceSyncConflict,
   SourceSyncResult,
@@ -294,4 +295,11 @@ export function removeSourceSync(
   targetIds: string[]
 ): Promise<SourceSyncResult> {
   return invoke("remove_source_sync", { sourceId, targetIds });
+}
+
+export function removeTargetSkillLink(
+  targetId: string,
+  destinationPath: string
+): Promise<SkillSyncItem> {
+  return invoke("remove_target_skill_link", { targetId, destinationPath });
 }

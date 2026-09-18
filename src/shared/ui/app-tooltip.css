@@ -1,0 +1,37 @@
+.app-tooltip {
+  position: relative;
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+}
+
+/* 悬停即显：原生 title 的提示延迟由浏览器控制（约一秒），无法满足即时提示。
+   z-index 让气泡盖住后续的兄弟元素。 */
+.app-tooltip__bubble {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  width: max-content;
+  max-width: 320px;
+  padding: 6px 8px;
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-dark);
+  color: var(--color-on-primary);
+  word-break: break-all;
+  font-size: 11px;
+  font-weight: 400;
+  line-height: 1.4;
+  text-align: left;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition:
+    opacity 0.08s ease,
+    visibility 0.08s ease;
+}
+
+.app-tooltip:hover .app-tooltip__bubble,
+.app-tooltip:focus-within .app-tooltip__bubble {
+  opacity: 1;
+  visibility: visible;
+}

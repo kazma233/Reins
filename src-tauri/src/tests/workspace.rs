@@ -343,6 +343,167 @@ fn remove_source_links_keeps_source_directory() -> Result<()> {
     Ok(())
 }
 
+// 两个 target + 一个 local 来源的最小 workspace 配置，供链接移除用例复用。
+fn write_link_store(root: &TestDir) -> Result<WorkspaceConfigStore> {
+    let store = WorkspaceConfigStore::at(root.path());
+    let config = serde_json::json!({
+        "targets": {
+            "codex": {"skill_dir": root.path().join("target/skills").display().to_string()},
+            "other": {"skill_dir": root.path().join("other/skills").display().to_string()},
+        },
+        "skill_sources": [{
+            "id": "src",
+            "type": "local",
+            "root_path": root.path().join("source").display().to_string(),
+        }],
+    });
+    fs::write(store.config_path(), serde_yaml::to_string(&config)?)?;
+    Ok(store)
+}
+
+// 来源根目录还在、单独 skill 目录被删时，链接目标 canonicalize 会失败并退回
+// 原始路径，与规范化后的来源根目录在 /var → /private/var 这类系统软链接下失配，
+// 已被识别为待清理的链接会删不掉。
+#[test]
+fn remove_source_sync_clears_link_whose_skill_directory_is_gone() -> Result<()> {
+    let root = TestDir::new("remove-sync-missing-skill")?;
+    let source_root = root.path().join("source");
+    let target_skill_dir = root.path().join("target").join("skills");
+    write_skill(&source_root, "alpha", "alpha")?;
+    write_skill(&source_root, "beta", "beta")?;
+    fs::create_dir_all(&target_skill_dir)?;
+    create_directory_symlink(&source_root.join("alpha"), &target_skill_dir.join("alpha"))?;
+    create_directory_symlink(&source_root.join("beta"), &target_skill_dir.join("beta"))?;
+
+    let store = write_link_store(&root)?;
+    fs::remove_dir_all(source_root.join("alpha"))?;
+
+    let removed = remove_source_sync_inner(&store, "src", &["codex".to_string()])?.removed;
+
+    assert_eq!(removed.len(), 2);
+    assert!(target_skill_dir.join("alpha").symlink_metadata().is_err());
+    assert!(target_skill_dir.join("beta").symlink_metadata().is_err());
+    assert!(source_root.join("beta/SKILL.md").exists());
+
+    Ok(())
+}
+
+// 整个来源目录被删后，来源根目录也 canonicalize 不了；两侧都必须退回同一套
+// 规范化规则，否则删除同步会漏掉这些链接。
+#[test]
+fn remove_source_sync_clears_link_after_source_root_is_deleted() -> Result<()> {
+    let root = TestDir::new("remove-sync-deleted-root")?;
+    let source_root = root.path().join("source");
+    let target_skill_dir = root.path().join("target").join("skills");
+    write_skill(&source_root, "alpha", "alpha")?;
+    fs::create_dir_all(&target_skill_dir)?;
+    create_directory_symlink(&source_root.join("alpha"), &target_skill_dir.join("alpha"))?;
+
+    let store = write_link_store(&root)?;
+    fs::remove_dir_all(&source_root)?;
+
+    let removed = remove_source_sync_inner(&store, "src", &["codex".to_string()])?.removed;
+
+    assert_eq!(removed.len(), 1);
+    assert_eq!(removed[0].skill_name, "alpha");
+    assert!(target_skill_dir.join("alpha").symlink_metadata().is_err());
+
+    Ok(())
+}
+
+#[test]
+fn remove_target_skill_link_only_deletes_links_inside_target_skill_dir() -> Result<()> {
+    let root = TestDir::new("remove-single-skill-link")?;
+    let source_root = root.path().join("source");
+    let target_skill_dir = root.path().join("target").join("skills");
+    let other_skill_dir = root.path().join("other").join("skills");
+    write_skill(&source_root, "alpha", "alpha")?;
+    write_skill(&source_root, "beta", "beta")?;
+    fs::create_dir_all(&target_skill_dir)?;
+    fs::create_dir_all(&other_skill_dir)?;
+    create_directory_symlink(&source_root.join("alpha"), &target_skill_dir.join("alpha"))?;
+    create_directory_symlink(&source_root.join("beta"), &other_skill_dir.join("beta"))?;
+    fs::create_dir_all(target_skill_dir.join("real-dir"))?;
+
+    let store = write_link_store(&root)?;
+
+    let removed =
+        remove_target_skill_link_inner(&store, "codex", &display_path(&target_skill_dir.join("alpha")))?;
+    assert_eq!(removed.skill_name, "alpha");
+    assert!(target_skill_dir.join("alpha").symlink_metadata().is_err());
+    assert!(source_root.join("alpha/SKILL.md").exists());
+
+    // 真实目录不是链接，拒绝且不删除内容。
+    assert!(
+        remove_target_skill_link_inner(&store, "codex", &display_path(&target_skill_dir.join("real-dir")))
+            .is_err()
+    );
+    assert!(target_skill_dir.join("real-dir").is_dir());
+
+    // 别的 target 目录下的链接不能借用 codex 的 id 删除。
+    assert!(
+        remove_target_skill_link_inner(&store, "codex", &display_path(&other_skill_dir.join("beta")))
+            .is_err()
+    );
+    assert!(other_skill_dir.join("beta").symlink_metadata().is_ok());
+
+    assert!(
+        remove_target_skill_link_inner(&store, "missing", &display_path(&target_skill_dir.join("alpha")))
+            .is_err()
+    );
+
+    Ok(())
+}
+
+// 弹窗把扫描出来的 destination_path 原样回传给单条移除命令，所以展示用的
+// 路径字符串必须能通过后端的目录归属校验。
+#[test]
+fn remove_target_skill_link_accepts_destination_path_from_sync_options() -> Result<()> {
+    let root = TestDir::new("remove-link-round-trip")?;
+    let unmanaged_root = root.path().join("external");
+    let target_skill_dir = root.path().join("target").join("skills");
+    write_skill(&unmanaged_root, "external", "external")?;
+    fs::create_dir_all(&target_skill_dir)?;
+    create_directory_symlink(
+        &unmanaged_root.join("external"),
+        &target_skill_dir.join("external"),
+    )?;
+
+    let store = write_link_store(&root)?;
+    let options = build_sync_target_options(&store)?;
+    let option = options
+        .iter()
+        .find(|option| option.id == "codex")
+        .expect("codex option exists");
+    let link = option.links.first().expect("unmanaged link is scanned");
+
+    assert_eq!(link.state, SkillLinkState::Unmanaged);
+    let removed = remove_target_skill_link_inner(&store, &option.id, &link.destination_path)?;
+
+    assert_eq!(removed.skill_name, "external");
+    assert!(target_skill_dir.join("external").symlink_metadata().is_err());
+    assert!(unmanaged_root.join("external/SKILL.md").exists());
+
+    Ok(())
+}
+
+// 目标目录读不出来时必须上报：静默跳过会让调用方把「链接没删掉」当成功。
+#[test]
+fn remove_source_sync_reports_unreadable_target_directory() -> Result<()> {
+    let root = TestDir::new("remove-sync-unreadable-target")?;
+    write_skill(&root.path().join("source"), "alpha", "alpha")?;
+    // skill_dir 指向一个真实文件：read_dir 会失败，且不是「目录不存在」。
+    let broken_skill_dir = root.path().join("target").join("skills");
+    fs::create_dir_all(broken_skill_dir.parent().expect("parent exists"))?;
+    fs::write(&broken_skill_dir, "not a directory")?;
+
+    let store = write_link_store(&root)?;
+
+    assert!(remove_source_sync_inner(&store, "src", &["codex".to_string()]).is_err());
+
+    Ok(())
+}
+
 #[test]
 fn parse_batch_git_skill_import_sources_requires_yaml_array() {
     let result = parse_batch_git_skill_import_sources("repo: https://example.com/repo.git");

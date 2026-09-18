@@ -14,8 +14,6 @@ defineEmits<{
   edit: [source: SkillSourceConfigView];
   delete: [source: SkillSourceConfigView];
   sync: [source: SkillSourceConfigView];
-  removeSync: [source: SkillSourceConfigView];
-  refresh: [source: SkillSourceConfigView];
 }>();
 
 const isGit = computed(() => props.source.type === "git");
@@ -66,52 +64,30 @@ const lastFetchedAtLabel = computed(() => {
       </div>
     </div>
     <div class="manager-skill-source-row__actions">
-      <div class="manager-skill-source-row__actions-row">
-        <button
-          class="secondary-button manager-skill-source-row__action"
-          :disabled="loading"
-          type="button"
-          @click="$emit('edit', source)"
-        >
-          编辑
-        </button>
-        <button
-          class="danger-button manager-skill-source-row__action"
-          :disabled="loading"
-          type="button"
-          @click="$emit('delete', source)"
-        >
-          删除
-        </button>
-      </div>
-      <div class="manager-skill-source-row__actions-row">
-        <button
-          class="primary-button manager-skill-source-row__action"
-          :disabled="loading"
-          type="button"
-          @click="$emit('sync', source)"
-        >
-          同步
-        </button>
-        <button
-          class="warning-button manager-skill-source-row__action"
-          :disabled="loading"
-          type="button"
-          @click="$emit('removeSync', source)"
-        >
-          移除同步
-        </button>
-        <button
-          v-if="isGit"
-          class="secondary-button manager-skill-source-row__action"
-          :disabled="loading"
-          title="忽略 24 小时自动更新间隔"
-          type="button"
-          @click="$emit('refresh', source)"
-        >
-          强制拉取
-        </button>
-      </div>
+      <button
+        class="primary-button manager-skill-source-row__action"
+        :disabled="loading"
+        type="button"
+        @click="$emit('sync', source)"
+      >
+        同步
+      </button>
+      <button
+        class="secondary-button manager-skill-source-row__action"
+        :disabled="loading"
+        type="button"
+        @click="$emit('edit', source)"
+      >
+        编辑
+      </button>
+      <button
+        class="danger-button manager-skill-source-row__action"
+        :disabled="loading"
+        type="button"
+        @click="$emit('delete', source)"
+      >
+        删除
+      </button>
     </div>
   </div>
 </template>

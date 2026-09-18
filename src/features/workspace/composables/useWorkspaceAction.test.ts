@@ -108,6 +108,24 @@ describe("runWorkspaceAction success path", () => {
 
     expect(notice.value).toMatchObject({ message: "已删除。", tone: "success" });
   });
+
+  it("skips the workspace reload but still toasts and runs after when asked to", async () => {
+    const { store, notice, runWorkspaceAction } = setup();
+    const after = vi.fn();
+
+    await runWorkspaceAction({
+      action: async () => "payload",
+      success: (result) => ({ message: `done ${result}` }),
+      error: "fallback",
+      skipReload: true,
+      after,
+    });
+
+    expect(mockedGetWorkspaceState).not.toHaveBeenCalled();
+    expect(after).toHaveBeenCalledWith("payload");
+    expect(notice.value).toMatchObject({ message: "done payload", tone: "success" });
+    expect(store.runningAction).toBe(false);
+  });
 });
 
 describe("runWorkspaceAction failure path", () => {

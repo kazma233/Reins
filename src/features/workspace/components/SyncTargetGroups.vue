@@ -2,6 +2,7 @@
 import { computed } from "vue";
 import type { SkillLinkAssociation, SyncTargetOption } from "../types";
 import {
+  canRemoveSkillLink,
   pendingSkillLinkCleanupCount,
   hasCurrentSourceSkillLinks,
   hasUnmanagedSkillLinks,
@@ -30,6 +31,7 @@ const props = defineProps<SyncTargetGroupsProps>();
 defineEmits<{
   setTargets: [targetIds: string[], selected: boolean];
   toggleTarget: [id: string];
+  removeLink: [targetId: string, destinationPath: string];
 }>();
 
 function getSelectableTargetIds(targets: SyncTargetOption[]): string[] {
@@ -161,6 +163,20 @@ const groups = computed<SyncTargetGroup[]>(() => {
               <span :class="`manager-sync-target-link__state manager-sync-target-link__state--${skillLinkStateInfo(link.state).tone}`">
                 {{ skillLinkStateInfo(link.state).label }}
               </span>
+              <button
+                v-if="canRemoveSkillLink(link)"
+                :aria-label="`移除 ${link.skillName} 的软链接`"
+                :disabled="busy"
+                class="manager-sync-target-link__remove"
+                type="button"
+                @click="$emit('removeLink', target.id, link.destinationPath)"
+              >
+                <svg aria-hidden="true" focusable="false" viewBox="0 0 24 24">
+                  <path
+                    d="M6.7 5.3 12 10.6l5.3-5.3 1.4 1.4-5.3 5.3 5.3 5.3-1.4 1.4-5.3-5.3-5.3 5.3-1.4-1.4 5.3-5.3-5.3-5.3z"
+                  />
+                </svg>
+              </button>
             </div>
           </div>
         </details>
