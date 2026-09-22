@@ -1,200 +1,51 @@
-import { computed, ref, watch, type Ref } from "vue";
-import { deleteSession, importSession, previewImport } from "../api";
-import { canDeleteSession, defaultImportTarget } from "../model";
-import type {
-  ImportPreview,
-  ImportResult,
-  SessionOverview,
-  SourceApp
-} from "../types";
+import { ref, watch, type Ref } from "vue";
+import { deleteSession } from "../api";
+import { canDeleteSession } from "../model";
+import type { SessionOverview } from "../types";
 import { extractErrorMessage } from "@shared/lib/errors";
 import { createKeyGuard } from "@shared/lib/request-guard";
 
 export type SessionDetailActionsState = {
-  targetApp: Ref<SourceApp>;
-  preview: Ref<ImportPreview | null>;
-  previewTargetApp: Ref<SourceApp | null>;
-  importResult: Ref<ImportResult | null>;
-  previewError: Ref<string | null>;
-  importError: Ref<string | null>;
   deleteError: Ref<string | null>;
-  previewLoading: Ref<boolean>;
-  importLoading: Ref<boolean>;
   deleteLoading: Ref<boolean>;
   deleteDialogOpen: Ref<boolean>;
-  importDialogOpen: Ref<boolean>;
-  previewReady: Ref<boolean>;
 };
 
 export type SessionDetailActions = SessionDetailActionsState & {
-  openImportDialog: () => void;
-  closeImportDialog: () => void;
-  closeImportResultDialog: () => void;
-  handleImport: () => Promise<void>;
   openDeleteDialog: () => void;
   closeDeleteDialog: () => void;
   handleDelete: () => Promise<void>;
 };
 
-// Import/delete flows for the session detail panel. All dialog state and the
-// async actions live here; the panel only renders dialogs and header buttons.
-// Guard key combines the detail key and the target app: a response is only
-// applied when both are unchanged since the request was issued.
+// Delete flow for the session detail panel. All dialog state and the async
+// action live here; the panel only renders the dialog and header button.
+// The guard key is the detail key: a response is only applied when the
+// displayed session is unchanged since the request was issued.
 export function useSessionDetailActions(
   overview: Ref<SessionOverview | null>,
   detailKey: Ref<string | null>,
   onDeleted: () => void
 ): SessionDetailActions {
-  const targetApp = ref<SourceApp>("claude_code");
-  const preview = ref<ImportPreview | null>(null);
-  const previewTargetApp = ref<SourceApp | null>(null);
-  const importResult = ref<ImportResult | null>(null);
-  const previewError = ref<string | null>(null);
-  const importError = ref<string | null>(null);
   const deleteError = ref<string | null>(null);
-  const previewLoading = ref(false);
-  const importLoading = ref(false);
   const deleteLoading = ref(false);
   const deleteDialogOpen = ref(false);
-  const importDialogOpen = ref(false);
 
-  const requestGuard = createKeyGuard(
-    () => `${detailKey.value ?? ""}::${targetApp.value}`
-  );
-
-  const previewReady = computed(() => previewTargetApp.value === targetApp.value);
+  const requestGuard = createKeyGuard(() => detailKey.value ?? "");
 
   function resetState() {
-    preview.value = null;
-    previewTargetApp.value = null;
-    importResult.value = null;
-    previewError.value = null;
-    importError.value = null;
     deleteError.value = null;
-    previewLoading.value = false;
-    importLoading.value = false;
     deleteLoading.value = false;
     deleteDialogOpen.value = false;
-    importDialogOpen.value = false;
   }
 
-  // Reset dialog/import/delete state when the displayed overview changes.
-  watch(overview, (nextOverview) => {
-    if (nextOverview) {
-      targetApp.value = defaultImportTarget(nextOverview.summary.sourceApp);
-    }
+  // Reset dialog/delete state when the displayed overview changes.
+  watch(overview, () => {
     resetState();
   });
 
-  async function loadImportPreview() {
-    const detail = overview.value;
-    if (!detail || !detailKey.value) {
-      return;
-    }
-
-    const requestKey = requestGuard.capture();
-    previewLoading.value = true;
-    previewTargetApp.value = null;
-    previewError.value = null;
-    importError.value = null;
-
-    try {
-      const nextPreview = await previewImport(
-        detail.summary.sourceApp,
-        detail.summary.sourceSessionId,
-        targetApp.value,
-        detail.summary.transcriptPath
-      );
-
-      if (!requestGuard.isCurrent(requestKey)) {
-        return;
-      }
-
-      preview.value = nextPreview;
-      previewTargetApp.value = targetApp.value;
-    } catch (error) {
-      if (requestGuard.isCurrent(requestKey)) {
-        previewError.value = extractErrorMessage(error, "导入预览失败。");
-      }
-    } finally {
-      if (requestGuard.isCurrent(requestKey)) {
-        previewLoading.value = false;
-      }
-    }
-  }
-
-  // Reload the preview whenever the dialog opens or the target app changes.
-  watch([importDialogOpen, targetApp], ([isImportDialogOpen]) => {
-    previewError.value = null;
-    importError.value = null;
-
-    if (isImportDialogOpen) {
-      void loadImportPreview();
-    }
-  });
-
-  function openImportDialog() {
-    const detail = overview.value;
-    if (!detail || importLoading.value || deleteLoading.value) {
-      return;
-    }
-    importDialogOpen.value = true;
-  }
-
-  function closeImportDialog() {
-    if (importLoading.value) {
-      return;
-    }
-    importDialogOpen.value = false;
-  }
-
-  function closeImportResultDialog() {
-    importResult.value = null;
-  }
-
-  async function handleImport() {
-    const detail = overview.value;
-    if (!detail || !detailKey.value) {
-      return;
-    }
-
-    const requestKey = requestGuard.capture();
-    importLoading.value = true;
-    importError.value = null;
-
-    try {
-      const nextImportResult = await importSession(
-        detail.summary.sourceApp,
-        detail.summary.sourceSessionId,
-        targetApp.value,
-        detail.summary.transcriptPath
-      );
-
-      if (!requestGuard.isCurrent(requestKey)) {
-        return;
-      }
-
-      importDialogOpen.value = false;
-      importResult.value = nextImportResult;
-    } catch (error) {
-      if (requestGuard.isCurrent(requestKey)) {
-        importError.value = extractErrorMessage(error, "导入会话失败。");
-      }
-    } finally {
-      if (requestGuard.isCurrent(requestKey)) {
-        importLoading.value = false;
-      }
-    }
-  }
-
   function openDeleteDialog() {
     const detail = overview.value;
-    if (
-      !detail ||
-      !canDeleteSession(detail.summary.sourceApp) ||
-      deleteLoading.value ||
-      importLoading.value
-    ) {
+    if (!detail || !canDeleteSession(detail.summary.sourceApp) || deleteLoading.value) {
       return;
     }
     deleteError.value = null;
@@ -214,8 +65,7 @@ export function useSessionDetailActions(
       !detail ||
       !detailKey.value ||
       !canDeleteSession(detail.summary.sourceApp) ||
-      deleteLoading.value ||
-      importLoading.value
+      deleteLoading.value
     ) {
       return;
     }
@@ -249,23 +99,9 @@ export function useSessionDetailActions(
   }
 
   return {
-    targetApp,
-    preview,
-    previewTargetApp,
-    importResult,
-    previewError,
-    importError,
     deleteError,
-    previewLoading,
-    importLoading,
     deleteLoading,
     deleteDialogOpen,
-    importDialogOpen,
-    previewReady,
-    openImportDialog,
-    closeImportDialog,
-    closeImportResultDialog,
-    handleImport,
     openDeleteDialog,
     closeDeleteDialog,
     handleDelete

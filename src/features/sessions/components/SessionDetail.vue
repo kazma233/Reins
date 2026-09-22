@@ -27,7 +27,7 @@ import { formatSourceAppName } from "../source-app";
 import SessionDetailDialogs from "./SessionDetailDialogs.vue";
 import MessageTimeline from "./MessageTimeline.vue";
 import EventTimeline from "./EventTimeline.vue";
-import type { SessionAgent, SessionOverview, SourceApp } from "../types";
+import type { SessionAgent, SessionOverview } from "../types";
 import SubagentGroupDialog from "./SubagentGroupDialog.vue";
 import "./session-detail.css";
 
@@ -74,25 +74,12 @@ const {
   nextMessageOffset
 } = useSessionTimeline(overviewRef);
 
-// --- import / delete flows ---
+// --- delete flow ---
 
 const {
-  targetApp,
-  preview,
-  importResult,
-  previewError,
-  importError,
   deleteError,
-  previewLoading,
-  importLoading,
   deleteLoading,
   deleteDialogOpen,
-  importDialogOpen,
-  previewReady,
-  openImportDialog,
-  closeImportDialog,
-  closeImportResultDialog,
-  handleImport,
   openDeleteDialog,
   closeDeleteDialog,
   handleDelete
@@ -416,27 +403,15 @@ watch(
         </div>
         <div class="detail-header-actions">
           <button
-            class="primary-button"
-            :disabled="importLoading || deleteLoading"
-            type="button"
-            @click="openImportDialog"
-          >
-            导入预览
-          </button>
-          <button
             v-if="canDeleteSession(overview.summary.sourceApp)"
             class="danger-button"
-            :disabled="deleteLoading || importLoading"
+            :disabled="deleteLoading"
             type="button"
             @click="openDeleteDialog"
           >
             {{ deleteLoading ? "删除中..." : "删除会话" }}
           </button>
         </div>
-      </div>
-      <div v-if="importError" class="error-box">
-        <strong>导入失败</strong>
-        <pre class="error-text">{{ importError }}</pre>
       </div>
       <div v-if="deleteError" class="error-box">
         <strong>删除失败</strong>
@@ -546,20 +521,8 @@ watch(
       :overview="overview"
       :delete-dialog-open="deleteDialogOpen"
       :delete-loading="deleteLoading"
-      :import-dialog-open="importDialogOpen"
-      :import-loading="importLoading"
-      :import-result="importResult"
-      :preview="preview"
-      :preview-error="previewError"
-      :preview-loading="previewLoading"
-      :preview-ready="previewReady"
-      :target-app="targetApp"
       @close-delete-dialog="closeDeleteDialog"
-      @close-import-dialog="closeImportDialog"
-      @close-import-result-dialog="closeImportResultDialog"
       @confirm-delete="handleDelete"
-      @confirm-import="handleImport"
-      @target-app-change="(app: SourceApp) => (targetApp = app)"
     />
 
     <div v-if="loading" class="panel-loading-overlay">

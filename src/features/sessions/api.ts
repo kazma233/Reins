@@ -2,8 +2,6 @@ import { invoke } from "@tauri-apps/api/core";
 import type { SourceSelection } from "./source-app";
 import type {
   DeleteSessionResult,
-  ImportResult,
-  ImportPreview,
   SessionMessage,
   SessionPage,
   SessionEventPage,
@@ -111,34 +109,6 @@ export function getSessionEvents(
     transcriptPath: input.transcriptPath,
     offset: input.offset,
     limit: input.limit
-  });
-}
-
-export function previewImport(
-  sourceApp: SourceApp,
-  sourceSessionId: string,
-  targetApp: SourceApp,
-  transcriptPath?: string
-): Promise<ImportPreview> {
-  return invoke("preview_import", {
-    sourceApp,
-    sourceSessionId,
-    targetApp,
-    transcriptPath
-  });
-}
-
-export function importSession(
-  sourceApp: SourceApp,
-  sourceSessionId: string,
-  targetApp: SourceApp,
-  transcriptPath?: string
-): Promise<ImportResult> {
-  return invoke("import_session", {
-    sourceApp,
-    sourceSessionId,
-    targetApp,
-    transcriptPath
   });
 }
 

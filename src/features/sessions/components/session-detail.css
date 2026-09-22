@@ -17,16 +17,11 @@
 }
 
 .detail-header,
-.section-row,
-.import-row {
+.section-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-}
-
-.import-row {
-  flex-wrap: wrap;
 }
 
 .detail-header-actions {
@@ -37,56 +32,6 @@
   flex-wrap: wrap;
   justify-content: flex-end;
   gap: 8px;
-}
-
-.import-dialog-target-row {
-  justify-content: stretch;
-}
-
-.import-dialog-target-field {
-  display: flex;
-  flex: 1 1 auto;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.import-dialog-target-buttons {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
-}
-
-.import-target-button {
-  display: inline-flex;
-  flex: 1 1 180px;
-  align-items: center;
-  justify-content: center;
-  min-height: var(--button-height);
-  padding: 6px 12px;
-  border: 1px solid var(--color-hairline);
-  border-radius: var(--radius-button);
-  background: var(--color-surface-soft);
-  color: var(--color-body);
-  cursor: pointer;
-  transition: background 0.15s, border-color 0.15s, color 0.15s, box-shadow 0.15s;
-  text-align: center;
-}
-
-.import-target-button:hover {
-  background: var(--color-surface-strong);
-  color: var(--color-ink);
-}
-
-.import-target-button.active {
-  border-color: var(--color-primary);
-  background: var(--color-primary);
-  color: var(--color-on-primary);
-  box-shadow: none;
-}
-
-.import-target-button:focus-visible {
-  outline: 2px solid rgba(0, 82, 255, 0.22);
-  outline-offset: 1px;
 }
 
 .detail-header h2,
@@ -169,57 +114,6 @@
   flex: 1 1 100%;
 }
 
-.preview-box {
-  min-height: 150px;
-  border: 1px solid var(--color-hairline-soft);
-  border-radius: var(--radius-md);
-  background: var(--color-surface-soft);
-  padding: 14px;
-}
-
-.preview-box ul {
-  margin: 10px 0 0;
-  padding-left: 18px;
-}
-
-.import-preview-region {
-  position: relative;
-  min-height: 150px;
-}
-
-.import-preview-region.is-refreshing .preview-box {
-  opacity: 0.72;
-}
-
-.import-preview-loading {
-  display: grid;
-  min-height: 150px;
-  place-items: center;
-  padding: 14px;
-  border: 1px solid var(--color-hairline-soft);
-  border-radius: var(--radius-md);
-  background: var(--color-surface-soft);
-  color: var(--color-muted);
-  text-align: center;
-}
-
-.import-preview-overlay {
-  position: absolute;
-  inset: 0;
-  display: grid;
-  place-items: center;
-  padding: 14px;
-  border-radius: var(--radius-md);
-  background: rgba(255, 255, 255, 0.72);
-  color: var(--color-ink);
-  pointer-events: none;
-  text-align: center;
-}
-
-.import-preview-status-box.error-box {
-  margin-top: 0;
-}
-
 .path-list {
   display: flex;
   flex-direction: column;
@@ -238,25 +132,6 @@
   border-radius: 12px;
   background: rgba(241, 245, 249, 0.95);
   word-break: break-all;
-}
-
-.import-method-box {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  margin-top: 14px;
-  padding: 12px 14px;
-  border-radius: var(--radius-md);
-  border: 1px solid var(--color-hairline-soft);
-  background: var(--color-surface-soft);
-}
-
-.import-method-box .pill {
-  width: fit-content;
-}
-
-.import-method-box p {
-  margin: 0;
 }
 
 .pill {
@@ -292,11 +167,6 @@
 
 .error-box strong {
   color: var(--color-danger);
-}
-
-.success-box {
-  border-color: rgba(5, 177, 105, 0.22);
-  background: rgba(240, 253, 244, 0.92);
 }
 
 .danger-pill {
@@ -547,24 +417,6 @@
   color: var(--color-primary);
 }
 
-
-/* Neutral summary (title + session id) for dialogs without danger context,
-   e.g. the import preview dialog. The delete dialog keeps .delete-dialog-summary. */
-.dialog-summary {
-  display: flex;
-  min-width: 0;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.dialog-summary code {
-  width: fit-content;
-  max-width: 100%;
-  color: var(--color-body);
-  font-family: var(--font-mono);
-  font-size: 12px;
-  word-break: break-all;
-}
 
 .delete-dialog-summary {
   display: flex;
