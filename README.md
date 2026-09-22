@@ -2,7 +2,7 @@
 
 本地桌面工具，提供两组能力：
 
-- 浏览 Codex、Claude Code、OpenCode、Pi 的历史会话，并在不同工具之间导入
+- 浏览 Codex、Claude Code、OpenCode、Pi 的历史会话
 - 通过全局配置文件 `config.yaml`，把 Skills 和 MCP 配置分发到多个 agent target
 
 ## 功能概览
@@ -13,7 +13,6 @@
 - 按来源浏览会话列表、消息、事件和工具调用
 - 支持搜索和排序
 - 会话列表滚动到底部自动加载更多
-- 支持跨工具导入历史会话
 - OpenCode 会话自动聚合子会话
 - 可单独查看 Pi subagent 每次运行的任务、用量、失败原因与完整过程
 - 消息页完整展示消息流，工具调用合并为可展开查看的摘要
@@ -60,15 +59,6 @@ skills tab 直接列出全部已配置来源。顶部 `新增来源` 用于导�
 - **如果被应用的技能不再匹配 include name/path patterns**：编辑 source 后不会自动撤回；用户对该 target 再次同步时，旧链接会被移除，并按本次勾选的 skills 重建。
 
 软链天然跟随其指向的源头目录：源头被同步/导入流程重建时，软链下的 skill 自然可见；删 source 时，属于该 source 的软链会被一并删除。
-
-## 导入说明
-
-- 同程序导入选项在界面中隐藏
-- 导入只会创建新会话，不会覆盖原始数据
-- 导入到 Codex 时写出 transcript JSONL
-- 导入到 Claude Code 时写入项目目录 JSONL
-- 导入到 OpenCode 时通过官方 CLI 完成
-- 导入到 Pi 时按 cwd 编码目录写入 Pi v3 session JSONL
 
 ## 开发与构建
 

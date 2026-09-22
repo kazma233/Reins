@@ -14,9 +14,6 @@
 | `src/features/sessions/api.ts` | `src-tauri/src/session/commands.rs` | `get_session_overview` | 返回 `SessionOverview` |
 | `src/features/sessions/api.ts` | `src-tauri/src/session/commands.rs` | `get_session_messages` | 返回 `SessionMessagePage` |
 | `src/features/sessions/api.ts` | `src-tauri/src/session/commands.rs` | `get_session_events` | 返回 `SessionEventPage` |
-| `src/features/sessions/api.ts` | `src-tauri/src/session/commands.rs` | `get_session` | 返回 `SessionDetail` |
-| `src/features/sessions/api.ts` | `src-tauri/src/session/commands.rs` | `preview_import` | 返回 `ImportPreview` |
-| `src/features/sessions/api.ts` | `src-tauri/src/session/commands.rs` | `import_session` | 返回 `ImportResult` |
 | `src/features/sessions/api.ts` | `src-tauri/src/session/commands.rs` | `delete_session` | 返回 `DeleteSessionResult` |
 
 ### Session 关键 DTO
@@ -26,13 +23,10 @@
 | `SourceApp` | `SourceApp` | `src-tauri/src/session/model.rs` |
 | `SourceStatus` | `SourceStatus` | `src-tauri/src/session/model.rs` |
 | `SessionOverview` | `SessionOverview` | `src-tauri/src/session/model.rs` |
-| `SessionDetail` | `SessionDetail` | `src-tauri/src/session/model.rs` |
 | `SessionMessagePage` | `SessionMessagePage` | `src-tauri/src/session/model.rs` |
 | `SessionEventPage` | `SessionEventPage` | `src-tauri/src/session/model.rs` |
 | `SessionPage` | `SessionPage` | `src-tauri/src/session/model.rs` |
 | `SessionRefreshResult` | `SessionRefreshResult` | `src-tauri/src/session/model.rs` |
-| `ImportPreview` | `ImportPreview` | `src-tauri/src/session/model.rs` |
-| `ImportResult` | `ImportResult` | `src-tauri/src/session/model.rs` |
 | `DeleteSessionResult` | `DeleteSessionResult` | `src-tauri/src/session/model.rs` |
 
 ## Workspace

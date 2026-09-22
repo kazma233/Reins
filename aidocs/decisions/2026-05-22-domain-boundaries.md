@@ -14,7 +14,7 @@
 
 ### `sessions`
 
-1. 负责 sources 探测、会话列表、overview、timeline、导入、删除。
+1. 负责 sources 探测、会话列表、overview、timeline、删除。
 2. 只依赖 `shared/*` 和 `app/*` 的稳定入口。
 3. 不依赖 `features/workspace/*`。
 
@@ -33,7 +33,7 @@
 
 ### `session`
 
-1. 负责 Codex / Claude Code / OpenCode 的会话发现、解析、overview、timeline、导入、删除。
+1. 负责 Codex / Claude Code / OpenCode 的会话发现、解析、overview、timeline、删除。
 2. `model.rs` 只定义 session DTO 和内部 timeline/cache 数据。
 3. `commands.rs` 只负责 Tauri command 入参与调度。
 

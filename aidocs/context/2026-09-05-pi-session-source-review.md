@@ -3,6 +3,7 @@
 - 日期：2026-09-05
 - 范围：未提交的 Pi 来源接入改动（`session/pi.rs`、`tests/pi.rs`、跨来源导入/删除/前端接线）
 - 状态：P1/P2 五项已于同日修复（见各条目 commit）;`cargo test --lib` 150 通过 / 3 忽略（另有存量失败 `session_cache::persistence_survives_process_restart`,与本批无关,stash 验证过基线同样失败）、`cargo clippy` 对 pi.rs/mod.rs 无警告、`cargo fmt --check`、`pnpm test`、`pnpm build`(含 vue-tsc)通过;用本机 Pi 0.85.0 `SessionManager.list/open + buildSessionContext` 做过导出 round-trip 验证(自定义目录可见、上下文链完整、isError 保留、旧嵌套布局官方不可见)。
+- 后续变更（2026-09-22）：跨来源导入/转出及其恢复命令已整体移除；读取侧结论（自定义 sessionDir、v1/v2 布局、retainedTail、isError 等）仍然有效，导入相关条目仅作历史记录。
 
 ## 结论
 
