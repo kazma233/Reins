@@ -237,7 +237,7 @@ fn deleting_pi_session_removes_only_the_selected_file() -> Result<()> {
 // the Unix ':' separator, so the real CLI would run on Windows instead.
 #[cfg(unix)]
 #[test]
-fn deleting_opencode_family_uses_cli_and_cleans_diff_files() -> Result<()> {
+fn deleting_opencode_family_uses_cli() -> Result<()> {
     let temp_home = env::temp_dir().join(format!("reins-test-{}", Uuid::new_v4()));
     fs::create_dir_all(&temp_home)?;
     let _guard = TestEnvGuard::set_home(&temp_home);
@@ -269,21 +269,7 @@ fn deleting_opencode_family_uses_cli_and_cleans_diff_files() -> Result<()> {
     let original_path = env::var("PATH").unwrap_or_default();
     unsafe { env::set_var("PATH", format!("{}:{}", bin_dir.display(), original_path)) };
 
-    let root_diff = temp_home
-        .join(".local/share/opencode/storage/session_diff")
-        .join(format!("{root_id}.json"));
-    let child_diff = temp_home
-        .join(".local/share/opencode/storage/session_diff")
-        .join(format!("{child_id}.json"));
-    if let Some(parent) = root_diff.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    fs::write(&root_diff, "{}")?;
-    fs::write(&child_diff, "{}")?;
-
-    let root_path = temp_home
-        .join(".local/share/opencode/session")
-        .join(format!("{root_id}.opencode"));
+    let root_path = session::opencode::session_path(root_id);
 
     let result = session::delete::delete_session_inner(
         &state::session_index::SessionIndexState::default(),
@@ -303,8 +289,6 @@ fn deleting_opencode_family_uses_cli_and_cleans_diff_files() -> Result<()> {
     );
     assert!(deleted_ids.contains(root_id));
     assert!(deleted_ids.contains(child_id));
-    assert!(!root_diff.exists());
-    assert!(!child_diff.exists());
 
     unsafe { env::set_var("PATH", original_path) };
     fs::remove_dir_all(&temp_home).ok();

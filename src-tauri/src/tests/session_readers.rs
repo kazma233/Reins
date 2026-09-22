@@ -10,9 +10,7 @@ fn opencode_root_session_aggregates_subagent_sessions() -> Result<()> {
     let child_id = "ses_child_session";
     seed_opencode_family(root_id, child_id)?;
 
-    let root_path = temp_home
-        .join(".local/share/opencode/session")
-        .join(format!("{root_id}.opencode"));
+    let root_path = session::opencode::session_path(root_id);
 
     let summary = session::reader(SourceApp::OpenCode).parse_summary(&root_path)?;
     assert_eq!(summary.source_session_id, root_id);
@@ -45,7 +43,7 @@ fn opencode_root_session_aggregates_subagent_sessions() -> Result<()> {
         detail
             .source_paths
             .iter()
-            .any(|path| path.ends_with(&format!("{child_id}.opencode")))
+            .any(|path| path.ends_with(&format!(":{child_id}")))
     );
 
     fs::remove_dir_all(&temp_home).ok();
@@ -62,9 +60,7 @@ fn opencode_overview_counts_match_loaded_timeline() -> Result<()> {
     let child_id = "ses_child_session";
     seed_opencode_family(root_id, child_id)?;
 
-    let root_path = temp_home
-        .join(".local/share/opencode/session")
-        .join(format!("{root_id}.opencode"));
+    let root_path = session::opencode::session_path(root_id);
     let reader = session::reader(SourceApp::OpenCode);
     let overview = reader.parse_overview(&root_path)?;
     let detail = reader.parse_detail(&root_path)?;
@@ -402,38 +398,22 @@ fn opencode_exposes_messages_without_visible_parts() -> Result<()> {
     let connection = Connection::open(&db_path)?;
     connection.execute_batch(
         "
-        CREATE TABLE session (
+        CREATE TABLE session_v2 (
             id TEXT PRIMARY KEY,
             project_id TEXT NOT NULL,
             parent_id TEXT,
             slug TEXT NOT NULL,
             directory TEXT NOT NULL,
-            title TEXT NOT NULL,
+            title TEXT,
             version TEXT NOT NULL,
-            share_url TEXT,
-            summary_additions INTEGER,
-            summary_deletions INTEGER,
-            summary_files INTEGER,
-            summary_diffs TEXT,
-            revert TEXT,
-            permission TEXT,
             time_created INTEGER NOT NULL,
-            time_updated INTEGER NOT NULL,
-            time_compacting INTEGER,
-            time_archived INTEGER,
-            workspace_id TEXT
+            time_updated INTEGER NOT NULL
         );
-        CREATE TABLE message (
+        CREATE TABLE session_message (
             id TEXT PRIMARY KEY,
             session_id TEXT NOT NULL,
-            time_created INTEGER NOT NULL,
-            time_updated INTEGER NOT NULL,
-            data TEXT NOT NULL
-        );
-        CREATE TABLE part (
-            id TEXT PRIMARY KEY,
-            message_id TEXT NOT NULL,
-            session_id TEXT NOT NULL,
+            type TEXT NOT NULL,
+            seq INTEGER NOT NULL,
             time_created INTEGER NOT NULL,
             time_updated INTEGER NOT NULL,
             data TEXT NOT NULL
@@ -443,7 +423,7 @@ fn opencode_exposes_messages_without_visible_parts() -> Result<()> {
 
     let session_id = "ses_empty_parts";
     connection.execute(
-        "INSERT INTO session (id, project_id, slug, directory, title, version, time_created, time_updated) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+        "INSERT INTO session_v2 (id, project_id, slug, directory, title, version, time_created, time_updated) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
         params![
             session_id,
             "project-1",
@@ -455,25 +435,25 @@ fn opencode_exposes_messages_without_visible_parts() -> Result<()> {
             1_744_366_400_000_i64
         ],
     )?;
+    // assistant 行的 data 没有 content 数组：不产生可见块，应回退为
+    // empty_message 诊断块并携带原始 data 作为 payload
     connection.execute(
-        "INSERT INTO message (id, session_id, time_created, time_updated, data) VALUES (?1, ?2, ?3, ?4, ?5)",
+        "INSERT INTO session_message (id, session_id, type, seq, time_created, time_updated, data) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
         params![
             "msg-empty",
             session_id,
+            "assistant",
+            1,
             1_744_366_400_000_i64,
             1_744_366_400_000_i64,
             serde_json::to_string(&json!({
-                "role": "assistant",
-                "time": { "created": 1_744_366_400_000_i64 }
+                "time": { "created": 1_744_366_400_000_i64 },
+                "agent": "build"
             }))?
         ],
     )?;
 
-    let opencode_session_dir = session::opencode::root()?.join("session");
-    fs::create_dir_all(&opencode_session_dir)?;
-    let root_path = opencode_session_dir.join(format!("{session_id}.opencode"));
-    File::create(&root_path)?;
-
+    let root_path = session::opencode::session_path(session_id);
     let detail = session::reader(SourceApp::OpenCode).parse_detail(&root_path)?;
 
     assert!(detail.messages.iter().any(|message| {
@@ -482,9 +462,184 @@ fn opencode_exposes_messages_without_visible_parts() -> Result<()> {
                 && block
                     .text
                     .as_deref()
-                    .is_some_and(|text| text.contains("\"role\": \"assistant\""))
+                    .is_some_and(|text| text.contains("\"agent\": \"build\""))
         })
     }));
+
+    fs::remove_dir_all(&temp_home).ok();
+    Ok(())
+}
+
+#[test]
+fn opencode_v2_parses_tool_content_and_non_message_events() -> Result<()> {
+    let temp_home = env::temp_dir().join(format!("reins-test-{}", Uuid::new_v4()));
+    fs::create_dir_all(&temp_home)?;
+    let _guard = TestEnvGuard::set_home(&temp_home);
+
+    let db_path = session::opencode::db_path()?;
+    if let Some(parent) = db_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+
+    let connection = Connection::open(&db_path)?;
+    connection.execute_batch(
+        "
+        CREATE TABLE session_v2 (
+            id TEXT PRIMARY KEY,
+            project_id TEXT NOT NULL,
+            parent_id TEXT,
+            slug TEXT NOT NULL,
+            directory TEXT NOT NULL,
+            title TEXT,
+            version TEXT NOT NULL,
+            time_created INTEGER NOT NULL,
+            time_updated INTEGER NOT NULL
+        );
+        CREATE TABLE session_message (
+            id TEXT PRIMARY KEY,
+            session_id TEXT NOT NULL,
+            type TEXT NOT NULL,
+            seq INTEGER NOT NULL,
+            time_created INTEGER NOT NULL,
+            time_updated INTEGER NOT NULL,
+            data TEXT NOT NULL
+        );
+        ",
+    )?;
+
+    let session_id = "ses_v2_content";
+    connection.execute(
+        "INSERT INTO session_v2 (id, project_id, slug, directory, title, version, time_created, time_updated) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+        params![
+            session_id,
+            "project-1",
+            session_id,
+            "/tmp/root",
+            "V2 content",
+            "1",
+            1_744_366_400_000_i64,
+            1_744_366_400_000_i64
+        ],
+    )?;
+
+    // v2 assistant 消息：工具输入在 state.input、输出在 state.content 块数组
+    let message_time = 1_744_366_400_000_i64;
+    connection.execute(
+        "INSERT INTO session_message (id, session_id, type, seq, time_created, time_updated, data) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        params![
+            "msg-assistant",
+            session_id,
+            "assistant",
+            1,
+            message_time,
+            message_time,
+            serde_json::to_string(&json!({
+                "time": { "created": message_time },
+                "agent": "build",
+                "content": [
+                    { "type": "reasoning", "text": "thinking out loud" },
+                    {
+                        "type": "tool",
+                        "id": "call_v2_1",
+                        "name": "grep",
+                        "state": {
+                            "status": "completed",
+                            "input": { "pattern": "session_v2" },
+                            "content": [
+                                { "type": "text", "text": "match line 1" },
+                                { "type": "text", "text": "match line 2" }
+                            ],
+                            "metadata": {}
+                        }
+                    },
+                    { "type": "text", "text": "done" }
+                ]
+            }))?
+        ],
+    )?;
+
+    // 非 user/assistant 行归入事件，kind 用 type 列
+    let idle_time = 1_744_366_401_000_i64;
+    connection.execute(
+        "INSERT INTO session_message (id, session_id, type, seq, time_created, time_updated, data) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        params![
+            "msg-idle",
+            session_id,
+            "idle",
+            2,
+            idle_time,
+            idle_time,
+            serde_json::to_string(&json!({
+                "time": { "created": idle_time },
+                "outcome": "succeeded"
+            }))?
+        ],
+    )?;
+    let compaction_time = 1_744_366_402_000_i64;
+    connection.execute(
+        "INSERT INTO session_message (id, session_id, type, seq, time_created, time_updated, data) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        params![
+            "msg-compaction",
+            session_id,
+            "compaction",
+            3,
+            compaction_time,
+            compaction_time,
+            serde_json::to_string(&json!({
+                "status": "completed",
+                "reason": "auto",
+                "summary": "## 总结：v2 读取改造"
+            }))?
+        ],
+    )?;
+
+    let root_path = session::opencode::session_path(session_id);
+    let detail = session::reader(SourceApp::OpenCode).parse_detail(&root_path)?;
+
+    // 消息时间线只有 user/assistant 行
+    assert_eq!(detail.messages.len(), 1);
+    let blocks = &detail.messages[0].blocks;
+    assert_eq!(blocks[0].kind, "thinking");
+    assert_eq!(blocks[0].text.as_deref(), Some("thinking out loud"));
+
+    let call = &blocks[1];
+    assert_eq!(call.kind, "function_call");
+    assert_eq!(call.tool_name.as_deref(), Some("grep"));
+    assert_eq!(call.tool_call_id.as_deref(), Some("call_v2_1"));
+    assert!(
+        call.text
+            .as_deref()
+            .is_some_and(|text| text.contains("session_v2"))
+    );
+
+    let output = &blocks[2];
+    assert_eq!(output.kind, "function_call_output");
+    assert_eq!(output.tool_call_id.as_deref(), Some("call_v2_1"));
+    assert_eq!(output.text.as_deref(), Some("match line 1\nmatch line 2"));
+
+    assert_eq!(blocks[3].kind, "text");
+    assert_eq!(blocks[3].text.as_deref(), Some("done"));
+
+    // idle/compaction 进事件面板，摘要带最有信息量的字段
+    assert_eq!(detail.events.len(), 2);
+    let idle = detail
+        .events
+        .iter()
+        .find(|event| event.kind == "idle")
+        .expect("idle event");
+    assert_eq!(idle.summary, "idle: succeeded");
+    let compaction = detail
+        .events
+        .iter()
+        .find(|event| event.kind == "compaction")
+        .expect("compaction event");
+    assert!(
+        compaction
+            .summary
+            .contains("v2 读取改造"),
+        "unexpected compaction summary: {}",
+        compaction.summary
+    );
 
     fs::remove_dir_all(&temp_home).ok();
     Ok(())

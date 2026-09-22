@@ -47,9 +47,7 @@ fn cross_import_roundtrip_works_in_temp_home() -> Result<()> {
 
     seed_opencode_session(&sample_detail(SourceApp::OpenCode), codex_source_id)?;
 
-    let opencode_transcript_path = temp_home
-        .join(".local/share/opencode/session")
-        .join(format!("{codex_source_id}.opencode"));
+    let opencode_transcript_path = session::opencode::session_path(codex_source_id);
 
     assert!(!imported_codex.messages.is_empty());
     assert_eq!(imported_codex.summary.source_app, SourceApp::Codex);
@@ -370,13 +368,20 @@ fn imports_codex_transcript_into_opencode_cli_in_temp_home() -> Result<()> {
     let temp_home = env::temp_dir().join(format!("reins-opencode-import-test-{}", Uuid::new_v4()));
 
     fs::create_dir_all(&temp_home)?;
+    // HOME 重定向后 codex reader 只扫 temp home；transcript 必须先落进去，
+    // 否则源会话解析在索引阶段就找不到文件
+    let sessions_dir = temp_home.join(".codex/sessions/imported");
+    fs::create_dir_all(&sessions_dir)?;
+    let local_transcript =
+        sessions_dir.join(transcript_path.file_name().context("Transcript path has no file name")?);
+    fs::copy(&transcript_path, &local_transcript)?;
     let _guard = TestEnvGuard::set_home(&temp_home);
 
     let import_result = session::import::import_session_inner(
         SourceApp::Codex,
         &source_session_id,
         SourceApp::OpenCode,
-        Some(transcript_path.to_string_lossy().as_ref()),
+        None,
     )?;
     let imported_detail = session::timeline::get_session_inner(
         SourceApp::OpenCode,
@@ -391,18 +396,74 @@ fn imports_codex_transcript_into_opencode_cli_in_temp_home() -> Result<()> {
     Ok(())
 }
 
+// 真机读路径验证：直接读真实 HOME 的 opencode.db（不设 temp home），
+// 断言列表、消息分类与事件面板的数据层行为。
+#[test]
+#[ignore = "Requires OPENCODE_SESSION_ID; reads the real home OpenCode database"]
+fn reads_real_opencode_session_detail() -> Result<()> {
+    let source_session_id = env::var("OPENCODE_SESSION_ID")
+        .context("OPENCODE_SESSION_ID must be the OpenCode session ID (e.g. ses_xxx)")?;
+
+    let reader = session::reader(SourceApp::OpenCode);
+    let path = reader.resolve_path(&source_session_id)?;
+    let summary = reader.parse_summary(&path)?;
+    assert_eq!(summary.source_session_id, source_session_id);
+
+    let detail = session::timeline::get_session_inner(
+        SourceApp::OpenCode,
+        &source_session_id,
+        None,
+    )?;
+
+    let user_count = detail
+        .messages
+        .iter()
+        .filter(|message| message.role == "user")
+        .count();
+    let assistant_count = detail
+        .messages
+        .iter()
+        .filter(|message| message.role == "assistant")
+        .count();
+    let event_kinds = detail
+        .events
+        .iter()
+        .map(|event| event.kind.as_str())
+        .collect::<HashSet<_>>();
+
+    println!(
+        "title: {}\nuser messages: {user_count}\nassistant messages: {assistant_count}\nevent kinds: {event_kinds:?}\ntool blocks: {}",
+        summary.title,
+        detail
+            .messages
+            .iter()
+            .flat_map(|message| message.blocks.iter())
+            .filter(|block| block.kind == "function_call")
+            .count()
+    );
+
+    assert!(user_count > 0, "no user messages loaded");
+    assert!(assistant_count > 0, "no assistant messages loaded");
+    assert!(
+        !detail.events.is_empty(),
+        "expected non user/assistant rows to surface as events"
+    );
+
+    Ok(())
+}
+
 #[test]
 #[ignore = "Requires OPENCODE_SESSION_ID and a working Codex CLI login"]
 fn imports_real_opencode_session_into_codex_and_resumes() -> Result<()> {
     let source_session_id = env::var("OPENCODE_SESSION_ID")
         .context("OPENCODE_SESSION_ID must be the OpenCode session ID (e.g. ses_xxx)")?;
 
-    let session_file = format!("/tmp/{source_session_id}.opencode");
-
+    // transcript_path 传 None：v2 会话没有 transcript 文件，
+    // 由后端按 id 从 session_v2 解析
     let source_detail = session::timeline::get_session_inner(
         SourceApp::OpenCode,
         &source_session_id,
-        Some(&session_file),
+        None,
     )?;
     assert!(!source_detail.messages.is_empty());
 
@@ -410,7 +471,7 @@ fn imports_real_opencode_session_into_codex_and_resumes() -> Result<()> {
         SourceApp::OpenCode,
         &source_session_id,
         SourceApp::Codex,
-        Some(&session_file),
+        None,
     )?;
     let imported_detail = session::timeline::get_session_inner(
         SourceApp::Codex,

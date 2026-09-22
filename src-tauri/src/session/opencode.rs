@@ -64,24 +64,11 @@ impl FamilyRow for OpenCodeSessionRow {
 struct OpenCodeMessageRow {
     id: String,
     session_id: String,
+    // type 列：user/assistant 进消息时间线，其余（system/idle/synthetic/
+    // compaction/agent-switched/model-switched）归入事件。
+    kind: String,
     time_created: i64,
     value: Value,
-}
-
-#[derive(Clone)]
-struct OpenCodePartRow {
-    id: String,
-    session_id: String,
-    message_id: Option<String>,
-    time_created: i64,
-    value: Value,
-}
-
-#[derive(Default)]
-struct OpenCodeImportStats {
-    additions: usize,
-    deletions: usize,
-    files: usize,
 }
 
 static OPEN_CODE_TIMELINE_CACHE: LazyLock<Mutex<HashMap<String, TimelineCacheEntry>>> =
@@ -210,16 +197,36 @@ pub(crate) fn db_path() -> Result<PathBuf> {
 }
 
 pub(crate) fn session_path(session_id: &str) -> PathBuf {
-    root()
-        .unwrap_or_else(|_| PathBuf::from("/tmp"))
-        .join("session")
-        .join(format!("{session_id}.opencode"))
+    // v2 会话只存在于 SQLite，没有 transcript 文件；用 "db路径:id" 组合串
+    // 作为该记录的稳定 key。整体不是真实路径，path_key 会走原样字符串分支，
+    // 写入与查询两侧同经本函数，key 保持一致。
+    let db = db_path().unwrap_or_else(|_| PathBuf::from("/tmp/opencode.db"));
+    PathBuf::from(format!("{}:{}", db.display(), session_id))
 }
 
 pub(crate) fn delete_session(path: &Path) -> Result<()> {
     let family = session_family_for_path(path)?;
+    let connection = open_connection()?;
 
     for member in &family.members {
+        // v2 CLI 删除 root 会级联删掉整条 parent 链；已被级联删除的成员
+        // 直接跳过，避免 not found 让整个删除流程报错。
+        let exists: Option<i64> = connection
+            .query_row(
+                "SELECT 1 FROM session_v2 WHERE id = ?1",
+                [&member.id],
+                |row| row.get(0),
+            )
+            .map(Some)
+            .or_else(|error| match error {
+                rusqlite::Error::QueryReturnedNoRows => Ok(None),
+                other => Err(other),
+            })
+            .context("Failed to check OpenCode session existence")?;
+        if exists.is_none() {
+            continue;
+        }
+
         let output = Command::new("opencode")
             .arg("session")
             .arg("delete")
@@ -242,14 +249,6 @@ pub(crate) fn delete_session(path: &Path) -> Result<()> {
                 stderr.trim()
             );
         }
-
-        let diff_path = root()?
-            .join("storage/session_diff")
-            .join(format!("{}.json", member.id));
-        if diff_path.exists() {
-            fs::remove_file(&diff_path)
-                .with_context(|| format!("Failed to delete {}", diff_path.display()))?;
-        }
     }
 
     lock_timeline_cache()?.clear();
@@ -264,14 +263,20 @@ fn open_connection() -> Result<Connection> {
 fn list_session_rows() -> Result<Vec<OpenCodeSessionRow>> {
     let connection = open_connection()?;
     let mut statement = connection.prepare(
-        "SELECT id, parent_id, directory, title, time_created, time_updated FROM session ORDER BY time_updated DESC",
+        "SELECT id, parent_id, directory, title, time_created, time_updated FROM session_v2 ORDER BY time_updated DESC",
     )?;
+    // session_v2.title 允许 NULL（v1 时代 NOT NULL），空标题回退到 id，
+    // 避免 family 标题渲染成空白。
     let rows = statement.query_map([], |row| {
+        let id: String = row.get(0)?;
+        let title: Option<String> = row.get(3)?;
         Ok(OpenCodeSessionRow {
-            id: row.get(0)?,
+            title: title
+                .filter(|title| !title.is_empty())
+                .unwrap_or_else(|| id.clone()),
+            id,
             parent_id: row.get(1)?,
             directory: row.get(2)?,
-            title: row.get(3)?,
             time_created: row.get(4)?,
             time_updated: row.get(5)?,
         })
@@ -535,22 +540,22 @@ fn count_family_records(member_ids: &[&str]) -> Result<(usize, usize)> {
         .collect::<Vec<_>>();
     let placeholders = vec!["?"; member_ids.len()].join(",");
 
+    // 与时间线加载同一条分类边界：user/assistant 行是消息，其余行是事件。
     let message_count: usize = connection
         .query_row(
-            &format!("SELECT COUNT(*) FROM message WHERE session_id IN ({placeholders})"),
+            &format!(
+                "SELECT COUNT(*) FROM session_message WHERE session_id IN ({placeholders}) AND type IN ('user','assistant')"
+            ),
             params_from_iter(member_ids.iter()),
             |row| row.get::<_, i64>(0).map(|count| count as usize),
         )
         .context("Failed to count OpenCode messages")?;
 
-    // The part table stores its kind inside the data JSON (no `type` column);
-    // mirror the timeline's classification: message/control kinds are not
-    // events, missing kinds count as "unknown" events.
     let event_count: usize = connection
         .query_row(
-        &format!(
-            "SELECT COUNT(*) FROM part WHERE session_id IN ({placeholders}) AND COALESCE(json_extract(data, '$.type'), 'unknown') NOT IN ('text','reasoning','tool','patch','file','step-start','step-finish')"
-        ),
+            &format!(
+                "SELECT COUNT(*) FROM session_message WHERE session_id IN ({placeholders}) AND type NOT IN ('user','assistant')"
+            ),
             params_from_iter(member_ids.iter()),
             |row| row.get::<_, i64>(0).map(|count| count as usize),
         )
@@ -569,26 +574,28 @@ fn load_message_rows(
 ) -> Result<Vec<OpenCodeMessageRow>> {
     let placeholders = vec!["?"; member_ids.len()].join(",");
     let mut statement = connection.prepare(&format!(
-        "SELECT id, session_id, time_created, data FROM message WHERE session_id IN ({placeholders}) ORDER BY time_created ASC, id ASC"
+        "SELECT id, session_id, type, time_created, data FROM session_message WHERE session_id IN ({placeholders}) ORDER BY time_created ASC, id ASC"
     ))?;
     let rows = statement.query_map(params_from_iter(member_ids.iter()), |row| {
         Ok((
             row.get::<_, String>(0)?,
             row.get::<_, String>(1)?,
-            row.get::<_, i64>(2)?,
-            row.get::<_, String>(3)?,
+            row.get::<_, String>(2)?,
+            row.get::<_, i64>(3)?,
+            row.get::<_, String>(4)?,
         ))
     })?;
 
     let mut message_rows = Vec::new();
 
     for row in rows {
-        let (message_id, session_id, time_created, raw_data) = row?;
+        let (message_id, session_id, kind, time_created, raw_data) = row?;
         let value: Value = serde_json::from_str(&raw_data)
             .with_context(|| format!("Invalid OpenCode message JSON for {message_id}"))?;
         message_rows.push(OpenCodeMessageRow {
             id: message_id,
             session_id,
+            kind,
             time_created,
             value,
         });
@@ -597,79 +604,79 @@ fn load_message_rows(
     Ok(message_rows)
 }
 
-fn load_part_rows(connection: &Connection, member_ids: &[String]) -> Result<Vec<OpenCodePartRow>> {
-    let placeholders = vec!["?"; member_ids.len()].join(",");
-    let mut statement = connection.prepare(&format!(
-        "SELECT id, session_id, message_id, time_created, data FROM part WHERE session_id IN ({placeholders}) ORDER BY time_created ASC, id ASC"
-    ))?;
-    let rows = statement.query_map(params_from_iter(member_ids.iter()), |row| {
-        Ok((
-            row.get::<_, String>(0)?,
-            row.get::<_, String>(1)?,
-            row.get::<_, Option<String>>(2)?,
-            row.get::<_, i64>(3)?,
-            row.get::<_, String>(4)?,
-        ))
-    })?;
+// 消息时间戳优先取 data.time.created，部分 type（如 compaction）的 data
+// 可能没有 time，回退 time_created 列。
+fn message_row_timestamp(row: &OpenCodeMessageRow) -> Option<i64> {
+    row.value
+        .get("time")
+        .and_then(|time| time.get("created"))
+        .and_then(Value::as_i64)
+        .or(Some(row.time_created))
+}
 
-    let mut part_rows = Vec::new();
+fn load_message_blocks(row: &OpenCodeMessageRow) -> Vec<ContentBlock> {
+    if row.kind == "user" {
+        return user_message_blocks(&row.value);
+    }
 
-    for row in rows {
-        let (part_id, session_id, message_id, time_created, raw_data) = row?;
-        let value: Value = serde_json::from_str(&raw_data)
-            .with_context(|| format!("Invalid OpenCode part JSON for {part_id}"))?;
-        part_rows.push(OpenCodePartRow {
-            id: part_id,
-            session_id,
-            message_id,
-            time_created,
-            value,
+    assistant_message_blocks(&row.value)
+}
+
+fn user_message_blocks(value: &Value) -> Vec<ContentBlock> {
+    let mut blocks = Vec::new();
+
+    if let Some(text) = super::json_string(value, &["text"]) {
+        // 附件的 base64 数据不进 payload，只保留文字说明
+        blocks.push(ContentBlock {
+            kind: "text".to_string(),
+            text: Some(text),
+            tool_name: None,
+            tool_call_id: None,
+            is_error: None,
+            payload: None,
         });
     }
 
-    Ok(part_rows)
-}
+    if let Some(files) = value.get("files").and_then(Value::as_array) {
+        for file in files {
+            let filename = super::json_string(file, &["name"]);
+            let mime = super::json_string(file, &["mime"]);
+            let text = match (filename, mime) {
+                (Some(filename), Some(mime)) => Some(format!("文件：{filename}\n类型：{mime}")),
+                (Some(filename), None) => Some(format!("文件：{filename}")),
+                (None, Some(mime)) => Some(format!("文件类型：{mime}")),
+                (None, None) => None,
+            };
 
-fn group_parts_by_message_id(
-    part_rows: Vec<OpenCodePartRow>,
-) -> HashMap<String, Vec<OpenCodePartRow>> {
-    let mut parts_by_message_id = HashMap::new();
-
-    for part_row in part_rows {
-        if let Some(message_id) = part_row.message_id.clone() {
-            parts_by_message_id
-                .entry(message_id)
-                .or_insert_with(Vec::new)
-                .push(part_row);
+            if let Some(text) = text {
+                blocks.push(ContentBlock {
+                    kind: "file".to_string(),
+                    text: Some(text),
+                    tool_name: None,
+                    tool_call_id: None,
+                    is_error: None,
+                    payload: None,
+                });
+            }
         }
     }
 
-    parts_by_message_id
+    blocks
 }
 
-fn is_opencode_control_part(kind: &str) -> bool {
-    matches!(kind, "step-start" | "step-finish")
-}
-
-fn is_opencode_message_part(kind: &str) -> bool {
-    matches!(kind, "text" | "reasoning" | "tool" | "patch" | "file")
-}
-
-fn load_message_blocks(part_rows: Vec<OpenCodePartRow>) -> Vec<ContentBlock> {
+fn assistant_message_blocks(value: &Value) -> Vec<ContentBlock> {
     let mut blocks = Vec::new();
+    let Some(content) = value.get("content").and_then(Value::as_array) else {
+        return blocks;
+    };
 
-    for part_row in part_rows {
-        let value = part_row.value;
-        let kind = super::json_string(&value, &["type"]).unwrap_or_else(|| "unknown".to_string());
-
-        if is_opencode_control_part(&kind) {
-            continue;
-        }
+    for item in content {
+        let kind = super::json_string(item, &["type"]).unwrap_or_else(|| "unknown".to_string());
 
         if kind == "tool" {
-            let tool_blocks = tool_blocks(&value);
+            let tool_blocks = tool_blocks(item);
             if tool_blocks.is_empty() {
-                blocks.push(super::empty_tool_block("OpenCode", &value));
+                blocks.push(super::empty_tool_block("OpenCode", item));
             } else {
                 blocks.extend(tool_blocks);
             }
@@ -680,42 +687,18 @@ fn load_message_blocks(part_rows: Vec<OpenCodePartRow>) -> Vec<ContentBlock> {
             "reasoning" => "thinking".to_string(),
             _ => kind.clone(),
         };
+        let text = super::json_string(item, &["text"]);
 
-        let text = match kind.as_str() {
-            "patch" => value.get("files").and_then(Value::as_array).map(|files| {
-                let mut lines = vec!["变更文件：".to_string()];
-                lines.extend(
-                    files
-                        .iter()
-                        .filter_map(Value::as_str)
-                        .map(|file| format!("- {file}")),
-                );
-                lines.join("\n")
-            }),
-            "file" => {
-                let filename = super::json_string(&value, &["filename"]);
-                let mime = super::json_string(&value, &["mime"]);
-
-                match (filename, mime) {
-                    (Some(filename), Some(mime)) => Some(format!("文件：{filename}\n类型：{mime}")),
-                    (Some(filename), None) => Some(format!("文件：{filename}")),
-                    (None, Some(mime)) => Some(format!("文件类型：{mime}")),
-                    (None, None) => None,
-                }
-            }
-            _ => super::json_string(&value, &["text"]),
-        };
-
-        if text.is_none() && !is_opencode_message_part(&kind) {
-            blocks.push(super::unsupported_block("OpenCode", &value));
+        if text.is_none() && normalized_kind != "text" && normalized_kind != "thinking" {
+            blocks.push(super::unsupported_block("OpenCode", item));
         } else {
             blocks.push(ContentBlock {
                 kind: normalized_kind,
                 text,
-                tool_name: super::json_string(&value, &["tool"]),
-                tool_call_id: super::json_string(&value, &["callID"]),
+                tool_name: None,
+                tool_call_id: None,
                 is_error: None,
-                payload: Some(value),
+                payload: Some(item.clone()),
             });
         }
     }
@@ -726,8 +709,6 @@ fn load_message_blocks(part_rows: Vec<OpenCodePartRow>) -> Vec<ContentBlock> {
 fn load_messages_for_family(family: &OpenCodeSessionFamily) -> Result<Vec<SessionMessage>> {
     let connection = open_connection()?;
     let member_ids = family_member_ids(family);
-    let mut parts_by_message_id =
-        group_parts_by_message_id(load_part_rows(&connection, &member_ids)?);
     let message_rows = load_message_rows(&connection, &member_ids)?;
     let mut messages = family
         .members
@@ -737,18 +718,12 @@ fn load_messages_for_family(family: &OpenCodeSessionFamily) -> Result<Vec<Sessio
         .collect::<Vec<_>>();
 
     for row in message_rows {
-        let role =
-            super::json_string(&row.value, &["role"]).unwrap_or_else(|| "unknown".to_string());
-        let timestamp = row
-            .value
-            .get("time")
-            .and_then(|time| time.get("created"))
-            .and_then(Value::as_i64)
-            .or(Some(row.time_created));
-        let mut blocks =
-            load_message_blocks(parts_by_message_id.remove(&row.id).unwrap_or_default());
+        if row.kind != "user" && row.kind != "assistant" {
+            continue;
+        }
 
-        if role == "user" {
+        let mut blocks = load_message_blocks(&row);
+        if row.kind == "user" {
             blocks = super::sanitize_user_blocks(blocks);
         }
 
@@ -761,11 +736,11 @@ fn load_messages_for_family(family: &OpenCodeSessionFamily) -> Result<Vec<Sessio
         }
 
         messages.push(SessionMessage {
-            id: row.id,
-            role,
-            timestamp,
+            id: row.id.clone(),
+            role: row.kind.clone(),
+            timestamp: message_row_timestamp(&row),
             blocks,
-            session_id: Some(row.session_id),
+            session_id: Some(row.session_id.clone()),
         });
     }
 
@@ -776,29 +751,6 @@ fn load_messages_for_family(family: &OpenCodeSessionFamily) -> Result<Vec<Sessio
     });
 
     Ok(messages)
-}
-
-fn event_from_part_row(part_row: OpenCodePartRow) -> Option<SessionEvent> {
-    let kind =
-        super::json_string(&part_row.value, &["type"]).unwrap_or_else(|| "unknown".to_string());
-
-    if is_opencode_message_part(&kind) || is_opencode_control_part(&kind) {
-        return None;
-    }
-
-    Some(SessionEvent {
-        id: part_row.id,
-        kind: kind.clone(),
-        timestamp: part_row
-            .value
-            .get("time")
-            .and_then(|time| time.get("created"))
-            .and_then(Value::as_i64)
-            .or(Some(part_row.time_created)),
-        summary: super::summarize_event(kind.as_str(), &part_row.value),
-        payload: Some(part_row.value),
-        session_id: Some(part_row.session_id),
-    })
 }
 
 fn load_events_for_family(family: &OpenCodeSessionFamily) -> Result<Vec<SessionEvent>> {
@@ -812,9 +764,10 @@ fn load_events_for_family(family: &OpenCodeSessionFamily) -> Result<Vec<SessionE
         .collect::<Vec<_>>();
 
     events.extend(
-        load_part_rows(&connection, &member_ids)?
+        load_message_rows(&connection, &member_ids)?
             .into_iter()
-            .filter_map(event_from_part_row),
+            .filter(|row| row.kind != "user" && row.kind != "assistant")
+            .map(event_from_message_row),
     );
 
     events.sort_by(|left, right| {
@@ -826,17 +779,60 @@ fn load_events_for_family(family: &OpenCodeSessionFamily) -> Result<Vec<SessionE
     Ok(events)
 }
 
+fn event_from_message_row(row: OpenCodeMessageRow) -> SessionEvent {
+    let timestamp = message_row_timestamp(&row);
+    SessionEvent {
+        id: row.id,
+        kind: row.kind.clone(),
+        timestamp,
+        summary: v2_event_summary(&row.kind, &row.value),
+        payload: Some(row.value),
+        session_id: Some(row.session_id),
+    }
+}
+
+// 共享 summarize_event 只认 message/type/name 字段，v2 事件的可读字段因
+// type 而异（compaction 的总结、idle 的 outcome、agent-switched 的新
+// agent 名），先取这些字段生成摘要，取不到再退回通用逻辑。synthetic 的
+// text 是 <system-reminder> 噪音，不作为摘要来源。
+fn v2_event_summary(kind: &str, value: &Value) -> String {
+    for key in ["description", "summary", "outcome", "agent"] {
+        if let Some(text) = super::json_string(value, &[key]) {
+            let normalized = super::normalize_title(text);
+            if !normalized.is_empty() {
+                return format!("{kind}: {normalized}");
+            }
+        }
+    }
+
+    super::summarize_event(kind, value)
+}
+
+// v2 tool 块：{type,id,name,state:{status,input,content,metadata},time}。
+// id 就是调用 id（call_xxx，v1 叫 callID）；输出在 state.content 块数组里
+//（v1 是 state.output 字符串）。输入/输出拆成两条 UI 块，与前端已有的
+// function_call/function_call_output 分组契约保持一致。
 fn tool_blocks(value: &Value) -> Vec<ContentBlock> {
-    let tool_name = super::json_string(value, &["tool"]);
-    let tool_call_id = super::json_string(value, &["callID"]);
-    let input = value.get("state").and_then(|state| state.get("input"));
-    let output = value.get("state").and_then(|state| state.get("output"));
+    let tool_name = super::json_string(value, &["name"]);
+    let tool_call_id = super::json_string(value, &["id"]);
+    let state = value.get("state");
+    let input = state.and_then(|state| state.get("input"));
+    let output_text = state
+        .and_then(|state| state.get("content"))
+        .and_then(tool_content_text);
+    let is_error = state.and_then(|state| state.get("status")).and_then(Value::as_str) == Some("error");
     let mut blocks = Vec::new();
 
     if input.is_some_and(|item| !item.is_null()) {
         let mut payload = value.clone();
+        // 输出内容不重复放进输入块，避免 payload 成倍变大
         if let Some(state) = payload.get_mut("state").and_then(Value::as_object_mut) {
-            state.remove("output");
+            state.remove("content");
+        }
+        if let Some(input) = input {
+            if let Some(object) = payload.as_object_mut() {
+                object.insert("input".to_string(), input.clone());
+            }
         }
 
         blocks.push(ContentBlock {
@@ -845,43 +841,48 @@ fn tool_blocks(value: &Value) -> Vec<ContentBlock> {
             tool_name: tool_name.clone(),
             tool_call_id: tool_call_id.clone(),
             is_error: None,
-            payload: Some(tool_payload(&payload, input.cloned(), None)),
+            payload: Some(payload),
         });
     }
 
-    if output.is_some_and(|item| !item.is_null()) {
+    if let Some(output_text) = output_text {
         let mut payload = value.clone();
-        if let Some(state) = payload.get_mut("state").and_then(Value::as_object_mut) {
-            state.remove("input");
+        // 输出文本提到顶层，前端 resultOutputText 直接读 payload.output
+        if let Some(object) = payload.as_object_mut() {
+            object.insert("output".to_string(), Value::String(output_text.clone()));
+            if let Some(input) = input {
+                object.insert("input".to_string(), input.clone());
+            }
         }
 
         blocks.push(ContentBlock {
             kind: "function_call_output".to_string(),
-            text: tool_output_text(output),
+            text: Some(output_text),
             tool_name,
             tool_call_id,
-            is_error: None,
-            payload: Some(tool_payload(&payload, input.cloned(), output.cloned())),
+            is_error: is_error.then_some(true),
+            payload: Some(payload),
         });
     }
 
     blocks
 }
 
-fn tool_payload(base: &Value, input: Option<Value>, output: Option<Value>) -> Value {
-    let mut payload = base.clone();
+// v2 tool 输出是 state.content 块数组（通常为 {type:"text",text}），
+// 提取其中文本拼接；数组为空返回 None（running 中的工具）。
+fn tool_content_text(content: &Value) -> Option<String> {
+    let items = content.as_array()?;
+    let texts = items
+        .iter()
+        .filter_map(|item| super::json_string(item, &["text"]))
+        .collect::<Vec<_>>();
 
-    if let Some(object) = payload.as_object_mut() {
-        if let Some(input) = input {
-            object.insert("input".to_string(), input);
-        }
-
-        if let Some(output) = output {
-            object.insert("output".to_string(), output);
-        }
+    if texts.is_empty() {
+        // 非文本输出块降级为 JSON 展示
+        return (!items.is_empty()).then(|| super::stringify_json(content)).flatten();
     }
 
-    payload
+    Some(texts.join("\n"))
 }
 
 fn tool_input_text(input: Option<&Value>) -> Option<String> {
@@ -894,18 +895,6 @@ fn tool_input_text(input: Option<&Value>) -> Option<String> {
     }
 
     super::stringify_json(input)
-}
-
-fn tool_output_text(output: Option<&Value>) -> Option<String> {
-    let Some(output) = output else {
-        return None;
-    };
-
-    if let Some(text) = output.as_str() {
-        return Some(text.to_string());
-    }
-
-    super::stringify_json(output)
 }
 
 fn session_marker_message(row: &OpenCodeSessionRow, kind: &str) -> SessionMessage {
@@ -964,10 +953,14 @@ fn write_session(detail: &SessionDetail, new_session_id: &str) -> Result<(String
         .with_context(|| format!("Failed to write {}", import_file.display()))?;
 
     let output = Command::new("opencode")
+        .arg("session")
         .arg("import")
+        // standalone 起私有 server 完成导入，不依赖后台服务是否在运行
+        //（HOME 被重定向或服务未启动时默认连接会超时失败）
+        .arg("--standalone")
         .arg(&import_file)
         .output()
-        .context("Failed to execute opencode import")?;
+        .context("Failed to execute opencode session import")?;
 
     fs::remove_file(&import_file).ok();
 
@@ -1001,6 +994,10 @@ fn write_session(detail: &SessionDetail, new_session_id: &str) -> Result<(String
     Ok((created_session_id, vec![db_path()?.display().to_string()]))
 }
 
+// v2 导入 payload 对齐 `opencode session export` 的扁平结构：
+// info + messages[]（type 区分 user/assistant，内容内嵌在消息里）。
+// 消息 id 必须全新生成——session_message.id 全库唯一，沿用源 id 会撞
+// UNIQUE 约束导致整个导入失败（真机验证过）。
 fn import_payload(detail: &SessionDetail, session_id: &str) -> Result<Value> {
     let created_at = detail
         .summary
@@ -1008,266 +1005,212 @@ fn import_payload(detail: &SessionDetail, session_id: &str) -> Result<Value> {
         .unwrap_or_else(|| chrono::Utc::now().timestamp_millis());
     let updated_at = detail.summary.updated_at.unwrap_or(created_at);
     let cwd = crate::support::fs::effective_cwd(detail.summary.cwd.as_deref())?;
-    let project_id = format!("project_{}", Uuid::new_v4().simple());
-    let mut stats = OpenCodeImportStats::default();
+
     let mut messages = Vec::new();
-    let mut last_user_message_id: Option<String> = None;
-    let mut previous_message_id: Option<String> = None;
 
     for (message_index, message) in detail.messages.iter().enumerate() {
-        let message_id = format!("msg_{}", Uuid::new_v4().simple());
         let message_timestamp = message
             .timestamp
             .unwrap_or(created_at + message_index as i64);
-        let parent_message_id = if message.role == "user" {
-            None
-        } else {
-            Some(
-                last_user_message_id
-                    .clone()
-                    .or_else(|| previous_message_id.clone())
-                    .unwrap_or_else(|| session_id.to_string()),
-            )
-        };
-        let parts = message_parts(
-            session_id,
-            &message_id,
-            message,
-            message_timestamp,
-            &mut stats,
-        );
 
-        if parts.is_empty() {
+        if message.role == "user" {
+            let Some(text) = user_import_text(message) else {
+                continue;
+            };
+
+            messages.push(json!({
+                "id": format!("msg_{}", Uuid::new_v4().simple()),
+                "time": { "created": message_timestamp },
+                "type": "user",
+                "text": text,
+                "files": [],
+                "agents": [],
+            }));
+            continue;
+        }
+
+        let content = assistant_import_content(message, message_timestamp);
+        if content.is_empty() {
             continue;
         }
 
         messages.push(json!({
-            "info": message_info(
-                session_id,
-                &message_id,
-                message,
-                message_timestamp,
-                &cwd,
-                parent_message_id.as_deref(),
-            ),
-            "parts": parts,
+            "id": format!("msg_{}", Uuid::new_v4().simple()),
+            "time": { "created": message_timestamp },
+            "type": "assistant",
+            "agent": "build",
+            "model": {
+                "id": "imported",
+                "providerID": "imported",
+                "variant": "default",
+            },
+            "content": content,
+            "finish": "stop",
+            "cost": 0,
+            "tokens": {
+                "input": 0,
+                "output": 0,
+                "reasoning": 0,
+                "cache": { "read": 0, "write": 0 },
+            },
         }));
-
-        if message.role == "user" {
-            last_user_message_id = Some(message_id.clone());
-        }
-
-        previous_message_id = Some(message_id);
     }
 
     Ok(json!({
         "info": {
             "id": session_id,
-            "slug": slugify_title(&detail.summary.title),
-            "projectID": project_id,
-            "directory": cwd,
+            "projectID": import_project_id(&cwd),
             "title": detail.summary.title,
-            "version": "1.4.3",
-            "summary": {
-                "additions": stats.additions,
-                "deletions": stats.deletions,
-                "files": stats.files,
-            },
             "time": {
                 "created": created_at,
                 "updated": updated_at,
-            }
+            },
+            "location": { "directory": cwd },
+            "cost": 0,
+            "tokens": {
+                "input": 0,
+                "output": 0,
+                "reasoning": 0,
+                "cache": { "read": 0, "write": 0 },
+            },
         },
         "messages": messages,
     }))
 }
 
-fn message_info(
-    session_id: &str,
-    message_id: &str,
-    message: &SessionMessage,
-    timestamp: i64,
-    cwd: &str,
-    parent_message_id: Option<&str>,
-) -> Value {
-    match message.role.as_str() {
-        "user" => json!({
-            "id": message_id,
-            "sessionID": session_id,
-            "role": "user",
-            "time": {
-                "created": timestamp,
-            },
-            "agent": "build",
-            "model": {
-                "providerID": "imported",
-                "modelID": "imported",
-                "variant": "default",
-            }
-        }),
-        _ => json!({
-            "id": message_id,
-            "sessionID": session_id,
-            "parentID": parent_message_id.unwrap_or(session_id),
-            "role": "assistant",
-            "mode": "build",
-            "agent": "build",
-            "variant": "default",
-            "path": {
-                "cwd": cwd,
-                "root": cwd,
-            },
-            "cost": 0,
-            "tokens": {
-                "total": 0,
-                "input": 0,
-                "output": 0,
-                "reasoning": 0,
-                "cache": {
-                    "read": 0,
-                    "write": 0,
-                }
-            },
-            "modelID": "imported",
-            "providerID": "imported",
-            "time": {
-                "created": timestamp,
-                "completed": timestamp,
-            },
-            "finish": "stop",
-        }),
-    }
+// 用户消息在 v2 只有单个 text 字段；取文本类块拼接。附件块保留文字说明
+//（v2 files 需要 base64 数据，导入侧无法还原，files 置空）。
+fn user_import_text(message: &SessionMessage) -> Option<String> {
+    let parts = message
+        .blocks
+        .iter()
+        .filter(|block| {
+            matches!(
+                block.kind.as_str(),
+                "text" | "input_text" | "output_text" | "file"
+            )
+        })
+        .filter_map(|block| super::block_text(block))
+        .collect::<Vec<_>>();
+
+    (!parts.is_empty()).then(|| parts.join("\n\n"))
 }
 
-fn message_parts(
-    session_id: &str,
-    message_id: &str,
-    message: &SessionMessage,
-    timestamp: i64,
-    stats: &mut OpenCodeImportStats,
-) -> Vec<Value> {
-    let mut parts = Vec::new();
+// 归一化块 → v2 content[]。同一消息内的 call+output 按 tool_call_id 合并
+// 成一个 completed tool 块（v2 的 tool 本就是单块含输入输出）；跨消息的
+// output 单独成块。patch/file 没有 v2 对应类型，降级为文本说明。
+fn assistant_import_content(message: &SessionMessage, timestamp: i64) -> Vec<Value> {
+    let mut content = Vec::new();
+    let mut call_positions = HashMap::new();
 
     for block in &message.blocks {
         match block.kind.as_str() {
-            "text" | "input_text" | "output_text" => {
-                if let Some(text) = super::block_text(block) {
-                    parts.push(json!({
-                        "id": format!("prt_{}", Uuid::new_v4().simple()),
-                        "sessionID": session_id,
-                        "messageID": message_id,
-                        "type": "text",
-                        "text": text,
-                        "time": {
-                            "start": timestamp,
-                            "end": timestamp,
-                        }
-                    }));
-                }
+            "text" | "input_text" | "output_text" | "patch" | "file" => {
+                let Some(text) = block_import_text(block) else {
+                    continue;
+                };
+                content.push(json!({ "type": "text", "text": text }));
             }
             "thinking" | "reasoning" => {
-                if let Some(text) = super::block_text(block) {
-                    parts.push(json!({
-                        "id": format!("prt_{}", Uuid::new_v4().simple()),
-                        "sessionID": session_id,
-                        "messageID": message_id,
-                        "type": "reasoning",
-                        "text": text,
-                        "time": {
-                            "start": timestamp,
-                            "end": timestamp,
-                        }
-                    }));
-                }
+                let Some(text) = super::block_text(block) else {
+                    continue;
+                };
+                content.push(json!({ "type": "reasoning", "text": text }));
             }
             "tool_use" | "function_call" => {
-                let title = block
-                    .tool_name
-                    .clone()
-                    .unwrap_or_else(|| "imported_tool".to_string());
-                parts.push(json!({
-                    "id": format!("prt_{}", Uuid::new_v4().simple()),
-                    "sessionID": session_id,
-                    "messageID": message_id,
+                let call_id = import_tool_call_id(block);
+                content.push(json!({
                     "type": "tool",
-                    "tool": title,
-                    "callID": block.tool_call_id.clone().unwrap_or_else(|| format!("call_{}", Uuid::new_v4().simple())),
+                    "id": call_id,
+                    "name": block.tool_name.clone().unwrap_or_else(|| "imported_tool".to_string()),
                     "state": {
                         "status": "running",
                         "input": tool_input(block),
-                        "title": block.tool_name.clone().unwrap_or_else(|| "imported_tool".to_string()),
+                        "content": [],
                         "metadata": {},
-                        "time": {
-                            "start": timestamp,
-                        }
-                    }
+                    },
+                    "time": { "created": timestamp },
                 }));
+                call_positions.insert(call_id, content.len() - 1);
             }
             "tool_result" | "function_call_output" => {
-                let title = block
-                    .tool_name
-                    .clone()
-                    .unwrap_or_else(|| "imported_tool".to_string());
-                parts.push(json!({
-                    "id": format!("prt_{}", Uuid::new_v4().simple()),
-                    "sessionID": session_id,
-                    "messageID": message_id,
-                    "type": "tool",
-                    "tool": title,
-                    "callID": block.tool_call_id.clone().unwrap_or_else(|| format!("call_{}", Uuid::new_v4().simple())),
-                    "state": {
-                        "status": "completed",
-                        "input": tool_input(block),
-                        "output": tool_output(block),
-                        "title": block.tool_name.clone().unwrap_or_else(|| "imported_tool".to_string()),
-                        "metadata": {},
-                        "time": {
-                            "start": timestamp,
-                            "end": timestamp,
-                        }
-                    }
-                }));
-            }
-            "patch" => {
-                if let Some(files) = patch_files(block) {
-                    stats.files += files.len();
-                    parts.push(json!({
-                        "id": format!("prt_{}", Uuid::new_v4().simple()),
-                        "sessionID": session_id,
-                        "messageID": message_id,
-                        "type": "patch",
-                        "hash": format!("patch_{}", Uuid::new_v4().simple()),
-                        "files": files,
-                    }));
-                }
-            }
-            "file" => {
-                let mut file_part = json!({
-                    "id": format!("prt_{}", Uuid::new_v4().simple()),
-                    "sessionID": session_id,
-                    "messageID": message_id,
-                    "type": "file",
+                let call_id = import_tool_call_id(block);
+                let state = json!({
+                    "status": "completed",
+                    "input": tool_input(block),
+                    "content": [ { "type": "text", "text": tool_output(block) } ],
+                    "metadata": {},
                 });
 
-                if let Some(payload) = block.payload.as_ref() {
-                    if let Some(filename) = super::json_string(payload, &["filename"]) {
-                        file_part["filename"] = Value::String(filename);
-                    }
-                    if let Some(mime) = super::json_string(payload, &["mime"]) {
-                        file_part["mime"] = Value::String(mime);
-                    }
-                    if let Some(url) = super::json_string(payload, &["url"]) {
-                        file_part["url"] = Value::String(url);
-                    }
+                if let Some(&position) = call_positions.get(&call_id) {
+                    content[position]["state"] = state;
+                } else {
+                    content.push(json!({
+                        "type": "tool",
+                        "id": call_id,
+                        "name": block.tool_name.clone().unwrap_or_else(|| "imported_tool".to_string()),
+                        "state": state,
+                        "time": { "created": timestamp },
+                    }));
                 }
-
-                parts.push(file_part);
             }
             _ => {}
         }
     }
 
-    parts
+    content
+}
+
+fn block_import_text(block: &ContentBlock) -> Option<String> {
+    match block.kind.as_str() {
+        "patch" => block.payload.as_ref().and_then(|payload| {
+            let files = payload.get("files").and_then(Value::as_array)?;
+            let mut lines = vec!["变更文件：".to_string()];
+            lines.extend(
+                files
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .map(|file| format!("- {file}")),
+            );
+            Some(lines.join("\n"))
+        }),
+        "file" => {
+            let payload = block.payload.as_ref();
+            let filename = payload.and_then(|payload| super::json_string(payload, &["filename"]));
+            let mime = payload.and_then(|payload| super::json_string(payload, &["mime"]));
+            Some(match (filename, mime) {
+                (Some(filename), Some(mime)) => format!("文件：{filename}\n类型：{mime}"),
+                (Some(filename), None) => format!("文件：{filename}"),
+                (None, Some(mime)) => format!("文件类型：{mime}"),
+                (None, None) => return block.text.clone(),
+            })
+        }
+        _ => super::block_text(block),
+    }
+}
+
+fn import_tool_call_id(block: &ContentBlock) -> String {
+    block
+        .tool_call_id
+        .clone()
+        .unwrap_or_else(|| format!("call_{}", Uuid::new_v4().simple()))
+}
+
+// v2 session 归属 project 表（worktree 即目录）；目录已有项目时复用其 id，
+// 否则生成独立 id——导入接口不校验 project 行存在（真机验证），FK 也未开启。
+fn import_project_id(cwd: &str) -> String {
+    open_connection()
+        .ok()
+        .and_then(|connection| {
+            connection
+                .query_row(
+                    "SELECT id FROM project WHERE worktree = ?1 ORDER BY time_created DESC LIMIT 1",
+                    [cwd],
+                    |row| row.get::<_, String>(0),
+                )
+                .ok()
+        })
+        .unwrap_or_else(|| format!("project_{}", Uuid::new_v4().simple()))
 }
 
 fn tool_input(block: &ContentBlock) -> Value {
@@ -1296,22 +1239,6 @@ fn tool_output(block: &ContentBlock) -> String {
     }
 
     block.text.clone().unwrap_or_default()
-}
-
-fn patch_files(block: &ContentBlock) -> Option<Vec<String>> {
-    block.payload.as_ref().and_then(|payload| {
-        payload
-            .get("files")
-            .and_then(Value::as_array)
-            .map(|files| {
-                files
-                    .iter()
-                    .filter_map(Value::as_str)
-                    .map(ToString::to_string)
-                    .collect::<Vec<_>>()
-            })
-            .filter(|files| !files.is_empty())
-    })
 }
 
 fn parse_imported_session_id(stdout: &[u8], stderr: &[u8]) -> Option<String> {
@@ -1377,39 +1304,4 @@ fn resolve_imported_session_id(
         stdout_text.trim(),
         stderr_text.trim()
     )
-}
-
-fn slugify_title(title: &str) -> String {
-    let mut slug = String::new();
-    let mut previous_dash = false;
-
-    for ch in title.chars() {
-        let normalized = if ch.is_ascii_alphanumeric() {
-            Some(ch.to_ascii_lowercase())
-        } else if ch.is_whitespace() || matches!(ch, '-' | '_' | '/' | '.') {
-            Some('-')
-        } else {
-            None
-        };
-
-        match normalized {
-            Some('-') if !previous_dash && !slug.is_empty() => {
-                slug.push('-');
-                previous_dash = true;
-            }
-            Some(value) if value != '-' => {
-                slug.push(value);
-                previous_dash = false;
-            }
-            _ => {}
-        }
-    }
-
-    let trimmed = slug.trim_matches('-');
-
-    if trimmed.is_empty() {
-        return "imported-session".to_string();
-    }
-
-    trimmed.to_string()
 }

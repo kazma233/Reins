@@ -220,12 +220,10 @@ export const DELETE_METHOD_COPY: Record<SourceApp, DeleteMethodCopy> = {
     commandLabel: "等价执行动作"
   },
   opencode: {
-    description:
-      "OpenCode 会先调用官方单会话删除，再补删官方不会自动清理的本地 diff 拷留。",
+    description: "OpenCode 调用官方单会话删除命令，会话从列表中移除。",
     details: [
       "对当前会话组里的每个 session id 执行 opencode session delete。",
-      "session 会从 OpenCode 列表中删除。",
-      "storage/session_diff/<sessionId>.json 会额外清理。"
+      "OpenCode v2 会级联删除子会话，已被级联删除的会话自动跳过。"
     ],
     commandLabel: "执行命令"
   },
@@ -289,15 +287,9 @@ export function deleteCommandPreview(detail: SessionOverview): string[] {
     case "grokbuild":
       return [];
     case "opencode":
-      return [
-        ...sessionIds.map(
-          (sessionId) => `opencode session delete ${sessionId}`
-        ),
-        ...sessionIds.map(
-          (sessionId) =>
-            `rm "$HOME/.local/share/opencode/storage/session_diff/${sessionId}.json"`
-        )
-      ];
+      return sessionIds.map(
+        (sessionId) => `opencode session delete ${sessionId}`
+      );
     case "claude_code":
       return [
         ...detail.sourcePaths.map((path) => `rm ${dialogShellQuote(path)}`),

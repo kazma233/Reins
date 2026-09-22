@@ -53,38 +53,22 @@ fn seed_opencode_session(detail: &SessionDetail, session_id: &str) -> Result<()>
     let connection = Connection::open(&db_path)?;
     connection.execute_batch(
         "
-        CREATE TABLE session (
+        CREATE TABLE session_v2 (
             id TEXT PRIMARY KEY,
             project_id TEXT NOT NULL,
             parent_id TEXT,
             slug TEXT NOT NULL,
             directory TEXT NOT NULL,
-            title TEXT NOT NULL,
+            title TEXT,
             version TEXT NOT NULL,
-            share_url TEXT,
-            summary_additions INTEGER,
-            summary_deletions INTEGER,
-            summary_files INTEGER,
-            summary_diffs TEXT,
-            revert TEXT,
-            permission TEXT,
             time_created INTEGER NOT NULL,
-            time_updated INTEGER NOT NULL,
-            time_compacting INTEGER,
-            time_archived INTEGER,
-            workspace_id TEXT
+            time_updated INTEGER NOT NULL
         );
-        CREATE TABLE message (
+        CREATE TABLE session_message (
             id TEXT PRIMARY KEY,
             session_id TEXT NOT NULL,
-            time_created INTEGER NOT NULL,
-            time_updated INTEGER NOT NULL,
-            data TEXT NOT NULL
-        );
-        CREATE TABLE part (
-            id TEXT PRIMARY KEY,
-            message_id TEXT NOT NULL,
-            session_id TEXT NOT NULL,
+            type TEXT NOT NULL,
+            seq INTEGER NOT NULL,
             time_created INTEGER NOT NULL,
             time_updated INTEGER NOT NULL,
             data TEXT NOT NULL
@@ -101,7 +85,7 @@ fn seed_opencode_session(detail: &SessionDetail, session_id: &str) -> Result<()>
         .unwrap_or_else(|| "/tmp".to_string());
 
     connection.execute(
-        "INSERT INTO session (id, project_id, slug, directory, title, version, time_created, time_updated) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+        "INSERT INTO session_v2 (id, project_id, slug, directory, title, version, time_created, time_updated) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
         params![
             session_id,
             "project-1",
@@ -116,69 +100,98 @@ fn seed_opencode_session(detail: &SessionDetail, session_id: &str) -> Result<()>
 
     for (index, message) in detail.messages.iter().enumerate() {
         let message_time = message.timestamp.unwrap_or(created_at + index as i64);
-        let message_data = json!({
-            "role": message.role,
-            "time": { "created": message_time }
-        });
+        let kind = if message.role == "user" {
+            "user"
+        } else {
+            "assistant"
+        };
+        let data = if kind == "user" {
+            let text = message
+                .blocks
+                .iter()
+                .filter_map(|block| block.text.clone())
+                .collect::<Vec<_>>()
+                .join("\n");
+            json!({
+                "time": { "created": message_time },
+                "text": text,
+                "files": [],
+                "agents": [],
+            })
+        } else {
+            json!({
+                "time": { "created": message_time },
+                "agent": "build",
+                "content": seed_opencode_content(message),
+            })
+        };
 
-        connection.execute(
-            "INSERT INTO message (id, session_id, time_created, time_updated, data) VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![
-                message.id,
-                session_id,
-                message_time,
-                message_time,
-                serde_json::to_string(&message_data)?
-            ],
+        seed_opencode_message_row(
+            &connection,
+            session_id,
+            &format!("msg-seed-{index}"),
+            message_time,
+            index as i64,
+            kind,
+            &data,
         )?;
+    }
 
-        for (block_index, block) in message.blocks.iter().enumerate() {
-            let part_id = format!("part-{index}-{block_index}");
-            let part_data = match block.kind.as_str() {
-                "thinking" => json!({ "type": "reasoning", "text": block.text }),
-                "tool_use" => json!({
-                    "type": "tool",
-                    "tool": block.tool_name,
-                    "callID": block.tool_call_id,
-                    "state": {
-                        "status": "completed",
-                        "input": block.payload.as_ref().and_then(|payload| payload.get("input")).cloned().unwrap_or_else(|| json!({}))
-                    }
-                }),
-                "function_call_output" | "tool_result" => json!({
-                    "type": "tool",
-                    "tool": block.tool_name,
-                    "callID": block.tool_call_id,
-                    "state": {
-                        "status": "completed",
-                        "output": block.text.clone().unwrap_or_default()
-                    }
-                }),
-                "output_text" | "input_text" | "text" => {
-                    json!({ "type": "text", "text": block.text })
+    Ok(())
+}
+
+// 归一化块 → v2 content 块数组，形状与真实库一致：文本/思考是
+// {type,text}，工具调用与结果各自成 {type:"tool"} 块
+fn seed_opencode_content(message: &SessionMessage) -> Vec<Value> {
+    let mut content = Vec::new();
+
+    for block in &message.blocks {
+        match block.kind.as_str() {
+            "text" | "input_text" | "output_text" => {
+                if let Some(text) = block.text.clone() {
+                    content.push(json!({ "type": "text", "text": text }));
                 }
-                _ => json!({ "type": block.kind, "text": block.text }),
-            };
-
-            connection.execute(
-                "INSERT INTO part (id, message_id, session_id, time_created, time_updated, data) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-                params![
-                    part_id,
-                    message.id,
-                    session_id,
-                    message_time,
-                    message_time,
-                    serde_json::to_string(&part_data)?
-                ],
-            )?;
+            }
+            "thinking" => {
+                if let Some(text) = block.text.clone() {
+                    content.push(json!({ "type": "reasoning", "text": text }));
+                }
+            }
+            "tool_use" | "function_call" => {
+                content.push(json!({
+                    "type": "tool",
+                    "id": block.tool_call_id,
+                    "name": block.tool_name,
+                    "state": {
+                        "status": "running",
+                        "input": block.payload.as_ref().and_then(|payload| payload.get("input")).cloned().unwrap_or_else(|| json!({})),
+                        "content": [],
+                        "metadata": {},
+                    },
+                }));
+            }
+            "tool_result" | "function_call_output" => {
+                content.push(json!({
+                    "type": "tool",
+                    "id": block.tool_call_id,
+                    "name": block.tool_name,
+                    "state": {
+                        "status": "completed",
+                        "input": {},
+                        "content": [{ "type": "text", "text": block.text.clone().unwrap_or_default() }],
+                        "metadata": {},
+                    },
+                }));
+            }
+            _ => {
+                if let Some(text) = block.text.clone() {
+                    content.push(json!({ "type": "text", "text": text }));
+                }
+            }
         }
     }
 
-    let opencode_session_dir = session::opencode::root()?.join("session");
-    fs::create_dir_all(&opencode_session_dir)?;
-    File::create(opencode_session_dir.join(format!("{session_id}.opencode")))?;
-
-    Ok(())
+    content
 }
 
 fn seed_opencode_family(root_id: &str, child_id: &str) -> Result<()> {
@@ -191,38 +204,22 @@ fn seed_opencode_family(root_id: &str, child_id: &str) -> Result<()> {
     let connection = Connection::open(&db_path)?;
     connection.execute_batch(
         "
-        CREATE TABLE session (
+        CREATE TABLE session_v2 (
             id TEXT PRIMARY KEY,
             project_id TEXT NOT NULL,
             parent_id TEXT,
             slug TEXT NOT NULL,
             directory TEXT NOT NULL,
-            title TEXT NOT NULL,
+            title TEXT,
             version TEXT NOT NULL,
-            share_url TEXT,
-            summary_additions INTEGER,
-            summary_deletions INTEGER,
-            summary_files INTEGER,
-            summary_diffs TEXT,
-            revert TEXT,
-            permission TEXT,
             time_created INTEGER NOT NULL,
-            time_updated INTEGER NOT NULL,
-            time_compacting INTEGER,
-            time_archived INTEGER,
-            workspace_id TEXT
+            time_updated INTEGER NOT NULL
         );
-        CREATE TABLE message (
+        CREATE TABLE session_message (
             id TEXT PRIMARY KEY,
             session_id TEXT NOT NULL,
-            time_created INTEGER NOT NULL,
-            time_updated INTEGER NOT NULL,
-            data TEXT NOT NULL
-        );
-        CREATE TABLE part (
-            id TEXT PRIMARY KEY,
-            message_id TEXT NOT NULL,
-            session_id TEXT NOT NULL,
+            type TEXT NOT NULL,
+            seq INTEGER NOT NULL,
             time_created INTEGER NOT NULL,
             time_updated INTEGER NOT NULL,
             data TEXT NOT NULL
@@ -231,7 +228,7 @@ fn seed_opencode_family(root_id: &str, child_id: &str) -> Result<()> {
     )?;
 
     connection.execute(
-        "INSERT INTO session (id, project_id, parent_id, slug, directory, title, version, time_created, time_updated) VALUES (?1, ?2, NULL, ?3, ?4, ?5, ?6, ?7, ?8)",
+        "INSERT INTO session_v2 (id, project_id, parent_id, slug, directory, title, version, time_created, time_updated) VALUES (?1, ?2, NULL, ?3, ?4, ?5, ?6, ?7, ?8)",
         params![
             root_id,
             "project-1",
@@ -244,7 +241,7 @@ fn seed_opencode_family(root_id: &str, child_id: &str) -> Result<()> {
         ],
     )?;
     connection.execute(
-        "INSERT INTO session (id, project_id, parent_id, slug, directory, title, version, time_created, time_updated) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+        "INSERT INTO session_v2 (id, project_id, parent_id, slug, directory, title, version, time_created, time_updated) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
         params![
             child_id,
             "project-1",
@@ -258,64 +255,56 @@ fn seed_opencode_family(root_id: &str, child_id: &str) -> Result<()> {
         ],
     )?;
 
-    seed_opencode_message(
+    seed_opencode_message_row(
         &connection,
         root_id,
         "root-msg-1",
         1_744_366_400_000,
+        1,
         "user",
-        json!({ "type": "text", "text": "Root question" }),
+        &json!({
+            "time": { "created": 1_744_366_400_000_i64 },
+            "text": "Root question",
+            "files": [],
+            "agents": [],
+        }),
     )?;
-    seed_opencode_message(
+    seed_opencode_message_row(
         &connection,
         child_id,
         "child-msg-1",
         1_744_366_401_000,
+        1,
         "assistant",
-        json!({ "type": "text", "text": "Child answer" }),
+        &json!({
+            "time": { "created": 1_744_366_401_000_i64 },
+            "agent": "build",
+            "content": [{ "type": "text", "text": "Child answer" }],
+        }),
     )?;
-
-    let opencode_session_dir = session::opencode::root()?.join("session");
-    fs::create_dir_all(&opencode_session_dir)?;
-    File::create(opencode_session_dir.join(format!("{root_id}.opencode")))?;
-    File::create(opencode_session_dir.join(format!("{child_id}.opencode")))?;
 
     Ok(())
 }
 
-fn seed_opencode_message(
+fn seed_opencode_message_row(
     connection: &Connection,
     session_id: &str,
     message_id: &str,
     message_time: i64,
-    role: &str,
-    part_data: Value,
+    seq: i64,
+    kind: &str,
+    data: &Value,
 ) -> Result<()> {
-    let message_data = json!({
-        "role": role,
-        "time": { "created": message_time }
-    });
-
     connection.execute(
-        "INSERT INTO message (id, session_id, time_created, time_updated, data) VALUES (?1, ?2, ?3, ?4, ?5)",
+        "INSERT INTO session_message (id, session_id, type, seq, time_created, time_updated, data) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
         params![
             message_id,
             session_id,
+            kind,
+            seq,
             message_time,
             message_time,
-            serde_json::to_string(&message_data)?
-        ],
-    )?;
-
-    connection.execute(
-        "INSERT INTO part (id, message_id, session_id, time_created, time_updated, data) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-        params![
-            format!("part-{message_id}"),
-            message_id,
-            session_id,
-            message_time,
-            message_time,
-            serde_json::to_string(&part_data)?
+            serde_json::to_string(data)?
         ],
     )?;
 
