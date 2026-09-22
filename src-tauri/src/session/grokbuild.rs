@@ -9,7 +9,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use super::{
-    ContentBlock, SessionDetail, SessionEvent, SessionEventPage, SessionFileEntry, SessionMessage,
+    ContentBlock, SessionEvent, SessionEventPage, SessionFileEntry, SessionMessage,
     SessionMessagePage, SessionOverview, SessionReader, SessionSummary, SourceApp,
 };
 
@@ -381,20 +381,6 @@ fn family_source_paths(family: &Family<Row>) -> Result<Vec<String>> {
         paths.extend(source_paths(row.member_path().as_ref())?);
     }
     Ok(paths)
-}
-
-// 导出/详情需要成员正文：每个子代理按 marker + 自身消息顺序追加，
-// 不伪造跨会话的时间交错。
-fn family_messages(family: &Family<Row>) -> Result<Vec<SessionMessage>> {
-    let mut result = messages(family.root.member_path().as_ref())?;
-    for row in family.members.iter().filter(|row| row.meta.is_some()) {
-        if !row.readable {
-            bail!("Grok Build child session is not readable");
-        }
-        result.push(marker(row));
-        result.extend(messages(row.member_path().as_ref())?);
-    }
-    Ok(result)
 }
 
 // 所有入口（包括直接传入 transcript_path）都必须留在固定会话布局内。
@@ -784,15 +770,6 @@ impl SessionReader for GrokBuildBackend {
     ) -> Result<SessionEventPage> {
         summary(path)?;
         events_page(path, offset, limit)
-    }
-    fn parse_detail(&self, path: &Path) -> Result<SessionDetail> {
-        let family = family(path)?;
-        Ok(SessionDetail {
-            summary: family_summary(&family),
-            source_paths: family_source_paths(&family)?,
-            messages: family_messages(&family)?,
-            events: events_page(family.root.member_path().as_ref(), 0, usize::MAX)?.events,
-        })
     }
     fn parse_agent_messages(
         &self,

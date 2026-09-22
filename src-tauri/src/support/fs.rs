@@ -1,10 +1,8 @@
-use std::fs::{self, File};
-use std::io::Write;
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 
-use anyhow::{Context, Result, anyhow};
-use serde_json::Value;
+use anyhow::{Result, anyhow};
 use walkdir::WalkDir;
 
 pub(crate) fn grok_home_path(
@@ -14,17 +12,6 @@ pub(crate) fn grok_home_path(
     grok_home
         .map(PathBuf::from)
         .or_else(|| home.map(|path| path.join(".grok")))
-}
-
-pub(crate) fn effective_cwd(cwd: Option<&str>) -> Result<String> {
-    if let Some(cwd) = cwd {
-        return Ok(cwd.to_string());
-    }
-
-    Ok(user_home_dir()
-        .context("Unable to determine home directory")?
-        .display()
-        .to_string())
 }
 
 // dirs::home_dir() resolves through the known-folder API on Windows and
@@ -47,23 +34,6 @@ pub(crate) fn user_home_dir() -> Option<PathBuf> {
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     guard.clone().or_else(dirs::home_dir)
-}
-
-pub(crate) fn write_jsonl_file(path: &Path, lines: &[Value]) -> Result<()> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)
-            .with_context(|| format!("Failed to create {}", parent.display()))?;
-    }
-
-    let mut file =
-        File::create(path).with_context(|| format!("Failed to create {}", path.display()))?;
-
-    for line in lines {
-        serde_json::to_writer(&mut file, line)?;
-        writeln!(&mut file)?;
-    }
-
-    Ok(())
 }
 
 // Windows accepts both path separators, so the same file can spell its path

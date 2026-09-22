@@ -2,9 +2,7 @@ use std::path::PathBuf;
 
 use anyhow::Result;
 
-use super::{
-    SessionDetail, SessionEventPage, SessionMessage, SessionMessagePage, SessionOverview, SourceApp,
-};
+use super::{SessionEventPage, SessionMessage, SessionMessagePage, SessionOverview, SourceApp};
 
 pub(crate) fn get_session_overview_inner(
     source_app: SourceApp,
@@ -46,15 +44,6 @@ pub(crate) fn get_session_events_inner(
 ) -> Result<SessionEventPage> {
     let path = resolve_session_path(source_app, source_session_id, transcript_path)?;
     super::reader(source_app).parse_events_page(&path, offset, limit)
-}
-
-pub(crate) fn get_session_inner(
-    source_app: SourceApp,
-    source_session_id: &str,
-    transcript_path: Option<&str>,
-) -> Result<SessionDetail> {
-    let path = resolve_session_path(source_app, source_session_id, transcript_path)?;
-    super::reader(source_app).parse_detail(&path)
 }
 
 fn resolve_session_path(

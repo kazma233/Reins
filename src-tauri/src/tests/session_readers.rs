@@ -16,11 +16,7 @@ fn opencode_root_session_aggregates_subagent_sessions() -> Result<()> {
     assert_eq!(summary.source_session_id, root_id);
     assert!(summary.title.contains("+1 subagents"));
 
-    let detail = session::timeline::get_session_inner(
-        SourceApp::OpenCode,
-        root_id,
-        Some(root_path.to_string_lossy().as_ref()),
-    )?;
+    let detail = read_detail(session::reader(SourceApp::OpenCode), &root_path)?;
 
     assert!(
         detail
@@ -63,7 +59,7 @@ fn opencode_overview_counts_match_loaded_timeline() -> Result<()> {
     let root_path = session::opencode::session_path(root_id);
     let reader = session::reader(SourceApp::OpenCode);
     let overview = reader.parse_overview(&root_path)?;
-    let detail = reader.parse_detail(&root_path)?;
+    let detail = read_detail(reader, &root_path)?;
 
     assert_eq!(overview.message_count, Some(detail.messages.len()));
     assert_eq!(overview.event_count, Some(detail.events.len()));
@@ -294,7 +290,7 @@ fn claude_exposes_unsupported_message_content() -> Result<()> {
         })],
     )?;
 
-    let detail = session::reader(SourceApp::ClaudeCode).parse_detail(&session_file)?;
+    let detail = read_detail(session::reader(SourceApp::ClaudeCode), &session_file)?;
 
     assert!(detail.messages.iter().any(|message| {
         message.blocks.iter().any(|block| {
@@ -359,7 +355,7 @@ fn codex_exposes_unsupported_message_content_and_blocks() -> Result<()> {
         ],
     )?;
 
-    let detail = session::reader(SourceApp::Codex).parse_detail(&transcript_path)?;
+    let detail = read_detail(session::reader(SourceApp::Codex), &transcript_path)?;
 
     assert!(detail.messages.iter().any(|message| {
         message.blocks.iter().any(|block| {
@@ -454,7 +450,7 @@ fn opencode_exposes_messages_without_visible_parts() -> Result<()> {
     )?;
 
     let root_path = session::opencode::session_path(session_id);
-    let detail = session::reader(SourceApp::OpenCode).parse_detail(&root_path)?;
+    let detail = read_detail(session::reader(SourceApp::OpenCode), &root_path)?;
 
     assert!(detail.messages.iter().any(|message| {
         message.blocks.iter().any(|block| {
@@ -594,7 +590,7 @@ fn opencode_v2_parses_tool_content_and_non_message_events() -> Result<()> {
     )?;
 
     let root_path = session::opencode::session_path(session_id);
-    let detail = session::reader(SourceApp::OpenCode).parse_detail(&root_path)?;
+    let detail = read_detail(session::reader(SourceApp::OpenCode), &root_path)?;
 
     // 消息时间线只有 user/assistant 行
     assert_eq!(detail.messages.len(), 1);
@@ -749,7 +745,7 @@ fn claude_root_session_aggregates_subagent_sessions() -> Result<()> {
             && agent.label == "Find fetch_rss scheduling code(子)"
     }));
 
-    let detail = reader.parse_detail(&root_path)?;
+    let detail = read_detail(reader, &root_path)?;
     // Path equality treats '/' and '\' as equivalent on Windows, unlike the
     // raw string comparison against the mixed-separator test paths.
     assert_eq!(detail.source_paths.len(), 2);
@@ -778,11 +774,6 @@ fn claude_root_session_aggregates_subagent_sessions() -> Result<()> {
             .iter()
             .any(|event| event.kind == "subagent_started")
     );
-
-    let (_, exported_paths) = session::claude_code::write_session(&detail, "exported-session")?;
-    let exported = fs::read_to_string(&exported_paths[0])?;
-    assert!(!exported.contains("Sub-agent session:"));
-    assert!(!exported.contains("\"subagent_started\""));
 
     fs::remove_dir_all(&temp_home).ok();
     Ok(())
@@ -882,11 +873,7 @@ fn codex_root_session_aggregates_subagent_sessions() -> Result<()> {
     assert_eq!(summary.source_session_id, root_id);
     assert!(summary.title.contains("+1 subagents"));
 
-    let detail = session::timeline::get_session_inner(
-        SourceApp::Codex,
-        root_id,
-        Some(root_path.to_string_lossy().as_ref()),
-    )?;
+    let detail = read_detail(session::reader(SourceApp::Codex), &root_path)?;
 
     assert!(
         detail

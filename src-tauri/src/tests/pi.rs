@@ -286,7 +286,7 @@ fn pi_active_branch_and_events_follow_the_last_entry_chain() -> Result<()> {
     let reader = session::reader(SourceApp::Pi);
     let summary = reader.parse_summary(&path)?;
     assert_eq!(summary.title, "Named Pi session");
-    let detail = reader.parse_detail(&path)?;
+    let detail = read_detail(reader, &path)?;
     let texts = detail
         .messages
         .iter()
@@ -423,7 +423,7 @@ fn pi_parses_subagent_tool_result_into_structured_run_block() -> Result<()> {
     write_jsonl(&path, &lines)?;
 
     let reader = session::reader(SourceApp::Pi);
-    let detail = reader.parse_detail(&path)?;
+    let detail = read_detail(reader, &path)?;
     assert_eq!(detail.messages.len(), 3);
 
     // subagent toolResult 解析为单个结构化块,报告文本保留。
@@ -484,7 +484,7 @@ fn pi_parses_subagent_tool_result_into_structured_run_block() -> Result<()> {
         }),
     ));
     write_jsonl(&normal_path, &normal_lines)?;
-    let normal_detail = reader.parse_detail(&normal_path)?;
+    let normal_detail = read_detail(reader, &normal_path)?;
     assert_eq!(normal_detail.messages[0].blocks[0].kind, "tool_result");
 
     // Pi 的 subagent 内嵌在 toolResult.details 里,没有子会话可查:
@@ -577,7 +577,7 @@ fn pi_preserves_tool_custom_unknown_and_broken_chain_content() -> Result<()> {
     ];
     write_jsonl(&path, &entries)?;
 
-    let detail = session::reader(SourceApp::Pi).parse_detail(&path)?;
+    let detail = read_detail(session::reader(SourceApp::Pi), &path)?;
     assert!(detail.messages.iter().any(|message| {
         message.id == "a"
             && message
@@ -668,7 +668,7 @@ fn pi_skips_zero_width_text_placeholders_without_losing_tool_context() -> Result
         ],
     )?;
 
-    let detail = session::reader(SourceApp::Pi).parse_detail(&path)?;
+    let detail = read_detail(session::reader(SourceApp::Pi), &path)?;
     let message = detail
         .messages
         .iter()
@@ -723,7 +723,7 @@ fn pi_preserves_message_entries_without_message_payloads() -> Result<()> {
         ],
     )?;
 
-    let detail = session::reader(SourceApp::Pi).parse_detail(&path)?;
+    let detail = read_detail(session::reader(SourceApp::Pi), &path)?;
     assert_eq!(detail.messages.len(), 1);
     assert_eq!(detail.messages[0].role, "unknown");
     assert_eq!(detail.messages[0].blocks[0].kind, "unsupported_content");
@@ -768,7 +768,7 @@ fn pi_cycle_at_leaf_stops_without_looping() -> Result<()> {
         ],
     )?;
 
-    let detail = session::reader(SourceApp::Pi).parse_detail(&path)?;
+    let detail = read_detail(session::reader(SourceApp::Pi), &path)?;
     assert_eq!(detail.messages.len(), 2);
     assert_eq!(detail.messages[0].id, "cycle-a");
     assert_eq!(detail.messages[1].id, "cycle-b");
@@ -825,30 +825,6 @@ fn pi_reads_settings_json_session_dir_and_env_takes_precedence() -> Result<()> {
     let entries = session::reader(SourceApp::Pi).list_entries()?;
     assert_eq!(entries.len(), 1);
     assert_eq!(entries[0].path.parent(), Some(env_dir.as_path()));
-    Ok(())
-}
-
-#[test]
-fn pi_import_into_configured_dir_writes_at_dir_root() -> Result<()> {
-    let temp_home = env::temp_dir().join(format!("reins-test-{}", Uuid::new_v4()));
-    fs::create_dir_all(&temp_home)?;
-    let guard = TestEnvGuard::set_home(&temp_home);
-
-    // 默认布局:文件落在 <agentDir>/sessions/<encoded-cwd>/ 下
-    let (_, default_paths) =
-        session::pi::write_session(&sample_detail(SourceApp::Codex), "pi-layout-default")?;
-    assert!(default_paths[0].contains("--tmp-reins-workspace--"));
-
-    // 官方契约:显式配置的 sessionDir 是最终目录,文件直接写在其根下
-    let custom_dir = temp_home.join("custom-pi-sessions");
-    fs::create_dir_all(&custom_dir)?;
-    guard.set_pi_session_dir(&custom_dir);
-    let (_, custom_paths) =
-        session::pi::write_session(&sample_detail(SourceApp::Codex), "pi-layout-custom")?;
-    assert_eq!(
-        Path::new(&custom_paths[0]).parent(),
-        Some(custom_dir.as_path())
-    );
     Ok(())
 }
 
@@ -927,7 +903,7 @@ fn pi_parses_v1_linear_session_with_full_history() -> Result<()> {
     )?;
 
     let reader = session::reader(SourceApp::Pi);
-    let detail = reader.parse_detail(&path)?;
+    let detail = read_detail(reader, &path)?;
     let texts = detail
         .messages
         .iter()
@@ -1016,7 +992,7 @@ fn pi_restores_compaction_retained_tail_as_messages() -> Result<()> {
         ],
     )?;
 
-    let detail = session::reader(SourceApp::Pi).parse_detail(&path)?;
+    let detail = read_detail(session::reader(SourceApp::Pi), &path)?;
     let texts = detail
         .messages
         .iter()
@@ -1043,7 +1019,7 @@ fn pi_restores_compaction_retained_tail_as_messages() -> Result<()> {
 }
 
 #[test]
-fn pi_roundtrip_preserves_tool_failure_state() -> Result<()> {
+fn pi_parses_tool_failure_state() -> Result<()> {
     let temp_home = env::temp_dir().join(format!("reins-test-{}", Uuid::new_v4()));
     fs::create_dir_all(&temp_home)?;
     let _guard = TestEnvGuard::set_home(&temp_home);
@@ -1106,7 +1082,7 @@ fn pi_roundtrip_preserves_tool_failure_state() -> Result<()> {
         ],
     )?;
 
-    let detail = session::reader(SourceApp::Pi).parse_detail(&path)?;
+    let detail = read_detail(session::reader(SourceApp::Pi), &path)?;
     let tool_result = detail
         .messages
         .iter()
@@ -1118,83 +1094,5 @@ fn pi_roundtrip_preserves_tool_failure_state() -> Result<()> {
             .iter()
             .any(|block| block.is_error == Some(true))
     );
-
-    let (_, paths) = session::pi::write_session(&detail, "pi-failure-rt")?;
-    let lines = fs::read_to_string(&paths[0])?
-        .lines()
-        .map(serde_json::from_str::<Value>)
-        .collect::<std::result::Result<Vec<_>, _>>()?;
-    let bash = lines
-        .iter()
-        .find(|line| line["message"]["role"] == "bashExecution")
-        .expect("bash execution entry");
-    assert_eq!(bash["message"]["command"], "exit 1");
-    assert_eq!(bash["message"]["output"], "boom");
-    assert_eq!(bash["message"]["exitCode"], 1);
-    assert_eq!(bash["message"]["cancelled"], true);
-    assert_eq!(bash["message"]["truncated"], true);
-    let tool_result = lines
-        .iter()
-        .find(|line| line["message"]["role"] == "toolResult")
-        .expect("tool result entry");
-    assert_eq!(tool_result["message"]["isError"], true);
-    Ok(())
-}
-
-#[test]
-fn pi_export_entry_timestamps_follow_message_time() -> Result<()> {
-    let temp_home = env::temp_dir().join(format!("reins-test-{}", Uuid::new_v4()));
-    fs::create_dir_all(&temp_home)?;
-    let _guard = TestEnvGuard::set_home(&temp_home);
-
-    let (_, paths) = session::pi::write_session(&sample_detail(SourceApp::Codex), "pi-clocks")?;
-    let lines = fs::read_to_string(&paths[0])?
-        .lines()
-        .map(serde_json::from_str::<Value>)
-        .collect::<std::result::Result<Vec<_>, _>>()?;
-
-    // 第一条消息的外层 timestamp 跟随消息时间(session_info 占用创建时间,消息紧随其后)
-    let first_message = lines
-        .iter()
-        .find(|line| line["type"] == "message")
-        .expect("first message entry");
-    let outer = support::time::parse_timestamp(first_message["timestamp"].as_str().unwrap())
-        .expect("outer timestamp");
-    assert_eq!(outer, 1_744_366_400_001_i64);
-
-    // header 与 session_info 同为创建时刻;其余 entry 外层 timestamp 严格递增
-    let mut previous: Option<i64> = None;
-    for line in lines.iter().skip(1) {
-        let Some(raw) = line["timestamp"].as_str() else {
-            continue;
-        };
-        let timestamp = support::time::parse_timestamp(raw).expect("valid timestamp");
-        if let Some(previous) = previous {
-            assert!(timestamp > previous, "entry timestamps must increase");
-        }
-        previous = Some(timestamp);
-    }
-
-    // 倒序消息时间也不会让文件内时间回退
-    let mut detail = sample_detail(SourceApp::Codex);
-    for (index, message) in detail.messages.iter_mut().enumerate() {
-        message.timestamp = Some(1_744_366_400_000 - (index as i64) * 10_000);
-    }
-    let (_, paths) = session::pi::write_session(&detail, "pi-clocks-reverse")?;
-    let lines = fs::read_to_string(&paths[0])?
-        .lines()
-        .map(serde_json::from_str::<Value>)
-        .collect::<std::result::Result<Vec<_>, _>>()?;
-    let mut previous: Option<i64> = None;
-    for line in lines.iter().skip(1) {
-        let Some(raw) = line["timestamp"].as_str() else {
-            continue;
-        };
-        let timestamp = support::time::parse_timestamp(raw).expect("valid timestamp");
-        if let Some(previous) = previous {
-            assert!(timestamp > previous, "reverse clock must stay monotonic");
-        }
-        previous = Some(timestamp);
-    }
     Ok(())
 }

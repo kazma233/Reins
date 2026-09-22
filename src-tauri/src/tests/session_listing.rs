@@ -9,14 +9,8 @@ fn list_sessions_filters_by_session_id_on_backend() -> Result<()> {
     let target_id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
     let other_id = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
 
-    let _ = session::codex::write_session(
-        &sample_detail_with_id(SourceApp::Codex, target_id, 1_744_366_460_000),
-        target_id,
-    )?;
-    let _ = session::codex::write_session(
-        &sample_detail_with_id(SourceApp::Codex, other_id, 1_744_366_560_000),
-        other_id,
-    )?;
+    seed_codex_session(&temp_home, target_id)?;
+    seed_codex_session(&temp_home, other_id)?;
 
     let page = session::catalog::list_sessions_inner(
         &state::session_index::SessionIndexState::default(),
@@ -46,18 +40,9 @@ fn list_sessions_reverse_order_applies_before_paging() -> Result<()> {
     let middle_id = "22222222-2222-4222-8222-222222222222";
     let newest_id = "33333333-3333-4333-8333-333333333333";
 
-    let _ = session::codex::write_session(
-        &sample_detail_with_id(SourceApp::Codex, oldest_id, 1_744_366_400_000),
-        oldest_id,
-    )?;
-    let _ = session::codex::write_session(
-        &sample_detail_with_id(SourceApp::Codex, middle_id, 1_744_366_500_000),
-        middle_id,
-    )?;
-    let _ = session::codex::write_session(
-        &sample_detail_with_id(SourceApp::Codex, newest_id, 1_744_366_600_000),
-        newest_id,
-    )?;
+    seed_codex_session(&temp_home, oldest_id)?;
+    seed_codex_session(&temp_home, middle_id)?;
+    seed_codex_session(&temp_home, newest_id)?;
 
     let default_page = session::catalog::list_sessions_inner(
         &state::session_index::SessionIndexState::default(),
@@ -344,10 +329,7 @@ fn refresh_with_all_selection_returns_merged_page() -> Result<()> {
     let _guard = TestEnvGuard::set_home(&temp_home);
 
     let codex_id = "55555555-5555-4555-8555-555555555555";
-    let _ = session::codex::write_session(
-        &sample_detail_with_id(SourceApp::Codex, codex_id, 1_744_366_500_000),
-        codex_id,
-    )?;
+    seed_codex_session(&temp_home, codex_id)?;
 
     let result = session::catalog::refresh_sessions_inner(
         &state::session_index::SessionIndexState::default(),
@@ -376,41 +358,5 @@ fn slice_page_handles_offsets_beyond_range_without_panicking() -> Result<()> {
     assert_eq!(next_offset, None);
     assert_eq!(total_count, items.len());
 
-    Ok(())
-}
-
-#[test]
-fn generate_target_session_id_matches_target_app_format() -> Result<()> {
-    let codex_id = session::import::generate_target_session_id(SourceApp::Codex);
-    let claude_id = session::import::generate_target_session_id(SourceApp::ClaudeCode);
-    let opencode_id = session::import::generate_target_session_id(SourceApp::OpenCode);
-    let pi_id = session::import::generate_target_session_id(SourceApp::Pi);
-
-    assert!(uuid::Uuid::parse_str(&codex_id).is_ok());
-    assert!(uuid::Uuid::parse_str(&claude_id).is_ok());
-    assert!(opencode_id.starts_with("ses_"));
-    assert_eq!(opencode_id.len(), 36);
-    assert!(opencode_id[4..].chars().all(|ch| ch.is_ascii_hexdigit()));
-    assert!(uuid::Uuid::parse_str(&pi_id).is_ok());
-
-    Ok(())
-}
-
-#[test]
-fn effective_cwd_prefers_explicit_value_and_falls_back_to_home() -> Result<()> {
-    let temp_home = env::temp_dir().join(format!("reins-test-{}", Uuid::new_v4()));
-    fs::create_dir_all(&temp_home)?;
-    let _guard = TestEnvGuard::set_home(&temp_home);
-
-    assert_eq!(
-        support::fs::effective_cwd(Some("/tmp/project"))?,
-        "/tmp/project"
-    );
-    assert_eq!(
-        support::fs::effective_cwd(None)?,
-        temp_home.display().to_string()
-    );
-
-    fs::remove_dir_all(&temp_home).ok();
     Ok(())
 }

@@ -36,13 +36,6 @@ pub(crate) fn stringify_json(value: &Value) -> Option<String> {
     serde_json::to_string_pretty(value).ok()
 }
 
-pub(crate) fn block_text(block: &ContentBlock) -> Option<String> {
-    block
-        .text
-        .clone()
-        .or_else(|| block.payload.as_ref().and_then(stringify_json))
-}
-
 pub(crate) fn diagnostic_block(
     kind: &str,
     text: impl Into<String>,

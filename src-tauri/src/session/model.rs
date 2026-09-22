@@ -12,8 +12,6 @@ use ts_rs::TS;
 // src-tauri), keeping the generated types next to the code that consumes them
 // so the hand-written mirrors cannot drift from serde output.
 
-pub(crate) const IMPORTER_VERSION: &str = "reins/0.1.0";
-
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize, TS)]
 #[serde(rename_all = "snake_case")]
 #[ts(export, export_to = "../../src/features/sessions/generated/")]
@@ -91,7 +89,7 @@ pub(crate) struct ContentBlock {
     pub(crate) text: Option<String>,
     pub(crate) tool_name: Option<String>,
     pub(crate) tool_call_id: Option<String>,
-    // Pi toolResult 等来源携带工具失败标记,跨来源导出时需要原样透传。
+    // Pi toolResult 等来源携带工具失败标记,读取时原样透出,前端据此展示失败状态。
     #[serde(skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub(crate) is_error: Option<bool>,
@@ -142,15 +140,6 @@ pub(crate) struct SessionAgent {
     pub(crate) is_root: bool,
 }
 
-#[derive(Clone, Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct SessionDetail {
-    pub(crate) summary: SessionSummary,
-    pub(crate) source_paths: Vec<String>,
-    pub(crate) messages: Vec<SessionMessage>,
-    pub(crate) events: Vec<SessionEvent>,
-}
-
 #[derive(Clone, Debug, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export, export_to = "../../src/features/sessions/generated/")]
@@ -160,44 +149,6 @@ pub(crate) struct SessionOverview {
     pub(crate) message_count: Option<usize>,
     pub(crate) event_count: Option<usize>,
     pub(crate) agents: Vec<SessionAgent>,
-}
-
-#[derive(Clone, Copy, Debug, Serialize, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../src/features/sessions/generated/")]
-pub(crate) enum ImportLevel {
-    /// Contract placeholder for the planned full-fidelity import; the current
-    /// importer only ever produces Partial or Unsupported.
-    #[allow(dead_code)]
-    Full,
-    Partial,
-    Unsupported,
-}
-
-#[derive(Clone, Debug, Serialize, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../src/features/sessions/generated/")]
-pub(crate) struct ImportPreview {
-    pub(crate) source_app: SourceApp,
-    pub(crate) source_session_id: String,
-    pub(crate) target_app: SourceApp,
-    pub(crate) supported: bool,
-    pub(crate) import_level: ImportLevel,
-    pub(crate) warnings: Vec<String>,
-    pub(crate) created_paths: Vec<String>,
-    pub(crate) backup_paths: Vec<String>,
-}
-
-#[derive(Clone, Debug, Serialize, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../src/features/sessions/generated/")]
-pub(crate) struct ImportResult {
-    pub(crate) target_app: SourceApp,
-    pub(crate) created_session_id: String,
-    pub(crate) created_paths: Vec<String>,
-    pub(crate) backup_paths: Vec<String>,
-    pub(crate) resume_cwd: Option<String>,
-    pub(crate) warnings: Vec<String>,
 }
 
 #[derive(Clone, Debug, Serialize, TS)]

@@ -340,7 +340,7 @@ fn pi_timeline_cache_uses_file_mtime_as_its_freshness_boundary() -> Result<()> {
         .open(&path)?
         .set_times(fs::FileTimes::new().set_modified(original_mtime))?;
 
-    let first = session::reader(SourceApp::Pi).parse_detail(&path)?;
+    let first = read_detail(session::reader(SourceApp::Pi), &path)?;
     assert!(first.messages.iter().any(|message| {
         message
             .blocks
@@ -354,7 +354,7 @@ fn pi_timeline_cache_uses_file_mtime_as_its_freshness_boundary() -> Result<()> {
         .open(&path)?
         .set_times(fs::FileTimes::new().set_modified(original_mtime))?;
 
-    let cached = session::reader(SourceApp::Pi).parse_detail(&path)?;
+    let cached = read_detail(session::reader(SourceApp::Pi), &path)?;
     assert!(cached.messages.iter().any(|message| {
         message
             .blocks
@@ -374,7 +374,7 @@ fn pi_timeline_cache_uses_file_mtime_as_its_freshness_boundary() -> Result<()> {
         .open(&path)?
         .set_times(fs::FileTimes::new().set_modified(changed_mtime))?;
 
-    let refreshed = session::reader(SourceApp::Pi).parse_detail(&path)?;
+    let refreshed = read_detail(session::reader(SourceApp::Pi), &path)?;
     assert!(refreshed.messages.iter().any(|message| {
         message
             .blocks

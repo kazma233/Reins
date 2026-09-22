@@ -9,11 +9,9 @@ use super::catalog::{
     refresh_sessions_inner,
 };
 use super::delete::delete_session_inner;
-use super::import::{import_session_inner, preview_import_inner};
 use super::model::{
-    DeleteSessionResult, ImportPreview, ImportResult, SessionEventPage, SessionMessage,
-    SessionMessagePage, SessionOverview, SessionPage, SessionRefreshResult, SourceApp,
-    SourceStatus,
+    DeleteSessionResult, SessionEventPage, SessionMessage, SessionMessagePage, SessionOverview,
+    SessionPage, SessionRefreshResult, SourceApp, SourceStatus,
 };
 use super::timeline::{
     get_session_agent_messages_inner, get_session_events_inner, get_session_messages_inner,
@@ -186,46 +184,6 @@ pub(crate) async fn get_session_events(
             transcript_path.as_deref(),
             offset,
             limit,
-        )
-    })
-    .await
-}
-
-#[tauri::command]
-pub(crate) async fn preview_import(
-    source_app: String,
-    source_session_id: String,
-    target_app: String,
-    transcript_path: Option<String>,
-) -> std::result::Result<ImportPreview, String> {
-    let source = SourceApp::from_str(&source_app).map_err(|error| error.to_string())?;
-    let target = SourceApp::from_str(&target_app).map_err(|error| error.to_string())?;
-    run_blocking(move || {
-        preview_import_inner(
-            source,
-            &source_session_id,
-            target,
-            transcript_path.as_deref(),
-        )
-    })
-    .await
-}
-
-#[tauri::command]
-pub(crate) async fn import_session(
-    source_app: String,
-    source_session_id: String,
-    target_app: String,
-    transcript_path: Option<String>,
-) -> std::result::Result<ImportResult, String> {
-    let source = SourceApp::from_str(&source_app).map_err(|error| error.to_string())?;
-    let target = SourceApp::from_str(&target_app).map_err(|error| error.to_string())?;
-    run_blocking(move || {
-        import_session_inner(
-            source,
-            &source_session_id,
-            target,
-            transcript_path.as_deref(),
         )
     })
     .await

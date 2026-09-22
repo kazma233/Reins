@@ -252,8 +252,6 @@ fn grokbuild_missing_child_keeps_parent_readable() -> Result<()> {
         .unwrap_err()
         .to_string();
     assert!(error.contains("not readable"), "{error}");
-    // 导出路径必须报错，而不是输出缺正文的假会话。
-    assert!(reader.parse_detail(&entries[0].path).is_err());
     Ok(())
 }
 
@@ -423,7 +421,7 @@ fn grokbuild_summary_only_and_format_validation() -> Result<()> {
     let _guard = TestEnvGuard::set_home(home.as_path());
     let path = fixture(home.as_path(), "empty")?;
     let reader = session::reader(SourceApp::GrokBuild);
-    let detail = reader.parse_detail(&path)?;
+    let detail = read_detail(reader, &path)?;
     assert!(detail.messages.is_empty() && detail.events.is_empty());
     assert_eq!(detail.summary.title, "Synthetic title");
     assert_eq!(
@@ -443,7 +441,7 @@ fn grokbuild_summary_only_and_format_validation() -> Result<()> {
     fs::write(&path, serde_json::to_vec(&value)?)?;
     assert!(
         reader
-            .parse_detail(&path)
+            .parse_events_page(&path, 0, 1)
             .unwrap_err()
             .to_string()
             .contains("chat_format_version")
@@ -459,7 +457,7 @@ fn grokbuild_normalizes_messages_without_stream_duplicates_or_encrypted_content(
     let path = fixture(home.as_path(), "messages")?;
     history(&path)?;
     let reader = session::reader(SourceApp::GrokBuild);
-    let detail = reader.parse_detail(&path)?;
+    let detail = read_detail(reader, &path)?;
     assert_eq!(detail.messages.len(), 6);
     assert_eq!(detail.messages[1].blocks[1].kind, "image");
     assert_eq!(
@@ -472,7 +470,7 @@ fn grokbuild_normalizes_messages_without_stream_duplicates_or_encrypted_content(
     );
     assert_eq!(detail.messages[4].blocks[0].is_error, Some(false));
     assert_eq!(detail.messages[5].blocks[0].is_error, Some(true));
-    let serialized = serde_json::to_string(&detail)?;
+    let serialized = serde_json::to_string(&detail.messages)?;
     assert!(
         !serialized.contains("NEVER_EXPOSE")
             && !serialized.contains("encrypted_content")
@@ -497,7 +495,7 @@ fn grokbuild_normalizes_messages_without_stream_duplicates_or_encrypted_content(
         ],
     )?;
     assert_eq!(
-        reader.parse_detail(&path)?.messages[5].blocks[0].is_error,
+        read_detail(reader, &path)?.messages[5].blocks[0].is_error,
         Some(false)
     );
     write_jsonl(
@@ -523,7 +521,7 @@ fn grokbuild_truncated_tool_arguments_stay_readable() -> Result<()> {
             json!({"type":"tool_result","tool_call_id":"trunc","content":"Failed to parse arguments for tool `use_tool`"}),
         ],
     )?;
-    let detail = session::reader(SourceApp::GrokBuild).parse_detail(&path)?;
+    let detail = read_detail(session::reader(SourceApp::GrokBuild), &path)?;
     let tool = &detail.messages[1].blocks[0];
     assert_eq!(tool.kind, "tool_use");
     assert_eq!(tool.tool_name.as_deref(), Some("use_tool"));
@@ -588,18 +586,26 @@ fn grokbuild_rejects_external_paths_and_mismatched_ids() -> Result<()> {
     fs::copy(&path, &outside)?;
     assert!(
         session::reader(SourceApp::GrokBuild)
-            .parse_detail(&outside)
+            .parse_messages_page(&outside, 0, 10)
             .is_err()
     );
+    // 直接传入 transcript_path 也必须校验会话 id 归属。
     assert!(
-        session::timeline::get_session_inner(SourceApp::GrokBuild, "other", path.to_str()).is_err()
+        session::timeline::get_session_messages_inner(
+            SourceApp::GrokBuild,
+            "other",
+            path.to_str(),
+            0,
+            10
+        )
+        .is_err()
     );
     #[cfg(unix)]
     {
         std::os::unix::fs::symlink(&outside, path.with_file_name("chat_history.jsonl"))?;
         assert!(
             session::reader(SourceApp::GrokBuild)
-                .parse_detail(&path)
+                .parse_messages_page(&path, 0, 10)
                 .is_err()
         );
     }
@@ -675,28 +681,12 @@ fn grokbuild_large_events_page_and_auxiliary_changes_are_fresh() -> Result<()> {
 }
 
 #[test]
-fn grokbuild_import_and_delete_boundaries_and_export_roundtrip() -> Result<()> {
+fn grokbuild_delete_boundary() -> Result<()> {
     let home = env::temp_dir().join(format!("reins-test-{}", Uuid::new_v4()));
     fs::create_dir_all(&home)?;
     let _guard = TestEnvGuard::set_home(home.as_path());
     let path = fixture(home.as_path(), "export")?;
     history(&path)?;
-    let preview = session::import::preview_import_inner(
-        SourceApp::GrokBuild,
-        "export",
-        SourceApp::GrokBuild,
-        path.to_str(),
-    )?;
-    assert!(!preview.supported && preview.created_paths.is_empty());
-    assert!(
-        session::import::import_session_inner(
-            SourceApp::GrokBuild,
-            "export",
-            SourceApp::GrokBuild,
-            path.to_str()
-        )
-        .is_err()
-    );
     assert!(
         session::delete::delete_session_inner(
             &state::session_index::SessionIndexState::default(),
@@ -707,65 +697,5 @@ fn grokbuild_import_and_delete_boundaries_and_export_roundtrip() -> Result<()> {
         .is_err()
     );
     assert!(path.exists());
-    for target in [SourceApp::Codex, SourceApp::OpenCode] {
-        let preview = session::import::preview_import_inner(
-            SourceApp::GrokBuild,
-            "export",
-            target,
-            path.to_str(),
-        )?;
-        assert!(preview.supported);
-        assert!(
-            preview
-                .warnings
-                .iter()
-                .any(|warning| warning.contains("not tool failure flags"))
-        );
-    }
-    assert!(session::exporter(SourceApp::GrokBuild).is_err());
-    for target in [SourceApp::Pi, SourceApp::ClaudeCode] {
-        let result = session::import::import_session_inner(
-            SourceApp::GrokBuild,
-            "export",
-            target,
-            path.to_str(),
-        )?;
-        let preview = session::import::preview_import_inner(
-            target,
-            &result.created_session_id,
-            SourceApp::GrokBuild,
-            None,
-        )?;
-        assert!(!preview.supported && preview.created_paths.is_empty());
-        assert!(
-            session::import::import_session_inner(
-                target,
-                &result.created_session_id,
-                SourceApp::GrokBuild,
-                None
-            )
-            .is_err()
-        );
-        let detail =
-            session::timeline::get_session_inner(target, &result.created_session_id, None)?;
-        let blocks = detail
-            .messages
-            .iter()
-            .flat_map(|m| &m.blocks)
-            .collect::<Vec<_>>();
-        assert!(
-            blocks
-                .iter()
-                .any(|b| b.kind == "thinking" && b.text.as_deref() == Some("Synthetic thought"))
-        );
-        assert!(
-            blocks
-                .iter()
-                .any(|b| b.text.as_deref() == Some("Synthetic answer"))
-        );
-        assert!(blocks.iter().any(|b| b.kind == "tool_result"
-            && b.tool_call_id.as_deref() == Some("bad")
-            && b.is_error == Some(true)));
-    }
     Ok(())
 }
