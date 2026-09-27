@@ -28,18 +28,18 @@
 
 .manager-field__label {
   color: var(--color-body);
-  font-size: 13px;
+  font-size: var(--font-size-md);
 }
 
 .manager-field span {
   color: var(--color-body);
-  font-size: 13px;
+  font-size: var(--font-size-md);
 }
 
 .manager-field__hint {
   margin: -2px 0 0;
   color: var(--color-muted);
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   line-height: 1.5;
 }
 
@@ -53,7 +53,7 @@
   border-radius: 0;
   background: rgba(255, 255, 255, 0.88);
   color: var(--color-ink);
-  font-size: 14px;
+  font-size: var(--font-size-lg);
   line-height: 1.4;
   appearance: none;
 }
@@ -134,7 +134,7 @@
   border-radius: var(--radius-md);
   background: var(--color-canvas);
   color: var(--color-ink);
-  font-size: 14px;
+  font-size: var(--font-size-lg);
   line-height: 1.4;
   appearance: none;
   min-height: var(--control-height);
@@ -222,7 +222,7 @@
   display: inline-flex;
   align-items: center;
   color: var(--color-body);
-  font-size: 0.92rem;
+  font-size: var(--font-size-lg);
   line-height: 1.4;
 }
 
@@ -316,42 +316,15 @@
   flex: 1 1 auto;
   overflow-x: hidden;
   overflow-y: auto;
+  /* 右侧给纵向滚动条留出间距，卡片和按钮不被滚动条压住 */
+  padding-right: 14px;
 }
 
 .manager-card-actions--start {
   justify-content: flex-start;
 }
 
-.manager-skill-row {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  padding: 12px 14px;
-}
-
-.manager-skill-row__header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.manager-skill-main {
-  display: flex;
-  min-width: 0;
-  flex: 1 1 auto;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.manager-skill-headline {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-
+/* 名称 + 时间戳的组合行：导入确认弹窗、批量导入结果列表仍在使用 */
 .manager-skill-headline__meta {
   display: flex;
   align-items: center;
@@ -362,7 +335,7 @@
 }
 
 .manager-skill-name {
-  font-size: 16px;
+  font-size: var(--font-size-xl);
   font-weight: 600;
   line-height: 1.3;
   color: var(--color-ink);
@@ -370,34 +343,27 @@
 
 .manager-skill-updated {
   color: var(--color-body);
-  font-size: 13px;
+  font-size: var(--font-size-md);
   white-space: nowrap;
-}
-
-.manager-skill-delete-button {
-  min-height: 26px;
-  padding: 2px 7px;
-  border-radius: 0;
-  font-size: 12px;
 }
 
 .manager-skill-description {
   margin: 0;
   color: var(--color-body);
-  font-size: 13px;
+  font-size: var(--font-size-md);
   line-height: 1.5;
 }
 
 .manager-skill-path-label {
   color: var(--color-muted);
-  font-size: 12px;
+  font-size: var(--font-size-sm);
 }
 
 .manager-skill-more-button {
   min-height: 22px;
   padding: 1px 7px;
   border-radius: 0;
-  font-size: 12px;
+  font-size: var(--font-size-sm);
 }
 
 .manager-target-buttons {
@@ -420,7 +386,7 @@
   /* 与按钮同高，换行时标签仍与第一行对齐 */
   line-height: 26px;
   color: var(--color-muted);
-  font-size: 11px;
+  font-size: var(--font-size-xs);
   font-weight: 600;
   letter-spacing: 0.04em;
 }
@@ -433,7 +399,7 @@
 .manager-target-button {
   min-height: 26px;
   padding: 3px 10px;
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   transition: box-shadow 0.16s ease;
 }
 
@@ -491,14 +457,14 @@
 }
 
 .manager-excluded-skill-section__title {
-  font-size: 13px;
+  font-size: var(--font-size-md);
   font-weight: 600;
   color: var(--color-ink);
 }
 
 .manager-excluded-skill-section__count {
   color: var(--color-muted);
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   white-space: nowrap;
 }
 
@@ -550,7 +516,7 @@
   align-items: center;
   gap: 8px;
   padding: 0 6px 6px;
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   font-weight: 600;
   color: var(--color-muted);
   text-transform: uppercase;
@@ -570,7 +536,7 @@
 .manager-sync-target-group__action {
   min-height: 22px;
   padding: 1px 7px;
-  font-size: 11px;
+  font-size: var(--font-size-xs);
   text-transform: none;
   letter-spacing: 0;
 }
@@ -614,7 +580,7 @@
 }
 
 .manager-sync-target-row__label {
-  font-size: 14px;
+  font-size: var(--font-size-lg);
   font-weight: 600;
   color: var(--color-ink);
 }
@@ -636,7 +602,7 @@
 .manager-sync-target-row__tag {
   padding: 1px 5px;
   border-radius: 4px;
-  font-size: 10px;
+  font-size: var(--font-size-xs);
   font-weight: 500;
   line-height: 1.4;
   white-space: nowrap;
@@ -653,7 +619,7 @@
 }
 
 .manager-sync-target-row__path {
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   color: var(--color-body);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -664,14 +630,14 @@
   flex-shrink: 0;
   padding: 2px 8px;
   border-radius: 10px;
-  font-size: 11px;
+  font-size: var(--font-size-xs);
   font-weight: 500;
   line-height: 1.4;
 }
 
 /* Linked target hint: skillDir is a symlink to another managed target. */
 .manager-sync-target-row__link {
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   color: var(--color-muted);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -706,7 +672,7 @@
 .manager-sync-target-links > summary {
   cursor: pointer;
   color: var(--color-body);
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   line-height: 1.6;
 }
 
@@ -744,14 +710,14 @@
 
 .manager-sync-target-link__name {
   color: var(--color-ink);
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   font-weight: 600;
 }
 
 .manager-sync-target-link__source {
   overflow: hidden;
   color: var(--color-body);
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -761,7 +727,7 @@
   overflow: hidden;
   color: var(--color-muted);
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--font-size-xs);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -770,7 +736,7 @@
   flex: 0 0 auto;
   padding: 1px 6px;
   border-radius: var(--radius-pill);
-  font-size: 11px;
+  font-size: var(--font-size-xs);
   line-height: 1.5;
   white-space: nowrap;
 }
@@ -861,7 +827,7 @@
 
 .manager-sync-column__title {
   margin: 0;
-  font-size: 13px;
+  font-size: var(--font-size-md);
   font-weight: 600;
   color: var(--color-body);
 }
@@ -889,7 +855,7 @@
 .manager-sync-column__action {
   min-height: 24px;
   padding: 2px 8px;
-  font-size: 12px;
+  font-size: var(--font-size-sm);
 }
 
 /* 破坏性操作靠左，与右下角的“取消/开始同步”拉开距离，避免误点 */
@@ -920,7 +886,7 @@
 }
 
 .manager-sync-dialog .manager-import-skill-row .manager-skill-name {
-  font-size: 13px;
+  font-size: var(--font-size-md);
   font-weight: 500;
   line-height: 1.25;
 }
@@ -931,7 +897,7 @@
   padding: 6px 10px;
   border: 1px solid var(--color-hairline);
   border-radius: 6px;
-  font-size: 13px;
+  font-size: var(--font-size-md);
   background: var(--color-canvas);
   color: var(--color-ink);
   margin: 0 0 6px;
@@ -943,7 +909,7 @@
   border: 1px dashed var(--color-hairline);
   border-radius: 6px;
   padding: 6px 10px;
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   color: var(--color-muted);
 }
 
@@ -972,12 +938,19 @@
   gap: 8px;
 }
 
+/* 组内条目为 AppCard 卡片，纵向排列留出卡片间距 */
+.manager-target-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
 .manager-target-group__header {
   display: flex;
   align-items: center;
   justify-content: space-between;
   padding: 0 4px 8px;
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   font-weight: 600;
   color: var(--color-muted);
   text-transform: uppercase;
@@ -987,83 +960,13 @@
 .manager-target-group__header .secondary-button {
   min-height: 24px;
   padding: 2px 8px;
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   text-transform: none;
   letter-spacing: 0;
 }
 
-.manager-target-row {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 10px 14px;
-  border-bottom: 1px solid var(--color-hairline-soft);
-  transition: background-color 0.12s ease;
-}
-
-.manager-target-row--project {
-  align-items: flex-start;
-}
-
-.manager-target-row:last-child {
-  border-bottom: none;
-}
-
-.manager-target-row:hover {
-  background-color: var(--color-surface-soft);
-}
-
-.manager-target-row__icon {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-  width: 28px;
-  height: 28px;
-  border-radius: 6px;
-  font-size: 13px;
-  font-weight: 700;
-}
-
-.manager-target-row__icon.icon--on {
-  background: #ecfdf5;
-  color: #059669;
-}
-
-.manager-target-row__icon.icon--off {
-  background: #f3f4f6;
-  color: #9ca3af;
-}
-
-.manager-target-row__icon.icon--project {
-  background: #eef2ff;
-  color: #4f46e5;
-}
-
-.manager-target-row__body {
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-  min-width: 0;
-  flex: 1 1 auto;
-}
-
-.manager-target-row__headline {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.manager-target-row__headline--project {
-  flex-wrap: wrap;
-}
-
-.manager-target-row__actions--project {
-  margin-left: auto;
-}
-
-.manager-target-row__name {
-  font-size: 14px;
+.manager-target-row__name-text {
+  font-size: var(--font-size-lg);
   font-weight: 600;
   color: var(--color-ink);
 }
@@ -1071,14 +974,14 @@
 .manager-target-row__pill {
   padding: 1px 7px;
   border-radius: 10px;
-  font-size: 11px;
+  font-size: var(--font-size-xs);
   font-weight: 500;
   line-height: 1.5;
   white-space: nowrap;
 }
 
 .manager-target-row__meta {
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   color: var(--color-body);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1097,6 +1000,16 @@
 
 .manager-target-row__meta--paths span {
   overflow-wrap: anywhere;
+}
+
+/* 键名弱化、路径为主体：与 providers 卡片 meta 的键值处理一致；
+   键名退出容器的等宽字体，避免短标签也显得像代码 */
+.manager-target-row__meta--paths strong,
+.manager-project-target-path__items strong {
+  font-weight: 400;
+  color: var(--color-muted-soft);
+  margin-right: 6px;
+  font-family: var(--font-base);
 }
 
 .manager-project-target-paths {
@@ -1124,7 +1037,7 @@
 
 .manager-project-target-path__name {
   color: var(--color-ink);
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   font-weight: 600;
 }
 
@@ -1135,7 +1048,7 @@
   min-width: 0;
   color: var(--color-body);
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   line-height: 1.45;
 }
 
@@ -1150,20 +1063,10 @@
 }
 
 .manager-target-row__actions .secondary-button,
-.manager-target-row__actions .warning-button,
 .manager-target-row__actions .danger-button {
   min-height: 26px;
   padding: 3px 8px;
-  font-size: 12px;
-}
-
-.manager-skill-source-row {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 12px 14px;
-  border-bottom: 1px solid var(--color-hairline-soft);
-  transition: background-color 0.15s ease;
+  font-size: var(--font-size-sm);
 }
 
 .manager-skill-source-groups {
@@ -1182,61 +1085,21 @@
   justify-content: space-between;
   gap: 12px;
   padding-bottom: 8px;
-  padding-right: 14px;
-  border-bottom: 1px solid var(--color-hairline);
   color: var(--color-muted);
-  font-size: 12px;
+  font-size: var(--font-size-sm);
 }
 
 .manager-skill-source-group__header h2 {
   margin: 0;
   color: var(--color-ink);
-  font-size: 14px;
+  font-size: var(--font-size-lg);
   font-weight: 600;
 }
 
-.manager-skill-source-group__list .manager-skill-source-row:first-child {
-  padding-top: 12px;
-}
-
-.manager-skill-source-row:last-child {
-  border-bottom: none;
-}
-
-.manager-skill-source-row:hover {
-  background-color: var(--color-surface-soft);
-}
-
-.manager-skill-source-row__icon--git,
-.manager-skill-source-row__icon--local {
+.manager-skill-source-group__list {
   display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-  width: 32px;
-  height: 32px;
-  border-radius: 6px;
-  font-size: 15px;
-  font-weight: 700;
-  line-height: 1;
-}
-
-.manager-skill-source-row__icon--git {
-  background: #eef2ff;
-  color: #4f46e5;
-}
-
-.manager-skill-source-row__icon--local {
-  background: #ecfdf5;
-  color: #059669;
-}
-
-.manager-skill-source-row__main {
-  display: flex;
-  flex: 1 1 auto;
   flex-direction: column;
-  gap: 3px;
-  min-width: 0;
+  gap: 8px;
 }
 
 .manager-skill-source-row__checkbox {
@@ -1248,7 +1111,7 @@
 }
 
 .manager-skill-source-row__label {
-  font-size: 14px;
+  font-size: var(--font-size-lg);
   font-weight: 600;
   color: var(--color-ink);
   min-width: 0;
@@ -1259,7 +1122,7 @@
 
 .manager-skill-source-row__meta {
   color: var(--color-body);
-  font-size: 12px;
+  font-size: var(--font-size-sm);
 }
 
 .manager-skill-source-row__patterns {
@@ -1278,26 +1141,23 @@
 
 .manager-skill-source-row__pattern-label {
   color: var(--color-muted);
-  font-size: 11px;
+  font-size: var(--font-size-xs);
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.5px;
 }
 
+/* 匹配规则保留等宽便于读准 glob，但去掉胶囊底与描边，降低视觉噪音 */
 .manager-skill-source-row__pattern-chip {
-  padding: 1px 6px;
-  border-radius: var(--radius-pill);
-  background: var(--color-surface-soft);
-  border: 1px solid var(--color-hairline-soft);
   color: var(--color-body);
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--font-size-xs);
   line-height: 1.5;
 }
 
 .manager-skill-source-row__pattern-empty {
   color: var(--color-muted-soft);
-  font-size: 12px;
+  font-size: var(--font-size-sm);
 }
 
 .manager-skill-source-row__actions {
@@ -1311,14 +1171,14 @@
   flex: 0 0 auto;
   min-height: 26px;
   padding: 3px 8px;
-  font-size: 12px;
+  font-size: var(--font-size-sm);
 }
 
 .manager-pre {
   display: block;
   margin: 0;
   padding: 10px 12px;
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   overflow: auto;
   white-space: pre-wrap;
   word-break: break-word;
@@ -1346,10 +1206,6 @@
   .manager-picker-row {
     flex-direction: column;
     align-items: stretch;
-  }
-
-  .manager-skill-row__header {
-    flex-direction: column;
   }
 }
 
@@ -1419,7 +1275,6 @@
 .manager-segmented__button,
 .manager-nav__button,
 .manager-target-button,
-.manager-skill-delete-button,
 .manager-skill-more-button {
   border-color: var(--color-hairline);
   border-radius: var(--radius-button);
@@ -1444,27 +1299,12 @@
 .manager-import-shell,
 .manager-skill-row,
 .manager-import-skill-row,
-.manager-skill-source-row {
-  border: 0;
-  border-bottom: 1px solid var(--color-hairline-soft);
-  border-radius: 0;
-  background: transparent;
-}
-
 .manager-import-shell {
   padding: 16px 0;
 }
 
-.manager-skill-row,
-.manager-import-skill-row,
-.manager-skill-source-row {
+.manager-import-skill-row {
   padding: 14px 0;
-}
-
-/* 行满宽排版，但右侧要给纵向滚动条留出间距，避免操作按钮被滚动条压住 */
-.manager-skill-row,
-.manager-skill-source-row {
-  padding-right: 14px;
 }
 
 .manager-import-skill-list--compact {
@@ -1478,7 +1318,7 @@
 }
 
 .manager-import-skill-row--compact .manager-skill-name {
-  font-size: 13px;
+  font-size: var(--font-size-md);
   font-weight: 500;
   line-height: 1.25;
 }
@@ -1486,10 +1326,6 @@
 .manager-excluded-skill-section--compact {
   gap: 6px;
   padding: 8px;
-}
-
-.manager-skill-source-row {
-  align-items: flex-start;
 }
 
 .pill {

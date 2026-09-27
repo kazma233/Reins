@@ -13,7 +13,7 @@
    select 背景盖住；stacked 的 static label 不受影响。 */
   z-index: 1;
   color: var(--color-muted);
-  font-size: 10px;
+  font-size: var(--font-size-xs);
   font-weight: 600;
   line-height: 1;
   letter-spacing: 0.04em;
@@ -33,7 +33,7 @@
     url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath d='M2.5 4.5 6 8l3.5-3.5' fill='none' stroke='%237c828a' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E")
     no-repeat right 14px center;
   color: var(--color-ink);
-  font-size: 14px;
+  font-size: var(--font-size-lg);
   font-weight: 600;
   line-height: 1.15;
   box-shadow: none;
@@ -72,7 +72,7 @@
 .app-select--stacked .app-select__label {
   position: static;
   color: var(--color-body);
-  font-size: 13px;
+  font-size: var(--font-size-md);
   font-weight: 400;
   letter-spacing: 0;
   text-transform: none;
@@ -86,7 +86,7 @@
   /* 只覆盖颜色，保留基础规则画在背景上的下拉箭头。 */
   background-color: var(--color-canvas);
   color: var(--color-ink);
-  font-size: 14px;
+  font-size: var(--font-size-lg);
   font-weight: 400;
   line-height: 1.2;
   box-shadow: none;

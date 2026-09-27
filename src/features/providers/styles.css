@@ -50,7 +50,7 @@
   border-radius: var(--radius-button);
   background: var(--color-surface-soft, rgba(255, 255, 255, 0.9));
   color: var(--color-body);
-  font-size: 13px;
+  font-size: var(--font-size-md);
   font-weight: 600;
   cursor: pointer;
 }
@@ -83,13 +83,13 @@
 .providers-section-title {
   margin: 0;
   color: var(--color-ink);
-  font-size: 15px;
+  font-size: var(--font-size-xl);
 }
 
 .providers-section-hint {
   margin: 0;
   color: var(--color-muted);
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   line-height: 1.5;
 }
 
@@ -99,38 +99,18 @@
   gap: 12px;
 }
 
-.providers-card {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  padding: 14px;
-  border: 1px solid var(--color-hairline);
-  border-radius: var(--radius-md, 8px);
-  background: var(--color-surface-soft, rgba(255, 255, 255, 0.92));
-}
-
-.providers-card__title-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-}
+/* 卡片结构（header 条 + 右侧 ext / 内容 / actions 条）由 shared 的
+   AppCard 提供，这里只保留内容样式。 */
 
 .providers-card__title {
   margin: 0;
   color: var(--color-ink);
-  font-size: 16px;
-}
-
-.providers-card__flags {
-  display: flex;
-  align-items: center;
-  gap: 8px;
+  font-size: var(--font-size-xl);
 }
 
 .providers-card__models {
   color: var(--color-muted);
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   white-space: nowrap;
 }
 
@@ -140,7 +120,7 @@
   gap: 4px;
   margin: 0;
   color: var(--color-muted);
-  font-size: 12px;
+  font-size: var(--font-size-sm);
 }
 
 .providers-card__meta > div {
@@ -161,6 +141,11 @@
   word-break: break-all;
 }
 
+/* Base URL 是外部服务地址，用等宽和普通描述文本区分开 */
+.providers-card__meta .providers-card__url {
+  font-family: var(--font-mono);
+}
+
 .providers-card__actions {
   display: flex;
   flex-wrap: wrap;
@@ -179,7 +164,7 @@
 .providers-entry__note {
   margin: 0;
   color: var(--color-muted);
-  font-size: 12px;
+  font-size: var(--font-size-sm);
 }
 
 .providers-badge {
@@ -189,7 +174,7 @@
   border: 1px solid var(--color-hairline);
   border-radius: 999px;
   color: var(--color-body);
-  font-size: 11px;
+  font-size: var(--font-size-xs);
   line-height: 18px;
   white-space: nowrap;
 }
@@ -219,13 +204,13 @@
   border: 1px dashed var(--color-hairline);
   border-radius: var(--radius-md, 8px);
   color: var(--color-muted);
-  font-size: 13px;
+  font-size: var(--font-size-md);
   text-align: center;
 }
 
 .providers-loading {
   color: var(--color-muted);
-  font-size: 13px;
+  font-size: var(--font-size-md);
   padding: 8px 0;
 }
 
@@ -239,13 +224,13 @@
 
 .providers-field span {
   color: var(--color-body);
-  font-size: 13px;
+  font-size: var(--font-size-md);
 }
 
 .providers-field__hint {
   margin: -2px 0 0;
   color: var(--color-muted);
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   line-height: 1.5;
 }
 
@@ -287,7 +272,7 @@
 
 .providers-model-row__id {
   color: var(--color-ink);
-  font-size: 13px;
+  font-size: var(--font-size-md);
   font-weight: 600;
   word-break: break-all;
 }
@@ -321,7 +306,7 @@
 /* 思考等级多选下拉由 shared/ui/AppMultiSelect 提供，样式随组件自持。 */
 
 .providers-model-row__grid .providers-field span {
-  font-size: 12px;
+  font-size: var(--font-size-sm);
 }
 
 .providers-fetched-list {
@@ -340,7 +325,7 @@
   align-items: center;
   gap: 8px;
   color: var(--color-body);
-  font-size: 13px;
+  font-size: var(--font-size-md);
 }
 
 .providers-diff {
@@ -351,7 +336,7 @@
   background: rgba(0, 0, 0, 0.03);
   color: var(--color-ink);
   font-family: var(--font-mono, ui-monospace, monospace);
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   line-height: 1.55;
   overflow: auto;
   max-height: 320px;
@@ -366,7 +351,7 @@
   padding: 0;
   list-style: none;
   color: #a56a08;
-  font-size: 12px;
+  font-size: var(--font-size-sm);
 }
 
 .providers-blockers {
@@ -377,7 +362,7 @@
   padding: 0;
   list-style: none;
   color: #b3261e;
-  font-size: 12px;
+  font-size: var(--font-size-sm);
 }
 
 /* ---------------------------------------------------------------------------
@@ -392,55 +377,28 @@
   gap: 10px;
 }
 
-.providers-app {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  padding: 12px 14px;
-  border: 1px solid var(--color-hairline);
-  border-radius: var(--radius-md);
-  background: var(--color-canvas);
-}
-
-.providers-app__head {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px 12px;
-}
+/* 卡片结构（header 条 / 内容区 / footer 条）由 shared 的 AppCard 提供，
+   这里只保留页面内的标题、元信息与候选按钮样式。 */
 
 .providers-app__title {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.providers-app__title h4 {
   margin: 0;
   color: var(--color-ink);
-  font-size: 14px;
-}
-
-.providers-app__actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
+  font-size: var(--font-size-lg);
 }
 
 /* 前置"应用"标签：比按钮文字更大更醒目 */
 .providers-app__actions-label {
   align-self: center;
   color: var(--color-ink);
-  font-size: 14px;
+  font-size: var(--font-size-lg);
   font-weight: 600;
 }
 
 /* 提供商按钮缩小尺寸，避免在标签旁显得过于笨重 */
-.providers-app__actions .secondary-button {
+.providers-app__chip {
   min-height: 26px;
   padding: 3px 10px;
-  font-size: 12px;
+  font-size: var(--font-size-sm);
 }
 
 .providers-app__meta {
@@ -448,7 +406,7 @@
   flex-wrap: wrap;
   gap: 2px 14px;
   color: var(--color-muted);
-  font-size: 12px;
+  font-size: var(--font-size-sm);
 }
 
 .providers-app__meta span {
@@ -457,7 +415,7 @@
 
 .providers-app__meta .providers-app__path {
   font-family: var(--font-mono);
-  font-size: 11.5px;
+  font-size: var(--font-size-sm);
 }
 
 .providers-app__meta strong {
@@ -477,7 +435,7 @@
   border-radius: var(--radius-button);
   background: var(--color-canvas);
   color: var(--color-body);
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   cursor: pointer;
 }
 
@@ -529,7 +487,7 @@
 .providers-entry-row__key {
   color: var(--color-ink);
   font-family: var(--font-mono);
-  font-size: 13px;
+  font-size: var(--font-size-md);
   font-weight: 600;
   word-break: break-all;
 }
@@ -544,7 +502,7 @@
   flex-wrap: wrap;
   gap: 2px 16px;
   color: var(--color-muted);
-  font-size: 12px;
+  font-size: var(--font-size-sm);
 }
 
 .providers-entry-row__sub span {
@@ -553,11 +511,11 @@
 
 .providers-entry-row__sub .providers-entry-row__url {
   font-family: var(--font-mono);
-  font-size: 11.5px;
+  font-size: var(--font-size-sm);
 }
 
 .providers-entry-row__note {
   color: var(--color-muted-soft);
-  font-size: 11.5px;
+  font-size: var(--font-size-sm);
   word-break: break-all;
 }

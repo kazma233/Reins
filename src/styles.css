@@ -30,13 +30,20 @@
   --z-toast: 1000;
   color: var(--color-ink);
   background: var(--color-canvas);
-  font-family: system-ui, sans-serif;
+  font-family: var(--font-base);
   font-synthesis: none;
   line-height: 1.5;
   font-weight: 400;
 }
 
 :root {
+  /* 字号刻度：xs 徽标/标签、sm 次要文本与按钮、md 正文、lg 卡片与分组标题、xl 页面级标题 */
+  --font-size-xs: 11px;
+  --font-size-sm: 12px;
+  --font-size-md: 13px;
+  --font-size-lg: 14px;
+  --font-size-xl: 16px;
+  --font-base: system-ui, sans-serif;
   --font-mono:
     ui-monospace,
     monospace;
@@ -169,7 +176,7 @@ pre {
   border-radius: var(--radius-pill);
   background: var(--color-surface-soft);
   color: var(--color-body);
-  font-size: 13px;
+  font-size: var(--font-size-md);
 }
 
 .empty-state,

@@ -45,7 +45,7 @@
 }
 
 .detail-header h2 {
-  font-size: 16px;
+  font-size: var(--font-size-xl);
   font-weight: 600;
   line-height: 1.4;
   overflow-wrap: anywhere;
@@ -56,7 +56,7 @@
   margin: 2px 0 0;
   color: var(--color-muted);
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -82,13 +82,13 @@
 .summary-grid dt {
   flex: 0 0 auto;
   color: var(--color-muted);
-  font-size: 12px;
+  font-size: var(--font-size-sm);
 }
 
 .summary-grid dd {
   min-width: 0;
   margin: 0;
-  font-size: 13px;
+  font-size: var(--font-size-md);
   white-space: nowrap;
 }
 
@@ -141,7 +141,7 @@
   border-radius: 999px;
   background: var(--color-surface-strong);
   color: var(--color-ink);
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   text-transform: uppercase;
   letter-spacing: 0.06em;
 }
@@ -207,7 +207,7 @@
   border-radius: var(--radius-control);
   background: var(--color-canvas);
   color: var(--color-ink);
-  font-size: 13px;
+  font-size: var(--font-size-md);
   line-height: 1.4;
 }
 
@@ -238,7 +238,7 @@
   border-radius: var(--radius-button);
   background: var(--color-canvas);
   color: var(--color-muted);
-  font-size: 13px;
+  font-size: var(--font-size-md);
   font-weight: 500;
   cursor: pointer;
   transition: background 0.15s, color 0.15s;
@@ -304,7 +304,7 @@
 }
 
 .message-source-chip-label {
-  font-size: 11px;
+  font-size: var(--font-size-xs);
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.08em;
@@ -316,7 +316,7 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   font-weight: 600;
 }
 
@@ -376,14 +376,14 @@
   border-radius: 6px;
   background: rgba(0, 82, 255, 0.08);
   color: var(--color-primary);
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   font-weight: 600;
   letter-spacing: 0.02em;
 }
 
 .event-summary {
   margin: 6px 0 0;
-  font-size: 13px;
+  font-size: var(--font-size-md);
   color: var(--color-body);
 }
 
@@ -392,7 +392,7 @@
   padding: 8px 10px;
   border-radius: 8px;
   background: var(--color-surface-strong);
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   max-height: 200px;
   overflow: auto;
 }
@@ -406,7 +406,7 @@
   border-radius: 999px;
   background: rgba(0, 82, 255, 0.08);
   color: var(--color-primary);
-  font-size: 11px;
+  font-size: var(--font-size-xs);
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.08em;
@@ -459,7 +459,7 @@
 
 .delete-dialog-method-title {
   color: var(--color-ink);
-  font-size: 13px;
+  font-size: var(--font-size-md);
   font-weight: 700;
   letter-spacing: 0.04em;
   text-transform: uppercase;
@@ -480,7 +480,7 @@
 
 .delete-dialog-command-title {
   color: var(--color-ink);
-  font-size: 13px;
+  font-size: var(--font-size-md);
   font-weight: 700;
   letter-spacing: 0.04em;
   text-transform: uppercase;
@@ -551,7 +551,7 @@
   background: var(--color-surface-soft);
   color: var(--color-body);
   cursor: pointer;
-  font-size: 12px;
+  font-size: var(--font-size-sm);
 }
 
 .flow-tool-row:hover {
@@ -583,7 +583,7 @@
 
 .flow-tool-status {
   flex: 0 0 auto;
-  font-size: 11px;
+  font-size: var(--font-size-xs);
   font-weight: 700;
 }
 
@@ -599,7 +599,7 @@
   flex: 0 0 auto;
   margin-left: auto;
   color: var(--color-muted-soft);
-  font-size: 11px;
+  font-size: var(--font-size-xs);
 }
 
 .flow-tool-detail {
@@ -608,7 +608,7 @@
   border-radius: var(--radius-control);
   background: var(--color-surface-soft);
   color: var(--color-body);
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   max-height: 320px;
   overflow: auto;
   white-space: pre-wrap;
@@ -621,7 +621,7 @@
   border-radius: var(--radius-pill);
   background: rgba(124, 130, 138, 0.15);
   color: var(--color-muted);
-  font-size: 11px;
+  font-size: var(--font-size-xs);
   font-weight: 700;
 }
 
@@ -632,7 +632,7 @@
 .flow-thinking-pre {
   margin: 0;
   color: var(--color-body);
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   white-space: pre-wrap;
   word-break: break-word;
 }
@@ -657,7 +657,7 @@
 .flow-subagent-name {
   flex: 0 0 auto;
   color: var(--color-primary);
-  font-size: 13px;
+  font-size: var(--font-size-md);
 }
 
 .flow-subagent-title {
@@ -667,7 +667,7 @@
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--color-body);
-  font-size: 12px;
+  font-size: var(--font-size-sm);
 }
 
 .flow-marker {
@@ -676,7 +676,7 @@
   border-radius: var(--radius-pill);
   background: var(--color-surface-strong);
   color: var(--color-muted);
-  font-size: 11px;
+  font-size: var(--font-size-xs);
   font-weight: 700;
 }
 
@@ -686,7 +686,7 @@
   flex: 0 0 auto;
   padding: 2px 8px;
   border-radius: var(--radius-pill);
-  font-size: 11px;
+  font-size: var(--font-size-xs);
   font-weight: 700;
 }
 
@@ -709,7 +709,7 @@
 }
 
 .subagent-run-exit {
-  font-size: 11px;
+  font-size: var(--font-size-xs);
   font-weight: 700;
   font-variant-numeric: tabular-nums;
   color: var(--color-danger);
@@ -723,7 +723,7 @@
   border-radius: 6px;
   color: var(--color-danger);
   background: rgba(207, 32, 47, 0.06);
-  font-size: 11px;
+  font-size: var(--font-size-xs);
   white-space: pre-wrap;
   word-break: break-word;
 }
@@ -741,7 +741,7 @@
   padding: 2px 8px;
   border-radius: var(--radius-pill);
   background: rgba(124, 130, 138, 0.12);
-  font-size: 11px;
+  font-size: var(--font-size-xs);
 }
 
 .subagent-usage-label {
@@ -789,7 +789,7 @@
 }
 
 .subagent-dialog-task-label {
-  font-size: 11px;
+  font-size: var(--font-size-xs);
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.08em;
@@ -797,7 +797,7 @@
 }
 
 .subagent-dialog-task > span:last-child {
-  font-size: 13px;
+  font-size: var(--font-size-md);
   line-height: 1.6;
   white-space: pre-wrap;
   word-break: break-word;

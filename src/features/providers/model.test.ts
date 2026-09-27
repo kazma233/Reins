@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { ProviderAppState, ProviderView } from "./generated";
 import {
   applyBlockers,
+  applyCandidates,
   entriesForProvider,
   normalizeProviderIdInput,
   protocolCompatible,
@@ -161,5 +162,50 @@ describe("entriesForProvider", () => {
     });
     expect(entriesForProvider(app, "openrouter")).toHaveLength(1);
     expect(entriesForProvider(app, "other")).toHaveLength(0);
+  });
+});
+
+describe("applyCandidates", () => {
+  function entry(
+    key: string,
+    status: ProviderAppState["entries"][number]["status"],
+    providerId: string | null
+  ): ProviderAppState["entries"][number] {
+    return {
+      key,
+      status,
+      providerId,
+      label: null,
+      baseUrl: null,
+      modelIds: [],
+      defaultModelId: null,
+      notes: [],
+    };
+  }
+
+  it("hides providers that already have a reins entry, applied or drifted", () => {
+    const app = appState({
+      entries: [
+        entry("reins-glm", "applied", "glm"),
+        entry("reins-ds", "drifted", "deepseek"),
+      ],
+    });
+    const candidates = applyCandidates(app, [
+      provider({ id: "glm" }),
+      provider({ id: "deepseek" }),
+      provider({ id: "tokenflux" }),
+    ]);
+    expect(candidates.map((item) => item.id)).toEqual(["tokenflux"]);
+  });
+
+  it("keeps providers whose entries are only external", () => {
+    const app = appState({ entries: [entry("someone-else", "external", null)] });
+    const candidates = applyCandidates(app, [provider({ id: "glm" })]);
+    expect(candidates.map((item) => item.id)).toEqual(["glm"]);
+  });
+
+  it("keeps every provider when the app has no entries", () => {
+    const candidates = applyCandidates(appState(), [provider()]);
+    expect(candidates).toHaveLength(1);
   });
 });

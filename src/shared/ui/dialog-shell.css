@@ -126,7 +126,7 @@
 .dialog-eyebrow {
   margin-bottom: 2px;
   color: var(--color-danger);
-  font-size: 11px;
+  font-size: var(--font-size-xs);
   font-weight: 700;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -162,7 +162,7 @@
   border-radius: var(--radius-button);
   cursor: pointer;
   white-space: nowrap;
-  font-size: 13px;
+  font-size: var(--font-size-md);
   font-weight: 600;
   line-height: 1.2;
   transition:
@@ -188,13 +188,12 @@
   box-shadow: 0 1px 2px rgba(10, 11, 13, 0.04);
 }
 
+/* 破坏性操作统一描边红：降噪，同时保留红色警示语义 */
 .danger-button {
-  color: #ffffff;
-  background: var(--color-danger);
-  border-color: var(--color-danger);
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.16),
-    0 1px 2px rgba(10, 11, 13, 0.08);
+  color: var(--color-danger);
+  background: var(--color-canvas);
+  border-color: color-mix(in srgb, var(--color-danger) 35%, transparent);
+  box-shadow: 0 1px 2px rgba(10, 11, 13, 0.04);
 }
 
 .warning-button {
@@ -217,8 +216,8 @@
 }
 
 .danger-button:hover:not(:disabled) {
-  background: #b91c29;
-  border-color: #b91c29;
+  background: color-mix(in srgb, var(--color-danger) 6%, transparent);
+  border-color: var(--color-danger);
 }
 
 .warning-button:hover:not(:disabled) {

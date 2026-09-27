@@ -54,7 +54,7 @@ export const REASONING_LEVEL_LABELS: Record<ReasoningLevel, string> = {
 
 export const ENTRY_STATUS_LABELS: Record<ProviderAppEntryStatus, string> = {
   applied: "已应用",
-  drifted: "漂移",
+  drifted: "配置有偏差",
   external: "外部配置",
 };
 
@@ -151,12 +151,27 @@ export function applyBlockers(
   return blockers;
 }
 
-// 工具卡片上属于指定提供商的条目（已应用 / 漂移），外部配置不算。
+// 工具卡片上属于指定提供商的条目（已应用 / 配置有偏差），外部配置不算。
 export function entriesForProvider(
   appState: ProviderAppState,
   providerId: string
 ): ProviderAppEntry[] {
   return appState.entries.filter((entry) => entry.providerId === providerId);
+}
+
+// 「应用提供商」候选列表：提供商在本工具已写入 reins- 条目（已应用或配
+// 置有偏差）时不再重复出现，应用状态由条目行 tag 表达；外部配置不阻止
+// 候选，因为它不属于任何 Reins 平台。
+export function applyCandidates(
+  appState: ProviderAppState,
+  providers: ProviderView[]
+): ProviderView[] {
+  const managedIds = new Set(
+    appState.entries
+      .map((entry) => entry.providerId)
+      .filter((id): id is string => typeof id === "string" && id !== "")
+  );
+  return providers.filter((provider) => !managedIds.has(provider.id));
 }
 
 // ---------------------------------------------------------------------------

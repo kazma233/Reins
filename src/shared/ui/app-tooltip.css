@@ -18,7 +18,7 @@
   background: var(--color-surface-dark);
   color: var(--color-on-primary);
   word-break: break-all;
-  font-size: 11px;
+  font-size: var(--font-size-xs);
   font-weight: 400;
   line-height: 1.4;
   text-align: left;

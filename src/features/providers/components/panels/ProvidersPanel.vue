@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { reactive, ref } from "vue";
 import ConfirmDialog from "@shared/ui/ConfirmDialog.vue";
+import AppCard from "@shared/ui/AppCard.vue";
 import { deleteProvider, setProviderKey, upsertProvider } from "../../api";
 import {
   formFromProvider,
@@ -114,16 +115,16 @@ function confirmDeleteProvider() {
     <div v-if="loadingState" class="providers-loading">读取中…</div>
 
     <div v-else-if="state && state.providers.length > 0" class="providers-card-grid">
-      <article v-for="provider in state.providers" :key="provider.id" class="providers-card">
-        <div class="providers-card__title-row">
+      <AppCard v-for="provider in state.providers" :key="provider.id">
+        <template #header>
           <h4 class="providers-card__title">{{ provider.label }}</h4>
-          <div class="providers-card__flags">
-            <span class="providers-card__models">{{ provider.models.length }} 个模型</span>
-            <span class="providers-badge" :class="provider.keyPresent ? 'providers-badge--applied' : 'providers-badge--muted'">
-              {{ provider.keyPresent ? "已设 Key" : "未设 Key" }}
-            </span>
-          </div>
-        </div>
+        </template>
+        <template #ext>
+          <span class="providers-card__models">{{ provider.models.length }} 个模型</span>
+          <span class="providers-badge" :class="provider.keyPresent ? 'providers-badge--applied' : 'providers-badge--muted'">
+            {{ provider.keyPresent ? "已设 Key" : "未设 Key" }}
+          </span>
+        </template>
 
         <dl class="providers-card__meta">
           <div>
@@ -136,19 +137,19 @@ function confirmDeleteProvider() {
           </div>
           <div>
             <dt>Base URL</dt>
-            <dd>{{ provider.baseUrl }}</dd>
+            <dd class="providers-card__url">{{ provider.baseUrl }}</dd>
           </div>
         </dl>
 
-        <div class="providers-card__actions">
+        <template #actions>
           <button class="secondary-button" :disabled="runningAction" type="button" @click="openEdit(provider.id)">
             编辑
           </button>
           <button class="danger-button" :disabled="runningAction" type="button" @click="requestDeleteProvider(provider.id)">
             删除提供商
           </button>
-        </div>
-      </article>
+        </template>
+      </AppCard>
     </div>
 
     <div v-else class="providers-empty">

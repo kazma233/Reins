@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import ConfirmDialog from "@shared/ui/ConfirmDialog.vue";
+import AppCard from "@shared/ui/AppCard.vue";
 import ProjectCreateDialog from "../dialogs/ProjectCreateDialog.vue";
 import TargetCreateDialog from "../dialogs/TargetCreateDialog.vue";
 import { useProjectMutations } from "../../composables/useProjectMutations";
@@ -81,55 +82,49 @@ const projectsWithEnabledAgents = computed(() =>
                 <span>全局 targets · {{ configTargets.length }} 项</span>
               </div>
               <template v-if="configTargets.length">
-                <div
+                <AppCard
                   v-for="target in configTargets"
                   :key="target.id"
-                  class="manager-target-row"
                 >
-                  <span :class="`manager-target-row__icon ${target.enabled ? 'icon--on' : 'icon--off'}`">
-                    {{ target.enabled ? "✓" : "✗" }}
-                  </span>
-                  <div class="manager-target-row__body">
-                    <div class="manager-target-row__headline">
-                      <span class="manager-target-row__name">{{ formatTargetLabel(target.id) }}</span>
-                      <span :class="`manager-target-row__pill ${target.enabled ? 'pill--on' : 'pill--off'}`">
-                        {{ target.enabled ? "启用" : "禁用" }}
-                      </span>
+                  <template #header>
+                    <span class="manager-target-row__name-text">{{ formatTargetLabel(target.id) }}</span>
+                    <!-- 启用是常态不标注，只有停用才提示；状态变化由「停用/启用」按钮承载 -->
+                    <span v-if="!target.enabled" class="manager-target-row__pill pill--off">已停用</span>
+                  </template>
+                  <template #ext>
+                    <div class="manager-target-row__actions">
+                      <button
+                        class="secondary-button"
+                        :disabled="runningAction"
+                        type="button"
+                        @click="openTargetEditDialog(target)"
+                      >
+                        编辑
+                      </button>
+                      <button
+                        class="secondary-button"
+                        :disabled="runningAction"
+                        type="button"
+                        @click="toggleTargetEnabled(target)"
+                      >
+                        {{ target.enabled ? "停用" : "启用" }}
+                      </button>
+                      <button
+                        class="danger-button"
+                        :disabled="runningAction"
+                        type="button"
+                        @click="openTargetDeleteDialog(target.id)"
+                      >
+                        删除
+                      </button>
                     </div>
-                    <div class="manager-target-row__meta manager-target-row__meta--paths">
-                      <span>skill: {{ target.skillDir }}</span>
-                      <span v-if="target.configPath">
-                        mcp: {{ target.configPath }} ({{ target.mcpConfigPrefix }})
-                      </span>
-                    </div>
+                  </template>
+
+                  <div class="manager-target-row__meta manager-target-row__meta--paths">
+                    <span><strong>skill</strong><span>{{ target.skillDir }}</span></span>
+                    <span v-if="target.configPath"><strong>mcp</strong><span>{{ target.configPath }} ({{ target.mcpConfigPrefix }})</span></span>
                   </div>
-                  <div class="manager-target-row__actions">
-                    <button
-                      class="secondary-button"
-                      :disabled="runningAction"
-                      type="button"
-                      @click="openTargetEditDialog(target)"
-                    >
-                      编辑
-                    </button>
-                    <button
-                      :class="target.enabled ? 'warning-button' : 'secondary-button'"
-                      :disabled="runningAction"
-                      type="button"
-                      @click="toggleTargetEnabled(target)"
-                    >
-                      {{ target.enabled ? "停用" : "启用" }}
-                    </button>
-                    <button
-                      class="danger-button"
-                      :disabled="runningAction"
-                      type="button"
-                      @click="openTargetDeleteDialog(target.id)"
-                    >
-                      删除
-                    </button>
-                  </div>
-                </div>
+                </AppCard>
               </template>
               <div v-else class="empty-state">当前没有全局 target。</div>
             </div>
@@ -139,64 +134,60 @@ const projectsWithEnabledAgents = computed(() =>
                 <span>项目 targets · {{ configProjects.length }} 项</span>
               </div>
               <template v-if="configProjects.length">
-                <div
+                <AppCard
                   v-for="{ project, enabledAgents } in projectsWithEnabledAgents"
                   :key="project.id"
-                  class="manager-target-row manager-target-row--project"
                 >
-                  <span class="manager-target-row__icon icon--project">P</span>
-                  <div class="manager-target-row__body">
-                    <div class="manager-target-row__headline manager-target-row__headline--project">
-                      <span class="manager-target-row__name">{{ project.id }}</span>
-                      <span class="manager-target-row__pill pill--on">
-                        {{ enabledAgents.length }} agents
-                      </span>
-                      <div class="manager-target-row__actions manager-target-row__actions--project">
-                        <button
-                          class="secondary-button"
-                          :disabled="runningAction"
-                          type="button"
-                          @click="openProjectEditDialog(project)"
-                        >
-                          编辑
-                        </button>
-                        <button
-                          class="danger-button"
-                          :disabled="runningAction"
-                          type="button"
-                          @click="openProjectDeleteDialog(project.id)"
-                        >
-                          删除
-                        </button>
-                      </div>
-                    </div>
-                    <div class="manager-target-row__meta">
-                      <span>{{ project.path }}</span>
-                    </div>
-                    <div class="manager-project-target-paths">
-                      <div
-                        v-for="target in project.agents"
-                        :key="target.id"
-                        class="manager-project-target-path"
+                  <template #header>
+                    <span class="manager-target-row__name-text">{{ project.id }}</span>
+                    <span class="manager-target-row__pill pill--on">
+                      {{ enabledAgents.length }} agents
+                    </span>
+                  </template>
+                  <template #ext>
+                    <div class="manager-target-row__actions">
+                      <button
+                        class="secondary-button"
+                        :disabled="runningAction"
+                        type="button"
+                        @click="openProjectEditDialog(project)"
                       >
-                        <div class="manager-project-target-path__headline">
-                          <span class="manager-project-target-path__name">
-                            {{ formatTargetLabel(target.id) }}
-                          </span>
-                          <span :class="`manager-target-row__pill ${target.enabled ? 'pill--on' : 'pill--off'}`">
-                            {{ target.enabled ? "启用" : "禁用" }}
-                          </span>
-                        </div>
-                        <div class="manager-project-target-path__items">
-                          <span>skill: {{ target.skillDir }}</span>
-                          <span v-if="target.configPath">
-                            mcp: {{ target.configPath }} ({{ target.mcpConfigPrefix }})
-                          </span>
-                        </div>
+                        编辑
+                      </button>
+                      <button
+                        class="danger-button"
+                        :disabled="runningAction"
+                        type="button"
+                        @click="openProjectDeleteDialog(project.id)"
+                      >
+                        删除
+                      </button>
+                    </div>
+                  </template>
+
+                  <div class="manager-target-row__meta">
+                    <span>{{ project.path }}</span>
+                  </div>
+                  <div class="manager-project-target-paths">
+                    <div
+                      v-for="target in project.agents"
+                      :key="target.id"
+                      class="manager-project-target-path"
+                    >
+                      <div class="manager-project-target-path__headline">
+                        <span class="manager-project-target-path__name">
+                          {{ formatTargetLabel(target.id) }}
+                        </span>
+                        <!-- 启用是常态不标注，与外层卡片的状态处理一致 -->
+                        <span v-if="!target.enabled" class="manager-target-row__pill pill--off">已停用</span>
+                      </div>
+                      <div class="manager-project-target-path__items">
+                        <span><strong>skill</strong><span>{{ target.skillDir }}</span></span>
+                        <span v-if="target.configPath"><strong>mcp</strong><span>{{ target.configPath }} ({{ target.mcpConfigPrefix }})</span></span>
                       </div>
                     </div>
                   </div>
-                </div>
+                </AppCard>
               </template>
               <div v-else class="empty-state">当前还没有项目 targets。</div>
             </div>

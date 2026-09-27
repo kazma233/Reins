@@ -31,7 +31,7 @@
 - 提供商元数据存放在 `<reins 目录>/providers.yaml`，API Key 存系统密钥管理（service `me.kazma.reins`）
 - 模型支持手工新增、从提供商 `/models` 接口拉取、从 models.dev 预填元数据（本地缓存 24 小时）
 - 一键应用到 Codex、Claude Code、OpenCode（v2）、Pi、Grok Build 的全局配置文件：应用前可预览变更 diff（密钥脱敏），支持指定默认模型与思考等级
-- 反读工具配置，识别「已应用 / 漂移 / 外部配置」；只管理 `reins-` 前缀条目，用户手工配置不受影响
+- 反读工具配置，识别「已应用 / 配置有偏差 / 外部配置」；已应用的提供商不再重复出现在「应用提供商」候选里；只管理 `reins-` 前缀条目，用户手工配置不受影响
 
 ### Skills 导入项管理
 

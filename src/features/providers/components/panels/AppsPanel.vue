@@ -1,11 +1,18 @@
 <script setup lang="ts">
 import { computed, reactive, ref } from "vue";
 import ConfirmDialog from "@shared/ui/ConfirmDialog.vue";
+import AppCard from "@shared/ui/AppCard.vue";
 import { applyProviderToApp, removeExternalEntry, removeProviderFromApp } from "../../api";
-import type { ApplyProviderInput, ProviderAppId, ProviderView } from "../../generated";
+import type {
+  ApplyProviderInput,
+  ProviderAppEntry,
+  ProviderAppId,
+  ProviderView,
+} from "../../generated";
 import {
   APP_LABELS,
   ENTRY_STATUS_LABELS,
+  applyCandidates,
   protocolCompatible,
   protocolLabel,
   reasoningEffortMappingText,
@@ -59,6 +66,17 @@ function openApply(app: ProviderAppId, providerId: string) {
   applyDialog.open = true;
 }
 
+// 漂移条目的重新应用目标：平台仍存在才可重新应用；平台已删除的漂移
+// 条目没有平台元数据，返回 null 不出按钮。
+function reapplyProvider(entry: ProviderAppEntry): ProviderView | null {
+  if (entry.status !== "drifted" || !entry.providerId) {
+    return null;
+  }
+  return (
+    state.value?.providers.find((provider) => provider.id === entry.providerId) ?? null
+  );
+}
+
 function confirmApply(input: ApplyProviderInput) {
   runProvidersAction({
     action: () => applyProviderToApp(input),
@@ -101,7 +119,7 @@ function confirmRemove() {
       <div>
         <h3 class="providers-section-title">Agent</h3>
         <p class="providers-section-hint">
-          反读五个工具的全局配置文件；`reins-` 前缀条目按 providers.yaml 归类为「已应用 / 漂移」，其余按外部配置展示，可按条目删除。
+          反读五个工具的全局配置文件；`reins-` 前缀条目按 providers.yaml 归类为「已应用 / 配置有偏差」，其余按外部配置展示，可按条目删除。
         </p>
       </div>
     </div>
@@ -109,31 +127,30 @@ function confirmRemove() {
     <div v-if="loadingState" class="providers-loading">读取中…</div>
 
     <div v-else-if="state" class="providers-app-list">
-      <section v-for="appState in state.apps" :key="appState.app" class="providers-app">
-        <header class="providers-app__head">
-          <div class="providers-app__title">
-            <h4>{{ APP_LABELS[appState.app] }}</h4>
-            <span class="providers-badge providers-badge--muted">
-              {{ appState.additive ? "多提供商并存" : "单活动提供商" }}
-            </span>
+      <AppCard v-for="appState in state.apps" :key="appState.app">
+        <template #header>
+          <h4 class="providers-app__title">{{ APP_LABELS[appState.app] }}</h4>
+          <span class="providers-badge providers-badge--muted">
+            {{ appState.additive ? "多提供商并存" : "单活动提供商" }}
+          </span>
+        </template>
+        <template #headerMeta>
+          <div class="providers-app__meta">
+            <span
+              v-for="path in appState.configPaths"
+              :key="path"
+              class="providers-app__path"
+              :title="path"
+            ><strong>配置</strong>{{ path }}</span>
+            <span
+              v-if="appState.supportedProtocols.length > 0"
+            ><strong>协议</strong>{{
+              appState.supportedProtocols
+                .map((protocol) => protocolLabel(protocol))
+                .join(" · ")
+            }}</span>
           </div>
-        </header>
-
-        <div class="providers-app__meta">
-          <span
-            v-for="path in appState.configPaths"
-            :key="path"
-            class="providers-app__path"
-            :title="path"
-          ><strong>配置</strong>{{ path }}</span>
-          <span
-            v-if="appState.supportedProtocols.length > 0"
-          ><strong>协议</strong>{{
-            appState.supportedProtocols
-              .map((protocol) => protocolLabel(protocol))
-              .join(" · ")
-          }}</span>
-        </div>
+        </template>
 
         <p v-if="appState.loadError" class="providers-entry__note">
           读取失败：{{ appState.loadError }}
@@ -155,6 +172,15 @@ function confirmRemove() {
               </span>
               <span class="providers-entry-row__spacer" />
               <button
+                v-if="reapplyProvider(entry)"
+                class="providers-mini-button"
+                :disabled="runningAction"
+                type="button"
+                @click="openApply(appState.app, reapplyProvider(entry)!.id)"
+              >
+                重新应用
+              </button>
+              <button
                 v-if="entry.providerId && entry.status !== 'external'"
                 class="providers-mini-button providers-mini-button--danger"
                 :disabled="runningAction"
@@ -164,7 +190,7 @@ function confirmRemove() {
                 移除
               </button>
               <button
-                v-else-if="entry.status === 'external' && appState.app !== 'claude'"
+                v-if="entry.status === 'external' && appState.app !== 'claude'"
                 class="providers-mini-button providers-mini-button--danger"
                 :disabled="runningAction"
                 type="button"
@@ -191,13 +217,13 @@ function confirmRemove() {
           {{ appState.configExists ? "没有识别到聚合提供商条目。" : "未检测到配置文件。" }}
         </p>
 
-        <!-- 应用按钮放卡片最底部：提供商多时 flex-wrap 自动换行 -->
-        <div class="providers-app__actions">
+        <!-- 应用按钮放卡片最底部：提供商多时 flex-wrap 自动换行；候选为空（全部已应用）时整条隐藏 -->
+        <template v-if="applyCandidates(appState, state.providers).length > 0" #footer>
           <span class="providers-app__actions-label">应用提供商</span>
           <button
-            v-for="provider in state.providers"
+            v-for="provider in applyCandidates(appState, state.providers)"
             :key="`${appState.app}-apply-${provider.id}`"
-            class="secondary-button"
+            class="secondary-button providers-app__chip"
             :disabled="runningAction || !protocolCompatible(appState, provider)"
             type="button"
             :title="protocolCompatible(appState, provider) ? '' : '协议不兼容'"
@@ -205,8 +231,8 @@ function confirmRemove() {
           >
             {{ provider.label }}
           </button>
-        </div>
-      </section>
+        </template>
+      </AppCard>
     </div>
 
     <ProviderApplyDialog

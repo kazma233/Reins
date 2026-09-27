@@ -21,7 +21,7 @@
 
 .session-filter-label {
   color: var(--color-body);
-  font-size: 13px;
+  font-size: var(--font-size-md);
 }
 
 .session-filter-field input {
@@ -34,7 +34,7 @@
   border-radius: var(--radius-control);
   background: var(--color-canvas);
   color: var(--color-ink);
-  font-size: 14px;
+  font-size: var(--font-size-lg);
   line-height: 1.4;
 }
 
@@ -52,7 +52,7 @@
   flex: 0 0 auto;
   padding: 4px 2px;
   color: var(--color-muted);
-  font-size: 12px;
+  font-size: var(--font-size-sm);
 }
 
 .session-sort-button {
@@ -129,7 +129,7 @@
 }
 
 .session-card-title {
-  font-size: 14px;
+  font-size: var(--font-size-lg);
   font-weight: 400;
   line-height: 1.4;
 }
@@ -157,7 +157,7 @@
   gap: 12px;
   padding: 8px 2px 6px;
   color: var(--color-muted);
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   letter-spacing: 0.02em;
 }
 

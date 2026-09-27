@@ -1,0 +1,84 @@
+/* 通用三段式卡片：header 条（右侧 ext、可选副行）+ 内容区 + 底部条
+   （footer / actions）。色带分区沿用模型配置页签的规范：条为
+   surface-soft，内容区为浅一档的中间色调。 */
+
+.app-card {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--color-hairline);
+  border-radius: var(--radius-md, 8px);
+  background: color-mix(in srgb, var(--color-canvas) 60%, var(--color-surface-soft));
+  /* 色带贴满卡片边缘，圆角由卡片统一裁切 */
+  overflow: hidden;
+}
+
+.app-card__header {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--color-hairline);
+  background: var(--color-surface-soft);
+}
+
+.app-card__header-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+}
+
+.app-card__header-main {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.app-card__ext {
+  display: flex;
+  align-items: center;
+  /* 与各页签卡片动作按钮组的 6px 间距一致 */
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+/* ext 内操作按钮统一小尺寸，与各页签卡片动作按钮一致 */
+.app-card__ext .secondary-button,
+.app-card__ext .danger-button {
+  min-height: 26px;
+  padding: 3px 8px;
+  font-size: var(--font-size-sm);
+}
+
+.app-card__header-meta {
+  color: var(--color-muted);
+  font-size: var(--font-size-sm);
+}
+
+.app-card__content {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 14px;
+  min-width: 0;
+}
+
+.app-card__footer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: auto;
+  padding: 10px 14px;
+  border-top: 1px solid var(--color-hairline);
+  background: var(--color-surface-soft);
+}
+
+.app-card__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-left: auto;
+}

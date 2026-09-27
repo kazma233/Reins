@@ -6,7 +6,7 @@
   gap: 8px;
   color: var(--color-body);
   cursor: pointer;
-  font-size: 14px;
+  font-size: var(--font-size-lg);
   line-height: 1.4;
 }
 
