@@ -55,6 +55,8 @@ const defaultReasoningLevelValue = computed({
 const preview = ref<ProviderApplyPreview | null>(null);
 const previewLoading = ref(false);
 
+// 父组件在打开时才挂载本弹窗，且 open 与 app/providerId 在同一次更新里置位，
+// 首次挂载时 open 已是 true 而 watch 不会触发；必须 immediate 才能做首次初始化。
 watch(
   () => props.open,
   (open) => {
@@ -74,7 +76,8 @@ watch(
     );
     selectedModelIds.value = known.length > 0 ? known : props.provider.models.map((model) => model.id);
     defaultModelId.value = selectedModelIds.value[0] ?? "";
-  }
+  },
+  { immediate: true }
 );
 
 const appState = computed(() => findAppState(props.state, props.app));
