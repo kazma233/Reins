@@ -56,9 +56,8 @@ pub(crate) fn detect_sources_inner(state: &SessionIndexState) -> Result<Vec<Sour
         });
 
         let grok_state = state.clone();
-        let grok_handle = scope.spawn(move || {
-            inspect_source(&grok_state, SourceApp::GrokBuild, grok_root, None)
-        });
+        let grok_handle =
+            scope.spawn(move || inspect_source(&grok_state, SourceApp::GrokBuild, grok_root, None));
 
         vec![
             codex_handle.join(),

@@ -14,6 +14,7 @@ defineEmits<{
 
 const MODE_COPY: Array<{ id: AppMode; label: string }> = [
   { id: "workspace", label: "配置与分发" },
+  { id: "providers", label: "模型配置" },
   { id: "sessions", label: "历史会话" },
 ];
 </script>
@@ -30,7 +31,7 @@ const MODE_COPY: Array<{ id: AppMode; label: string }> = [
       :aria-current="item.id === mode ? 'true' : undefined"
       @click="$emit('change', item.id)"
     >
-      <!-- puzzle：Skills & MCP 属于 agent 的扩展能力（lucide 线性图标风格）；history：会话语义 -->
+      <!-- puzzle：Skills & MCP 属于 agent 的扩展能力（lucide 线性图标风格）；cpu：模型/Provider 语义；history：会话语义 -->
       <svg
         v-if="item.id === 'workspace'"
         viewBox="0 0 24 24"
@@ -44,6 +45,28 @@ const MODE_COPY: Array<{ id: AppMode; label: string }> = [
         <path
           d="M15.39 4.39a1 1 0 0 0 1.68-.474 2.5 2.5 0 1 1 3.014 3.015 1 1 0 0 0-.474 1.68l1.683 1.682a2.414 2.414 0 0 1 0 3.414L19.61 15.39a1 1 0 0 1-1.68-.474 2.5 2.5 0 1 0-3.014 3.015 1 1 0 0 1 .474 1.68l-1.683 1.682a2.414 2.414 0 0 1-3.414 0L8.61 19.61a1 1 0 0 0-1.68.474 2.5 2.5 0 1 1-3.014-3.015 1 1 0 0 0 .474-1.68l-1.683-1.682a2.414 2.414 0 0 1 0-3.414L4.39 8.61a1 1 0 0 1 1.68.474 2.5 2.5 0 1 0 3.014-3.015 1 1 0 0 1-.474-1.68l1.683-1.682a2.414 2.414 0 0 1 3.414 0z"
         />
+      </svg>
+      <svg
+        v-else-if="item.id === 'providers'"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="2"
+        stroke-linecap="round"
+        stroke-linejoin="round"
+        aria-hidden="true"
+      >
+        <!-- lucide cpu -->
+        <rect x="4" y="4" width="16" height="16" rx="2" />
+        <rect x="9" y="9" width="6" height="6" />
+        <path d="M15 2v2" />
+        <path d="M15 20v2" />
+        <path d="M2 15h2" />
+        <path d="M2 9h2" />
+        <path d="M20 15h2" />
+        <path d="M20 9h2" />
+        <path d="M9 2v2" />
+        <path d="M9 20v2" />
       </svg>
       <svg
         v-else

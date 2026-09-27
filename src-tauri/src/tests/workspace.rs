@@ -1,30 +1,9 @@
 use super::*;
+use crate::test_support::TestDir;
 use std::time::{Duration, UNIX_EPOCH};
 
 #[path = "workspace_grokbuild.rs"]
 mod grokbuild;
-
-struct TestDir {
-    path: PathBuf,
-}
-
-impl TestDir {
-    fn new(prefix: &str) -> Result<Self> {
-        let path = std::env::temp_dir().join(format!("reins-{prefix}-{}", uuid::Uuid::new_v4()));
-        fs::create_dir_all(&path)?;
-        Ok(Self { path })
-    }
-
-    fn path(&self) -> &Path {
-        &self.path
-    }
-}
-
-impl Drop for TestDir {
-    fn drop(&mut self) {
-        fs::remove_dir_all(&self.path).ok();
-    }
-}
 
 fn write_skill(root: &Path, relative_path: &str, body: &str) -> Result<()> {
     let skill_dir = root.join(relative_path);
@@ -427,29 +406,44 @@ fn remove_target_skill_link_only_deletes_links_inside_target_skill_dir() -> Resu
 
     let store = write_link_store(&root)?;
 
-    let removed =
-        remove_target_skill_link_inner(&store, "codex", &display_path(&target_skill_dir.join("alpha")))?;
+    let removed = remove_target_skill_link_inner(
+        &store,
+        "codex",
+        &display_path(&target_skill_dir.join("alpha")),
+    )?;
     assert_eq!(removed.skill_name, "alpha");
     assert!(target_skill_dir.join("alpha").symlink_metadata().is_err());
     assert!(source_root.join("alpha/SKILL.md").exists());
 
     // 真实目录不是链接，拒绝且不删除内容。
     assert!(
-        remove_target_skill_link_inner(&store, "codex", &display_path(&target_skill_dir.join("real-dir")))
-            .is_err()
+        remove_target_skill_link_inner(
+            &store,
+            "codex",
+            &display_path(&target_skill_dir.join("real-dir"))
+        )
+        .is_err()
     );
     assert!(target_skill_dir.join("real-dir").is_dir());
 
     // 别的 target 目录下的链接不能借用 codex 的 id 删除。
     assert!(
-        remove_target_skill_link_inner(&store, "codex", &display_path(&other_skill_dir.join("beta")))
-            .is_err()
+        remove_target_skill_link_inner(
+            &store,
+            "codex",
+            &display_path(&other_skill_dir.join("beta"))
+        )
+        .is_err()
     );
     assert!(other_skill_dir.join("beta").symlink_metadata().is_ok());
 
     assert!(
-        remove_target_skill_link_inner(&store, "missing", &display_path(&target_skill_dir.join("alpha")))
-            .is_err()
+        remove_target_skill_link_inner(
+            &store,
+            "missing",
+            &display_path(&target_skill_dir.join("alpha"))
+        )
+        .is_err()
     );
 
     Ok(())
@@ -481,7 +475,12 @@ fn remove_target_skill_link_accepts_destination_path_from_sync_options() -> Resu
     let removed = remove_target_skill_link_inner(&store, &option.id, &link.destination_path)?;
 
     assert_eq!(removed.skill_name, "external");
-    assert!(target_skill_dir.join("external").symlink_metadata().is_err());
+    assert!(
+        target_skill_dir
+            .join("external")
+            .symlink_metadata()
+            .is_err()
+    );
     assert!(unmanaged_root.join("external/SKILL.md").exists());
 
     Ok(())

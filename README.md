@@ -1,9 +1,10 @@
 # Reins
 
-本地桌面工具，提供两组能力：
+本地桌面工具，提供三组能力：
 
 - 浏览 Codex、Claude Code、OpenCode、Pi 的历史会话
 - 通过全局配置文件 `config.yaml`，把 Skills 和 MCP 配置分发到多个 agent target
+- 管理聚合提供商（OpenRouter、自建网关等）的模型配置，一键应用到 Codex、Claude Code、OpenCode、Pi、Grok Build
 
 ## 功能概览
 
@@ -23,6 +24,14 @@
 - 管理多个 target，例如 `codex`、`claude`、`opencode`、`zcode`
 - 从本地目录或 Git 仓库导入 Skills，并同步到选定的 target
 - 预览并写入 MCP 配置，检查其在各 target 上的安装状态
+
+### 模型配置
+
+- 集中管理聚合提供商的端点、协议（OpenAI Responses / OpenAI Chat Completions / Anthropic Messages）、模型目录与 API Key；官方 OpenAI / Anthropic 不纳管
+- 提供商元数据存放在 `<reins 目录>/providers.yaml`，API Key 存系统密钥管理（service `me.kazma.reins`）
+- 模型支持手工新增、从提供商 `/models` 接口拉取、从 models.dev 预填元数据（本地缓存 24 小时）
+- 一键应用到 Codex、Claude Code、OpenCode（v2）、Pi、Grok Build 的全局配置文件：应用前可预览变更 diff（密钥脱敏），支持指定默认模型与思考等级
+- 反读工具配置，识别「已应用 / 漂移 / 外部配置」；只管理 `reins-` 前缀条目，用户手工配置不受影响
 
 ### Skills 导入项管理
 

@@ -63,7 +63,7 @@ providers:
 | --- | --- | --- | --- |
 | Codex | `$CODEX_HOME/config.toml`（默认 `~/.codex/config.toml`） | 单活动 Provider，应用即替换 | 仅 `openai_responses` |
 | Claude Code | `~/.claude/settings.json` | 单活动，替换 | 仅 `anthropic_messages` |
-| OpenCode v2 | `$XDG_CONFIG_HOME/opencode/opencode.json` | 多 Provider 并存，新增 | `openai_chat_completions` 优先；`openai_responses` 待验证 |
+| OpenCode v2 | `~/.config/opencode/opencode.json`（Windows 上 OpenCode 不认 `XDG_CONFIG_HOME`，v2.0.16 实测，统一按 `HOME/.config` 解析） | 多 Provider 并存，新增 | `openai_chat_completions`、`openai_responses`（2026-09-27 复测后放行，apply 写 `openai/responses` 包）、`anthropic_messages` |
 | Pi | `$PI_CODING_AGENT_DIR/models.json` + `settings.json` | 多 Provider 并存，新增 | 三种均可 |
 | Grok Build | `$GROK_HOME/config.toml`（默认 `~/.grok/config.toml`） | 多 Provider 并存，新增；项目 `.grok/` 不加载模型配置 | 三种均可 |
 
@@ -75,9 +75,9 @@ providers:
 | --- | --- |
 | Codex | `model_provider="reins-x"`、`model=<id>`、`model_reasoning_effort`、`[model_providers.reins-x]`（name、base_url、wire_api="responses"、静态 Bearer Token 字段） |
 | Claude Code | `env.ANTHROPIC_BASE_URL`（聚合平台必写；不写官方端点）、`env.ANTHROPIC_API_KEY`、`model`、`effortLevel`；保留文件中其他键 |
-| OpenCode v2 | `provider["reins-x"]`（npm 包按协议选择、`options.baseURL`、`options.apiKey` 明文、`models`）+ 顶层 `model="reins-x/<id>"` |
+| OpenCode v2 | `providers["reins-x"]`（v2 规范 schema：`name`、`package` 按协议选 `@opencode/ai/providers/openai-compatible` / `@opencode/ai/providers/anthropic`、`settings.baseURL`、`settings.apiKey` 明文、`models`）+ 顶层 `model="reins-x/<id>"`；写入只用 v2 规范格式，v1 遗留格式（`provider`/`npm`/`options`）只读展示、可删除，不写入 |
 | Pi | `models.json` 的 `providers["reins-x"]`（baseUrl、api、apiKey、models 含 reasoning 等元数据）+ `settings.json` 的 `defaultProvider`、`defaultModel`、`defaultThinkingLevel` |
-| Grok Build | `[model_providers.reins-x]`（base_url、api_backend）+ 每个 `[model."reins-x--<id>"]`（model、name、model_provider、api_key；`anthropic_messages` 用 `extra_headers` 携带 `x-api-key` 与 `anthropic-version`）+ `[models] default`、`default_reasoning_effort` |
+| Grok Build | `[model_providers.reins-x]`（base_url、api_backend；`anthropic_messages` 的 base_url 写入时规范化为 `/v1` 结尾，见验证文档 2026-09-27 实测）+ 每个 `[model."reins-x--<id>"]`（model、name、model_provider、api_key；`anthropic_messages` 用 `extra_headers` 携带 `x-api-key` 与 `anthropic-version`）+ `[models] default`、`default_reasoning_effort`（`Max` 档映射写出 `"xhigh"`：Grok UI 无 max 档且请求层两者等价） |
 
 移除规则：
 
@@ -116,7 +116,7 @@ src-tauri/src/providers/
 前端：
 
 - `AppMode` 增加 `"providers"`，rail 图标与文案「模型配置」。
-- `src/features/providers/ProvidersWorkspace.vue`：两个页签——`平台`（聚合平台 CRUD、Key 管理、模型目录、拉取、models.dev 补全）、`工具应用`（五个应用卡片，反读状态、应用弹窗、移除）。
+- `src/features/providers/ProvidersWorkspace.vue`：两个页签——`平台`（聚合平台 CRUD、Key 管理、模型目录、拉取、models.dev 补全）、`Agent`（五个应用卡片，反读状态、应用弹窗、移除）。
 - `api.ts` 封装全部 invoke；类型只来自 `generated/`。
 
 ## 9. 实施顺序
@@ -143,13 +143,12 @@ src-tauri/src/providers/
 - 安全验收：全流程（含日志、错误、预览、命令输出）不泄露密钥明文，`providers.yaml` 无密钥痕迹。
 - 工程门禁：`pnpm codegen`、`cargo fmt --check`、`cargo test`、`pnpm test`、`vue-tsc`、`pnpm build` 全绿。
 
-## 11. 实现期待验证的 unverified 项
+## 11. unverified 项（2026-09-25 二次核对后更新，详见 context/2026-09-25-providers-contract-verification.md）
 
-- Codex 静态 Bearer Token 字段（`experimental_bearer_token`）运行时接受性，及 `model_reasoning_effort` 合法取值。
-- Claude Code `effortLevel` 的键名、取值与最低版本要求（本机未安装 Claude Code）。
-- OpenCode v2 对 `openai_responses` 的 npm 适配与思考等级配置是否存在。
-- Pi `models.json` 各协议的 `api` 取值与必填模型元数据。
-- Grok `default_reasoning_effort` / `reasoning_efforts` 合法取值。
+- Codex `model_reasoning_effort`：官方值域 `low/medium/high/xhigh/max/ultra`（非穷举）；我们写出的 `none/minimal` 在 codex-cli 0.145.0 客户端可加载（doctor + debug prompt-input），请求时行为需真实端点未验证。
+- Claude Code：`effortLevel` 键名与值域已按官方确认（low/medium/high/xhigh/max），能力表已收窄；本机未装 CLI，端到端仍未验证。
+- OpenCode：v2 规范 schema 运行时接受性已真机验证（v2.0.16 全局条目 + `opencode models`）；`openai_responses` 曾因 v2.0.16 对照实验静默加载失败关闭放行，2026-09-27 v2.0.18 复测 `openai/responses` 端到端可用恢复放行（`openai-compatible/responses` 同版初始化报 `Cannot find package '@opencode/ai'`，不采用）；思考等级已从能力表移除（apply 本就不消费）。
+- Grok：`default_reasoning_effort` / `reasoning_efforts` 合法取值未验证；`[model_providers]` 表 + `model_provider` 字段官方文档未记载（官方简化式为 `[model.<id>]` 直接带 base_url），我们的写法来自 1.0.40 实测且同版复测通过，存在未来版本变更风险。
 - 各聚合平台模型列表接口差异（`/v1/models` 形态、鉴权头）。
 - models.dev `reasoning_options` 取值与各工具等级的映射表。
 
@@ -158,5 +157,5 @@ src-tauri/src/providers/
 - `applications` 部署表方案已否决：不持久化应用关系，反显以工具配置文件为准。
 - 「官方」口径按产品定义：仅 OpenAI、Anthropic；其余一律归聚合平台管理（即使底层是单一自有模型的服务商）。
 - 凭据写入工具配置采用明文，是用户在知晓项目安全约束后对「系统密钥管理 + 应用时明文落盘」的明确确认；第一版不做凭据类型扩展。
-- OpenCode 仅支持 v2；旧版本不兼容、不写入。
+- OpenCode 仅支持 v2 运行时。写入一律用 v2 规范 schema（`providers`/`package`/`settings`）；v1 遗留 schema（`provider`/`npm`/`options`）只读展示、可删除——v2 运行时官方承诺继续兼容 v1 配置，用户手工配置或旧版 Reins 写入的条目可能留在 v1 节点；不向 v1 写入、不迁移。
 - 思考等级参考 models.dev 的 `reasoning` / `reasoning_options` 字段口径，归一化后存储，写入时按工具取交集。

@@ -471,7 +471,10 @@ fn scan(path: &Path, name: &str, mut visit: impl FnMut(usize, Value) -> Result<(
             .with_context(|| format!("Invalid Grok Build {name} JSON at line {}", index + 1))?;
         // 前端只展示最外层错误消息，行号必须和原因拼在同一层，否则报错无法定位。
         visit(index, value).map_err(|error| {
-            anyhow!("Invalid Grok Build {name} entry at line {}: {error}", index + 1)
+            anyhow!(
+                "Invalid Grok Build {name} entry at line {}: {error}",
+                index + 1
+            )
         })?;
     }
     Ok(())

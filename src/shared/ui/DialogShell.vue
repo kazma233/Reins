@@ -1,3 +1,12 @@
+<script lang="ts">
+// 弹窗栈状态必须放在模块级供所有 DialogShell 实例共享：
+// 放在 <script setup> 里每个实例各持一份，isTopDialog 对每个实例都为真，
+// 按 Esc 会把所有层级的弹窗一次性全部关闭。
+let openDialogCount = 0;
+let originalBodyOverflow = "";
+const dialogStack: HTMLElement[] = [];
+</script>
+
 <script setup lang="ts">
 import { ref, watch } from "vue";
 import { joinClasses } from "../lib/join-classes";
@@ -11,10 +20,6 @@ const FOCUSABLE_SELECTOR = [
   "textarea:not([disabled])",
   "[tabindex]:not([tabindex='-1'])",
 ].join(",");
-
-let openDialogCount = 0;
-let originalBodyOverflow = "";
-const dialogStack: HTMLElement[] = [];
 
 function isHTMLElement(value: Element | null): value is HTMLElement {
   return value instanceof HTMLElement;
@@ -91,6 +96,7 @@ watch(
     }
 
     document.addEventListener("focusin", handleFocusIn);
+    document.addEventListener("keydown", handleDocumentKeyDown);
 
     const animationFrameId = window.requestAnimationFrame(() => {
       const dialog = dialogRef.value;
@@ -101,6 +107,7 @@ watch(
     onCleanup(() => {
       window.cancelAnimationFrame(animationFrameId);
       document.removeEventListener("focusin", handleFocusIn);
+      document.removeEventListener("keydown", handleDocumentKeyDown);
       if (mountedDialog) {
         const dialogIndex = dialogStack.indexOf(mountedDialog);
         if (dialogIndex !== -1) {
@@ -122,19 +129,37 @@ function closeDialog() {
   emit("close");
 }
 
-function handleBackdropClick() {
+// 点击外部关闭要求按下与松开都发生在弹窗外：弹窗内按下拖到外面
+// 松开（文本选择、滑块拖动等）不应触发关闭。
+let backdropPointerDown = false;
+
+function handleBackdropPointerDown(event: PointerEvent) {
+  backdropPointerDown = event.target === event.currentTarget;
+}
+
+function handleBackdropPointerUp(event: PointerEvent) {
+  const pressedOnBackdrop = backdropPointerDown;
+  backdropPointerDown = false;
+  if (!pressedOnBackdrop) return;
   if (!props.dismissible) return;
+  if (event.target !== event.currentTarget) return;
+  closeDialog();
+}
+
+function handleDocumentKeyDown(event: KeyboardEvent) {
+  if (event.key !== "Escape") return;
+  if (!props.dismissible) return;
+  // 多层弹窗时只关栈顶一层：焦点可能仍留在下层弹窗的元素上，
+  // 此时按 Esc 不能把未聚焦的上层（及其内嵌子弹窗）一并关掉。
+  const dialog = dialogRef.value;
+  if (!dialog || !isTopDialog(dialog)) return;
+  event.preventDefault();
   closeDialog();
 }
 
 function handleKeyDown(event: KeyboardEvent) {
-  if (event.key === "Escape") {
-    if (!props.dismissible) return;
-    event.preventDefault();
-    closeDialog();
-    return;
-  }
-
+  // Escape 在 document 级监听里统一处理（见 handleDocumentKeyDown），
+  // 这里只负责焦点陷阱。
   if (event.key !== "Tab") return;
 
   const dialog = dialogRef.value;
@@ -171,7 +196,8 @@ function handleKeyDown(event: KeyboardEvent) {
       v-if="open"
       class="dialog-backdrop"
       role="presentation"
-      @click="handleBackdropClick"
+      @pointerdown="handleBackdropPointerDown"
+      @pointerup="handleBackdropPointerUp"
     >
       <section
         ref="dialogRef"

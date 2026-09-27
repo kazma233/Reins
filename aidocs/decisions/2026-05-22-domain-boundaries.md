@@ -5,9 +5,9 @@
 
 ## 命名约定
 
-1. 前端业务域统一使用复数目录：`src/features/sessions/`、`src/features/workspace/`。
-2. Rust 业务域统一使用单数模块：`src-tauri/src/session/`、`src-tauri/src/workspace/`。
-3. UI 文案继续使用“历史会话”和“配置与分发”，不强行暴露内部 `workspace` 命名。
+1. 前端业务域统一使用复数目录：`src/features/sessions/`、`src/features/workspace/`、`src/features/providers/`。
+2. Rust 业务域统一使用单数模块：`src-tauri/src/session/`、`src-tauri/src/workspace/`、`src-tauri/src/providers/`。
+3. UI 文案继续使用“历史会话”和“配置与分发”，不强行暴露内部 `workspace` 命名；`providers` 域的 UI 文案为“模型配置”。
 4. `manager` 只允许出现在历史兼容数据名或稳定文件名里，不再作为代码边界命名。
 
 ## 前端边界
@@ -24,10 +24,16 @@
 2. 只依赖 `shared/*` 和 `app/*` 的稳定入口。
 3. 不依赖 `features/sessions/*`。
 
+### `providers`
+
+1. 负责聚合平台（官方 OpenAI / Anthropic 以外的一切平台与自建网关）的 CRUD、API Key 管理、模型目录、五个工具全局配置的应用与反读。
+2. 只依赖 `shared/*` 和 `app/*` 的稳定入口。
+3. 不依赖 `features/sessions/*`、`features/workspace/*`。
+
 ### `shared`
 
 1. 只放稳定 UI、基础格式化、无业务语义工具。
-2. 不承载 session/workspace 的业务类型、store、api、命令名。
+2. 不承载 session/workspace/providers 的业务类型、store、api、命令名。
 
 ## Rust 边界
 
@@ -43,6 +49,13 @@
 2. `types.rs` 只定义 workspace 域 DTO、view model、mutation 输入输出。
 3. `commands.rs` 只负责 Tauri command 入参与调度。
 
+### `providers`
+
+1. 负责聚合平台模型管理：`providers.yaml` 读写（`config.rs`）、系统密钥封装（`keychain.rs`）、模型目录与 models.dev 补全（`catalog.rs`）、各工具配置适配器（`apps/`）。
+2. `types.rs` 只定义 providers 域 DTO、view model、mutation 输入输出；Raw 类型对应 providers.yaml 的 snake_case，View 类型 camelCase。
+3. `commands.rs` 只负责 Tauri command 入参与调度；适配器只生成新文件内容，diff 预览与原子写入统一在 commands 层完成。
+4. 凭据明文只允许出现在：系统密钥管理、写入时的内存、目标工具配置文件；`providers.yaml`、日志、错误、预览（`******` 占位）中禁止出现。Tauri 返回值同样禁止明文，唯一例外是 `get_provider_key`：本地单用户桌面应用，编辑弹窗回显确认用，明文只经当次 IPC 返回，不落日志与任何持久化。
+
 ### `state`
 
 1. 只放运行时缓存状态：session index、skill discovery。
@@ -51,7 +64,7 @@
 ### `support`
 
 1. 只放无业务语义工具：fs、paging、time。
-2. 不接收 session/workspace DTO，不反向依赖业务域。
+2. 不接收 session/workspace/providers DTO，不反向依赖业务域。
 
 ## workspace 子边界
 
@@ -75,7 +88,7 @@
 
 ## 依赖红线
 
-1. `sessions` 和 `workspace` 之间禁止直接互相依赖。
+1. `sessions`、`workspace`、`providers` 两两之间禁止直接互相依赖。
 2. `shared` 禁止依赖 `features/*`。
-3. `support` 禁止依赖 `session` 和 `workspace` DTO。
+3. `support` 禁止依赖 `session`、`workspace` 和 `providers` DTO。
 4. 新增代码如果需要跨域复用，先判断它是否真的是稳定共享能力，否则仍留在各自业务域。

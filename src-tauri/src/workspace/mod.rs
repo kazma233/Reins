@@ -570,23 +570,8 @@ fn format_local_skill_source_label(root_path: &Path) -> String {
     display_path(root_path)
 }
 
-// Windows 的规范化路径会附加扩展长度前缀；该前缀只服务于文件系统 API，
-// 返回给界面会干扰阅读。
-pub(super) fn display_path(path: &Path) -> String {
-    #[cfg(windows)]
-    {
-        let path = path.to_string_lossy();
-        if let Some(unc_path) = path.strip_prefix("\\\\?\\UNC\\") {
-            return format!("\\\\{unc_path}");
-        }
-        return path.strip_prefix("\\\\?\\").unwrap_or(&path).to_string();
-    }
-
-    #[cfg(not(windows))]
-    {
-        path.display().to_string()
-    }
-}
+// Windows 路径前缀剥离属于无业务语义的路径工具，实现统一在 support/fs.rs。
+use crate::support::fs::display_path;
 
 fn format_git_skill_source_label(repo: &str, reference: Option<&str>) -> String {
     format!(

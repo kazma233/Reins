@@ -1,0 +1,563 @@
+/* providers 域样式：与 workspace 的 manager-* 同一套视觉语言，
+   但类名自持，避免跨 feature 的样式依赖。 */
+
+.providers-shell {
+  display: flex;
+  min-height: 0;
+  flex: 1 1 auto;
+}
+
+.providers-content {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  min-height: 0;
+  overflow: auto;
+  border: 1px solid var(--color-hairline);
+  background: rgba(255, 255, 255, 0.8);
+}
+
+.providers-content__header {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  /* 顶部留白由自身 padding 提供：吸顶时条带背景盖住顶端，
+     若用 sticky top 留缝，滚动内容会从缝隙里穿出来。 */
+  padding: 14px 16px 12px;
+  /* 背景必须不透明：内容从半透明底色下滚过会透出来。 */
+  background: var(--color-canvas);
+  border-bottom: 1px solid var(--color-hairline);
+}
+
+.providers-nav {
+  display: flex;
+  flex: 0 0 auto;
+  flex-direction: row;
+  gap: 8px;
+}
+
+.providers-nav__button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 32px;
+  padding: 4px 14px;
+  border: 1px solid var(--color-hairline);
+  border-radius: var(--radius-button);
+  background: var(--color-surface-soft, rgba(255, 255, 255, 0.9));
+  color: var(--color-body);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.providers-nav__button:hover {
+  border-color: var(--color-primary);
+  color: var(--color-primary);
+}
+
+.providers-nav__button.is-active {
+  border-color: var(--color-primary);
+  background: var(--color-primary);
+  color: var(--color-on-primary);
+}
+
+.providers-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 16px;
+}
+
+.providers-section-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.providers-section-title {
+  margin: 0;
+  color: var(--color-ink);
+  font-size: 15px;
+}
+
+.providers-section-hint {
+  margin: 0;
+  color: var(--color-muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.providers-card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 12px;
+}
+
+.providers-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid var(--color-hairline);
+  border-radius: var(--radius-md, 8px);
+  background: var(--color-surface-soft, rgba(255, 255, 255, 0.92));
+}
+
+.providers-card__title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.providers-card__title {
+  margin: 0;
+  color: var(--color-ink);
+  font-size: 16px;
+}
+
+.providers-card__flags {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.providers-card__models {
+  color: var(--color-muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.providers-card__meta {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  color: var(--color-muted);
+  font-size: 12px;
+}
+
+.providers-card__meta > div {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+}
+
+.providers-card__meta dt {
+  color: var(--color-ink);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.providers-card__meta dd {
+  margin: 0;
+  color: var(--color-body);
+  word-break: break-all;
+}
+
+.providers-card__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.providers-entry-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.providers-entry__note {
+  margin: 0;
+  color: var(--color-muted);
+  font-size: 12px;
+}
+
+.providers-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 8px;
+  border: 1px solid var(--color-hairline);
+  border-radius: 999px;
+  color: var(--color-body);
+  font-size: 11px;
+  line-height: 18px;
+  white-space: nowrap;
+}
+
+.providers-badge--applied {
+  border-color: rgba(24, 160, 88, 0.4);
+  color: #12805c;
+}
+
+.providers-badge--drifted {
+  border-color: rgba(214, 134, 22, 0.45);
+  color: #a56a08;
+}
+
+.providers-badge--external {
+  border-color: var(--color-hairline);
+  color: var(--color-muted);
+}
+
+.providers-badge--muted {
+  border-color: var(--color-hairline);
+  color: var(--color-muted);
+}
+
+.providers-empty {
+  padding: 26px 16px;
+  border: 1px dashed var(--color-hairline);
+  border-radius: var(--radius-md, 8px);
+  color: var(--color-muted);
+  font-size: 13px;
+  text-align: center;
+}
+
+.providers-loading {
+  color: var(--color-muted);
+  font-size: 13px;
+  padding: 8px 0;
+}
+
+/* 表单（编辑弹窗 / 应用弹窗共用） */
+
+.providers-field {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.providers-field span {
+  color: var(--color-body);
+  font-size: 13px;
+}
+
+.providers-field__hint {
+  margin: -2px 0 0;
+  color: var(--color-muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+/* 表单内的 select 统一由 AppSelect 自绘（含下拉箭头背景），
+   这里不再写 .providers-field select 规则，避免与 app-select.css 级联冲突。 */
+
+.providers-form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px 16px;
+}
+
+.providers-form-grid--full {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.providers-model-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.providers-model-row {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--color-hairline-soft);
+  border-radius: var(--radius-md, 8px);
+  background: rgba(255, 255, 255, 0.85);
+}
+
+.providers-model-row__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.providers-model-row__id {
+  color: var(--color-ink);
+  font-size: 13px;
+  font-weight: 600;
+  word-break: break-all;
+}
+
+.providers-model-row__grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.providers-check {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 30px;
+  cursor: pointer;
+}
+
+/* 勾选框：收窄为原生小方块样式，避免继承外层控件的拉满宽。 */
+.providers-check input[type="checkbox"] {
+  width: 13px;
+  height: 13px;
+  min-height: 0;
+  margin: 0;
+  padding: 0;
+  appearance: auto;
+  accent-color: var(--color-primary);
+  cursor: pointer;
+}
+
+/* 思考等级多选下拉由 shared/ui/AppMultiSelect 提供，样式随组件自持。 */
+
+.providers-model-row__grid .providers-field span {
+  font-size: 12px;
+}
+
+.providers-fetched-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 180px;
+  overflow: auto;
+  padding: 8px 10px;
+  border: 1px solid var(--color-hairline-soft);
+  border-radius: var(--radius-md, 8px);
+}
+
+.providers-fetched-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--color-body);
+  font-size: 13px;
+}
+
+.providers-diff {
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--color-hairline);
+  border-radius: var(--radius-md, 8px);
+  background: rgba(0, 0, 0, 0.03);
+  color: var(--color-ink);
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 12px;
+  line-height: 1.55;
+  overflow: auto;
+  max-height: 320px;
+  white-space: pre;
+}
+
+.providers-warnings {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  color: #a56a08;
+  font-size: 12px;
+}
+
+.providers-blockers {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  color: #b3261e;
+  font-size: 12px;
+}
+
+/* ---------------------------------------------------------------------------
+   Agent 页：全宽分区面板。
+   每个工具一块，块头放主动作，条目为紧凑行（左状态色条 + 等宽键名），
+   危险操作用描边小按钮降低视觉权重。仅此页使用，提供商页仍用 providers-card。
+   --------------------------------------------------------------------------- */
+
+.providers-app-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.providers-app {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 14px;
+  border: 1px solid var(--color-hairline);
+  border-radius: var(--radius-md);
+  background: var(--color-canvas);
+}
+
+.providers-app__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 12px;
+}
+
+.providers-app__title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.providers-app__title h4 {
+  margin: 0;
+  color: var(--color-ink);
+  font-size: 14px;
+}
+
+.providers-app__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+/* 前置"应用"标签：比按钮文字更大更醒目 */
+.providers-app__actions-label {
+  align-self: center;
+  color: var(--color-ink);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+/* 提供商按钮缩小尺寸，避免在标签旁显得过于笨重 */
+.providers-app__actions .secondary-button {
+  min-height: 26px;
+  padding: 3px 10px;
+  font-size: 12px;
+}
+
+.providers-app__meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 14px;
+  color: var(--color-muted);
+  font-size: 12px;
+}
+
+.providers-app__meta span {
+  word-break: break-all;
+}
+
+.providers-app__meta .providers-app__path {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+}
+
+.providers-app__meta strong {
+  font-weight: 400;
+  color: var(--color-muted-soft);
+  margin-right: 4px;
+}
+
+/* 低调小按钮：行内低频操作用；危险变体只描边不实心。 */
+.providers-mini-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 26px;
+  padding: 2px 10px;
+  border: 1px solid var(--color-hairline);
+  border-radius: var(--radius-button);
+  background: var(--color-canvas);
+  color: var(--color-body);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.providers-mini-button:hover {
+  border-color: var(--color-primary);
+  color: var(--color-primary);
+}
+
+.providers-mini-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.providers-mini-button--danger {
+  color: var(--color-danger);
+}
+
+.providers-mini-button--danger:hover {
+  border-color: var(--color-danger);
+  background: rgba(207, 32, 47, 0.06);
+  color: var(--color-danger);
+}
+
+.providers-entry-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0 -8px;
+  padding: 9px 8px;
+  border-radius: var(--radius-sm);
+}
+
+.providers-entry-row + .providers-entry-row {
+  border-top: 1px solid var(--color-hairline-soft);
+}
+
+/* 悬停时整行泛起浅背景，帮助长列表扫读定位；负 margin 让高亮出格到面板内边距。 */
+.providers-entry-row:hover {
+  background: var(--color-surface-soft);
+}
+
+.providers-entry-row__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+}
+
+.providers-entry-row__key {
+  color: var(--color-ink);
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 600;
+  word-break: break-all;
+}
+
+.providers-entry-row__spacer {
+  flex: 1 1 auto;
+}
+
+/* 事实数据（URL/模型）与说明文字分两层：说明用更淡一级。 */
+.providers-entry-row__sub {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 16px;
+  color: var(--color-muted);
+  font-size: 12px;
+}
+
+.providers-entry-row__sub span {
+  word-break: break-all;
+}
+
+.providers-entry-row__sub .providers-entry-row__url {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+}
+
+.providers-entry-row__note {
+  color: var(--color-muted-soft);
+  font-size: 11.5px;
+  word-break: break-all;
+}

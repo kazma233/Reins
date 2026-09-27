@@ -27,6 +27,15 @@ rusqlite = { version = "0.40.2", features = ["bundled"] }
 ts-rs = "12"
 uuid = { version = "1.26.0", features = ["v4", "serde"] }
 walkdir = "2.5.0"
+# providers 域：系统密钥管理 + 模型目录拉取；rustls 避免 Windows 上引入 openssl
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
 
 [target.'cfg(windows)'.dependencies]
 junction = "2.0.0"
+keyring = { version = "3", features = ["windows-native"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+keyring = { version = "3", features = ["apple-native"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+keyring = { version = "3", features = ["sync-secret-service"] }

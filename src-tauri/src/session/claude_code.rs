@@ -551,11 +551,7 @@ fn parse_overview(path: &Path) -> Result<SessionOverview> {
     })
 }
 
-fn parse_messages_page(
-    path: &Path,
-    offset: usize,
-    limit: usize,
-) -> Result<SessionMessagePage> {
+fn parse_messages_page(path: &Path, offset: usize, limit: usize) -> Result<SessionMessagePage> {
     let family = session_family_for_path(path)?;
     let all_messages = cached_messages_for_family(&family)?;
     let (messages, start, next_offset, total_count) =

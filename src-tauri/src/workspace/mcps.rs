@@ -12,10 +12,10 @@ use serde_json::{Map as JsonMap, Value as JsonValue};
 use toml::Value as TomlValue;
 
 use super::WorkspaceConfigStore;
-use super::config;
 use super::targets::builtin_target_defaults_map;
 use super::types::*;
 use super::{display_path, parse_manager_config, resolve_target_from_id};
+use crate::support::fs::write_atomic;
 
 // ---------------------------------------------------------------------------
 // MCP apply / preview / remove (config-path write targets — no workspace dep)
@@ -637,7 +637,7 @@ fn write_toml_config(config_path: &Path, root: &toml::map::Map<String, TomlValue
     let serialized = toml::to_string_pretty(root)
         .with_context(|| format!("TOML 配置序列化失败：{}", config_path.display()))?;
 
-    config::write_atomic(config_path, &serialized)
+    write_atomic(config_path, &serialized)
         .with_context(|| format!("写入 TOML 配置失败：{}", config_path.display()))
 }
 
@@ -665,7 +665,7 @@ fn write_json_config(config_path: &Path, root: &JsonValue) -> Result<()> {
     let serialized = serde_json::to_string_pretty(root)
         .with_context(|| format!("JSON 配置序列化失败：{}", config_path.display()))?;
 
-    config::write_atomic(config_path, &format!("{serialized}\n"))
+    write_atomic(config_path, &format!("{serialized}\n"))
         .with_context(|| format!("写入 JSON 配置失败：{}", config_path.display()))
 }
 

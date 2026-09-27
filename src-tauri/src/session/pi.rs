@@ -158,11 +158,7 @@ impl SessionReader for PiBackend {
     }
 }
 
-fn parse_messages_page(
-    path: &Path,
-    offset: usize,
-    limit: usize,
-) -> Result<SessionMessagePage> {
+fn parse_messages_page(path: &Path, offset: usize, limit: usize) -> Result<SessionMessagePage> {
     let (messages, _) = cached_timeline(path)?;
     let (messages, start, next_offset, total_count) =
         crate::support::paging::slice_page(&messages, offset, limit);
@@ -821,8 +817,7 @@ fn parse_subagent_run_block(
                 object.remove("messages");
                 object.insert(
                     "nestedMessages".to_string(),
-                    serde_json::to_value(nested_messages)
-                        .expect("SessionMessage 序列化不会失败"),
+                    serde_json::to_value(nested_messages).expect("SessionMessage 序列化不会失败"),
                 );
             }
             run

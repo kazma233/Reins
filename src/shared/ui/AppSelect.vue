@@ -48,19 +48,20 @@ const model = defineModel<string>({ required: true });
     <span :class="joinClasses('app-select__label', labelClassName)">
       <slot name="label">{{ label }}</slot>
     </span>
-    <select v-model="model" :aria-label="ariaLabel" :disabled="disabled">
-      <option v-if="placeholder" disabled :value="''">
-        {{ placeholder }}
-      </option>
-      <option
-        v-for="option in options"
-        :key="option.value"
-        :disabled="option.disabled"
-        :value="option.value"
-      >
-        {{ option.label }}
-      </option>
-    </select>
-    <span aria-hidden="true" class="app-select__chevron" />
+    <span class="app-select__control">
+      <select v-model="model" :aria-label="ariaLabel" :disabled="disabled">
+        <option v-if="placeholder" disabled :value="''">
+          {{ placeholder }}
+        </option>
+        <option
+          v-for="option in options"
+          :key="option.value"
+          :disabled="option.disabled"
+          :value="option.value"
+        >
+          {{ option.label }}
+        </option>
+      </select>
+    </span>
   </label>
 </template>

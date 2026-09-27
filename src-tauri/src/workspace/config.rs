@@ -1,4 +1,3 @@
-use std::ffi::OsStr;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -10,6 +9,7 @@ use super::types::{RawManagerConfig, ResolvedManagerConfig, WorkspaceConfigDocum
 use super::{
     default_config_template, document_from_content, parse_git_owner_repo, parse_manager_config,
 };
+use crate::support::fs::write_atomic;
 
 const APP_DIR_NAME: &str = "reins";
 const DEFAULT_CONFIG_NAME: &str = "config.yaml";
@@ -158,31 +158,4 @@ impl ConfigLock<'_> {
         write_atomic(config_path, &serialized)
             .with_context(|| format!("Failed to write config file {}", config_path.display()))
     }
-}
-
-// Write through a same-directory temp file + rename, so a crash mid-write can
-// never leave a half-written config behind. std::fs::rename replaces existing
-// files on Windows as well.
-pub(super) fn write_atomic(path: &Path, contents: &str) -> Result<()> {
-    let directory = path.parent().unwrap_or_else(|| Path::new("."));
-    fs::create_dir_all(directory)?;
-
-    let file_name = path
-        .file_name()
-        .and_then(OsStr::to_str)
-        .unwrap_or(DEFAULT_CONFIG_NAME);
-    // Unique sibling name: concurrent writers must not clobber each other's
-    // temp file, and the dot prefix keeps it out of glob listings.
-    let tmp_path = directory.join(format!(".{file_name}.{}.tmp", uuid::Uuid::new_v4()));
-
-    let result = fs::write(&tmp_path, contents).and_then(|()| fs::rename(&tmp_path, path));
-    if result.is_err() {
-        // Best-effort cleanup; a leftover temp file is harmless but noisy.
-        let _ = fs::remove_file(&tmp_path);
-    }
-    // No context added here on purpose: every caller attaches its own
-    // user-facing message, and stacking contexts would only obscure it.
-    result?;
-
-    Ok(())
 }

@@ -299,7 +299,10 @@ fn normalize_raw_target_input(
             bail!("target {} 的 MCP configPrefix 不能为空。", target_id);
         }
         None if !config_prefix.is_empty() => {
-            bail!("target {} 填写了 configPrefix，必须同时提供 MCP 配置文件路径。", target_id);
+            bail!(
+                "target {} 填写了 configPrefix，必须同时提供 MCP 配置文件路径。",
+                target_id
+            );
         }
         _ => {}
     }

@@ -1,26 +1,9 @@
-import { ref } from "vue";
-import type { AppToastNotice } from "@shared/ui/AppToast.vue";
+import { createNoticeSingleton } from "@shared/lib/notice";
 
-// Module-level singleton: every composable that calls `useWorkspaceNotice`
-// shares the same notice ref, so Workspace.vue can render a single AppToast.
-const notice = ref<AppToastNotice | null>(null);
+// 模块级单例：所有调用 useWorkspaceNotice 的 composable 共享同一个
+// notice ref，由 Workspace.vue 渲染唯一的 toast。
+const singleton = createNoticeSingleton();
 
 export function useWorkspaceNotice() {
-  function showNotice(message: string, tone: AppToastNotice["tone"]) {
-    notice.value = {
-      id: Date.now(),
-      message,
-      tone,
-    };
-  }
-
-  function clearNotice() {
-    notice.value = null;
-  }
-
-  return {
-    notice,
-    showNotice,
-    clearNotice,
-  };
+  return singleton;
 }

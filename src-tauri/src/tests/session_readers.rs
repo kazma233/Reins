@@ -630,9 +630,7 @@ fn opencode_v2_parses_tool_content_and_non_message_events() -> Result<()> {
         .find(|event| event.kind == "compaction")
         .expect("compaction event");
     assert!(
-        compaction
-            .summary
-            .contains("v2 读取改造"),
+        compaction.summary.contains("v2 读取改造"),
         "unexpected compaction summary: {}",
         compaction.summary
     );

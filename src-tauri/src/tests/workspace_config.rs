@@ -1,33 +1,11 @@
 use std::fs;
-use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::Result;
 
-use super::config::write_atomic;
 use super::*;
-
-struct TestDir {
-    path: PathBuf,
-}
-
-impl TestDir {
-    fn new(prefix: &str) -> Result<Self> {
-        let path = std::env::temp_dir().join(format!("reins-{prefix}-{}", uuid::Uuid::new_v4()));
-        fs::create_dir_all(&path)?;
-        Ok(Self { path })
-    }
-
-    fn path(&self) -> &Path {
-        &self.path
-    }
-}
-
-impl Drop for TestDir {
-    fn drop(&mut self) {
-        fs::remove_dir_all(&self.path).ok();
-    }
-}
+use crate::support::fs::write_atomic;
+use crate::test_support::TestDir;
 
 // Seed an isolated store with a config file holding the given local skill
 // sources. Local sources keep the test off the network and off the real git

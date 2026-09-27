@@ -378,11 +378,7 @@ fn parse_overview(path: &Path) -> Result<SessionOverview> {
     })
 }
 
-fn parse_messages_page(
-    path: &Path,
-    offset: usize,
-    limit: usize,
-) -> Result<SessionMessagePage> {
+fn parse_messages_page(path: &Path, offset: usize, limit: usize) -> Result<SessionMessagePage> {
     let family = session_family_for_path(path)?;
     let all_messages = cached_messages_for_family(&family)?;
     let (messages, start, next_offset, total_count) =
@@ -782,7 +778,10 @@ fn tool_blocks(value: &Value) -> Vec<ContentBlock> {
     let output_text = state
         .and_then(|state| state.get("content"))
         .and_then(tool_content_text);
-    let is_error = state.and_then(|state| state.get("status")).and_then(Value::as_str) == Some("error");
+    let is_error = state
+        .and_then(|state| state.get("status"))
+        .and_then(Value::as_str)
+        == Some("error");
     let mut blocks = Vec::new();
 
     if input.is_some_and(|item| !item.is_null()) {
@@ -841,7 +840,9 @@ fn tool_content_text(content: &Value) -> Option<String> {
 
     if texts.is_empty() {
         // 非文本输出块降级为 JSON 展示
-        return (!items.is_empty()).then(|| super::stringify_json(content)).flatten();
+        return (!items.is_empty())
+            .then(|| super::stringify_json(content))
+            .flatten();
     }
 
     Some(texts.join("\n"))

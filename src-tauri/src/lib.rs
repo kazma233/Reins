@@ -1,4 +1,5 @@
 pub mod logger;
+mod providers;
 mod session;
 mod state;
 mod support;
@@ -9,6 +10,8 @@ pub fn run() {
 
     tauri::Builder::default()
         .manage(workspace::WorkspaceConfigStore::app())
+        .manage(providers::ProviderConfigStore::app())
+        .manage(providers::ProviderKeyStore::native())
         .manage(state::session_index::SessionIndexState::default())
         .manage(state::skill_discovery::SkillDiscoveryState::default())
         .invoke_handler(tauri::generate_handler![
@@ -54,6 +57,18 @@ pub fn run() {
             workspace::commands::remove_target_skill_link,
             workspace::commands::refresh_git_skill_source,
             workspace::commands::update_skill_source,
+            providers::commands::get_providers_state,
+            providers::commands::upsert_provider,
+            providers::commands::delete_provider,
+            providers::commands::get_provider_key,
+            providers::commands::set_provider_key,
+            providers::commands::fetch_provider_models,
+            providers::commands::fetch_provider_models_direct,
+            providers::commands::fetch_modelsdev_catalog,
+            providers::commands::preview_provider_apply,
+            providers::commands::apply_provider_to_app,
+            providers::commands::remove_provider_from_app,
+            providers::commands::remove_external_entry,
         ])
         .run(tauri::generate_context!())
         .expect("failed to run reins");

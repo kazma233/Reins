@@ -1,10 +1,37 @@
 use std::env;
-use std::path::Path;
+use std::fs;
+use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard, OnceLock};
+
+use anyhow::Result;
+
+// 临时目录夹具：进程级唯一目录 + Drop 自动清理，供各域测试共用。
+pub(crate) struct TestDir {
+    path: PathBuf,
+}
+
+impl TestDir {
+    pub(crate) fn new(prefix: &str) -> Result<Self> {
+        let path = std::env::temp_dir().join(format!("reins-{prefix}-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&path)?;
+        Ok(Self { path })
+    }
+
+    pub(crate) fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl Drop for TestDir {
+    fn drop(&mut self) {
+        fs::remove_dir_all(&self.path).ok();
+    }
+}
 
 pub(crate) struct TestEnvGuard {
     original_grok_home: Option<std::ffi::OsString>,
     original_home: Option<String>,
+    original_reins_test_home: Option<std::ffi::OsString>,
     original_path: Option<String>,
     original_pi_agent_dir: Option<String>,
     original_pi_session_dir: Option<String>,
@@ -20,6 +47,7 @@ impl TestEnvGuard {
         Self {
             original_grok_home: env::var_os("GROK_HOME"),
             original_home: env::var("HOME").ok(),
+            original_reins_test_home: env::var_os("REINS_TEST_HOME"),
             original_path: env::var("PATH").ok(),
             original_pi_agent_dir: env::var("PI_CODING_AGENT_DIR").ok(),
             original_pi_session_dir: env::var("PI_CODING_AGENT_SESSION_DIR").ok(),
@@ -30,9 +58,12 @@ impl TestEnvGuard {
     pub(crate) fn set_home(temp_home: &Path) -> Self {
         let guard = Self::lock();
         // The override isolates the Rust backends on every platform; HOME also
-        // redirects child processes (opencode CLI, git) on Unix.
+        // redirects child processes (opencode CLI, git) on Unix. Windows
+        // ignores HOME in dirs::home_dir(), so the env var below carries the
+        // temp home into test child processes (see user_home_dir).
         unsafe { env::remove_var("GROK_HOME") };
         unsafe { env::set_var("HOME", temp_home) };
+        unsafe { env::set_var("REINS_TEST_HOME", temp_home) };
         crate::support::fs::set_home_override(Some(temp_home.to_path_buf()));
         guard
     }
@@ -53,6 +84,11 @@ impl Drop for TestEnvGuard {
         match &self.original_home {
             Some(home) => unsafe { env::set_var("HOME", home) },
             None => unsafe { env::remove_var("HOME") },
+        }
+
+        match &self.original_reins_test_home {
+            Some(home) => unsafe { env::set_var("REINS_TEST_HOME", home) },
+            None => unsafe { env::remove_var("REINS_TEST_HOME") },
         }
 
         match &self.original_path {

@@ -1134,13 +1134,19 @@ pub(super) fn remove_source_symlinks_from_targets_with_root(
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
             Err(error) => {
                 return Err(error).with_context(|| {
-                    format!("读取 target skills 目录失败：{}", target.skill_dir.display())
+                    format!(
+                        "读取 target skills 目录失败：{}",
+                        target.skill_dir.display()
+                    )
                 });
             }
         };
         for entry in entries {
             let entry = entry.with_context(|| {
-                format!("读取 target skills 目录项失败：{}", target.skill_dir.display())
+                format!(
+                    "读取 target skills 目录项失败：{}",
+                    target.skill_dir.display()
+                )
             })?;
             let path = entry.path();
             let Some(resolved) = read_directory_link_target(&path)? else {

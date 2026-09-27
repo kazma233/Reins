@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 
 pub(crate) mod catalog;
 pub(crate) mod commands;
@@ -14,8 +14,8 @@ pub(crate) mod claude_code;
 pub(crate) mod codex;
 pub(crate) mod family_index;
 pub(crate) mod family_timeline;
-pub(crate) mod opencode;
 pub(crate) mod grokbuild;
+pub(crate) mod opencode;
 pub(crate) mod pi;
 pub(crate) mod summary_cache;
 
