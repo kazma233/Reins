@@ -12,8 +12,8 @@ use anyhow::{Result, bail};
 use toml::Value as TomlValue;
 
 use super::{
-    AppAdapter, AppCapability, ToolEnv, display_path, ensure_protocol_supported, external_entry,
-    grok_config_path, read_toml, registration_key, serialize_toml,
+    AppAdapter, AppCapability, ModelField, ToolEnv, display_path, ensure_protocol_supported,
+    external_entry, grok_config_path, read_toml, registration_key, serialize_toml,
 };
 use crate::providers::types::{
     ApplyProviderInput, ProviderAppId, ProviderAppState, ProviderProtocol, ReasoningLevel,
@@ -169,6 +169,10 @@ impl AppAdapter for GrokbuildAdapter {
             supported_protocols: ProviderProtocol::all(),
             additive: true,
             required_model_fields: &[],
+            // Grok 有 context_window 与 supports_reasoning_effort 落点；
+            // 最大输出（max_completion_tokens 属采样上限，Reins 不写）与
+            // 图像输入（配置无对应字段）无落点。
+            unwritten_model_fields: &[ModelField::MaxOutputTokens, ModelField::SupportsImages],
             supported_reasoning_levels: ReasoningLevel::all(),
         }
     }
@@ -314,6 +318,25 @@ impl AppAdapter for GrokbuildAdapter {
                 "model_provider".to_string(),
                 TomlValue::String(registration.clone()),
             );
+            // 缺 context_window 时 grok 按 200000 兜底并据此计算自动压缩
+            // 时机（1.0.41 debug 日志：missing context_window, defaulting to
+            // 200000），有元数据就显式写入。
+            if let Some(context_window) = model.context_window {
+                entry.insert(
+                    "context_window".to_string(),
+                    TomlValue::Integer(context_window),
+                );
+            }
+            // 未声明支持的模型会被 grok 判为不支持思考等级并丢弃配置档位
+            // （1.0.41 实测 WARN：model does not support effort; ignoring it），
+            // 官方字段 supports_reasoning_effort 是 [models].default_reasoning_effort
+            // 生效的前提。
+            if model.reasoning == Some(true) {
+                entry.insert(
+                    "supports_reasoning_effort".to_string(),
+                    TomlValue::Boolean(true),
+                );
+            }
             if provider.protocol == ProviderProtocol::AnthropicMessages {
                 // anthropic 协议的模型条目用 extra_headers 携带 x-api-key
                 // 与 anthropic-version，不写 api_key 字段。

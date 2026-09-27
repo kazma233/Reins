@@ -260,6 +260,9 @@ pub(crate) struct ProviderAppState {
     pub(crate) reasoning_level_writes: Vec<ReasoningEffortWrite>,
     // true = 多 Provider 并存（新增）；false = 单活动 Provider（应用即替换）。
     pub(crate) additive: bool,
+    // 该工具不会写入的模型元数据字段标签（能力表同源下发）；应用弹窗
+    // 据此明示用户填写的这些值不影响该工具。
+    pub(crate) unwritten_model_fields: Vec<String>,
     pub(crate) entries: Vec<ProviderAppEntry>,
     // 单个工具配置损坏时不拖垮整个页面，把错误放进对应卡片。
     #[serde(skip_serializing_if = "Option::is_none")]

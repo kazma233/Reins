@@ -51,7 +51,8 @@ impl ToolEnv {
     }
 }
 
-// 工具能力表：协议兼容 + 必填字段门控 + 思考等级支持集 + 替换/并存语义。
+// 工具能力表：协议兼容 + 必填字段门控 + 不写入的元数据 + 思考等级支持集 +
+// 替换/并存语义。
 pub(crate) struct AppCapability {
     pub(crate) supported_protocols: &'static [ProviderProtocol],
     // true = 多 Provider 并存（新增条目）；false = 单活动 Provider（应用即替换）。
@@ -59,13 +60,18 @@ pub(crate) struct AppCapability {
     // 目标工具必填的模型元数据；缺失时应用按钮禁用并列出缺失项。
     // v1 五个工具暂无硬必填项，机制保留待 unverified 项验证后填充。
     pub(crate) required_model_fields: &'static [ModelField],
+    // 该工具配置里没有落点的模型元数据；应用弹窗据此明示用户填写的
+    // 这些值不会影响该工具。
+    pub(crate) unwritten_model_fields: &'static [ModelField],
     pub(crate) supported_reasoning_levels: &'static [ReasoningLevel],
 }
 
+// 模型元数据维度：required_model_fields 用它做应用门控，
+// unwritten_model_fields 用它声明该工具不写入哪些元数据。
+// ReasoningLevels 只在前者有意义（等级选择本身经弹窗默认档写入），
+// 暂无工具引用，保留待 unverified 项验证。
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[allow(dead_code)]
-// v1 五个工具的必填元数据集合均为空，变体暂未构造；机制保留待
-// unverified 项验证后由能力表引用。
 pub(crate) enum ModelField {
     ContextWindow,
     MaxOutputTokens,
@@ -95,6 +101,15 @@ impl ModelField {
         }
     }
 }
+
+// 只写模型 ID 与默认值、不落任何 per-model 元数据的工具共用清单
+// （Codex 单模型顶层键、Claude 只写 model、OpenCode 只写模型名称）。
+pub(crate) const NO_MODEL_METADATA: &[ModelField] = &[
+    ModelField::ContextWindow,
+    ModelField::MaxOutputTokens,
+    ModelField::SupportsImages,
+    ModelField::Reasoning,
+];
 
 pub(crate) trait AppAdapter: Sync {
     fn id(&self) -> ProviderAppId;
@@ -476,6 +491,11 @@ pub(crate) fn empty_state(app: ProviderAppId, config_paths: Vec<PathBuf>) -> Pro
         supported_reasoning_levels: capability.supported_reasoning_levels.to_vec(),
         reasoning_level_writes,
         additive: capability.additive,
+        unwritten_model_fields: capability
+            .unwritten_model_fields
+            .iter()
+            .map(|field| field.label().to_string())
+            .collect(),
         entries: Vec::new(),
         load_error: None,
     }

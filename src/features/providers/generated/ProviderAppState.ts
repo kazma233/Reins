@@ -5,4 +5,4 @@ import type { ProviderProtocol } from "./ProviderProtocol";
 import type { ReasoningEffortWrite } from "./ReasoningEffortWrite";
 import type { ReasoningLevel } from "./ReasoningLevel";
 
-export type ProviderAppState = { app: ProviderAppId, configPaths: Array<string>, configExists: boolean, supportedProtocols: Array<ProviderProtocol>, supportedReasoningLevels: Array<ReasoningLevel>, reasoningLevelWrites: Array<ReasoningEffortWrite>, additive: boolean, entries: Array<ProviderAppEntry>, loadError?: string | null, };
+export type ProviderAppState = { app: ProviderAppId, configPaths: Array<string>, configExists: boolean, supportedProtocols: Array<ProviderProtocol>, supportedReasoningLevels: Array<ReasoningLevel>, reasoningLevelWrites: Array<ReasoningEffortWrite>, additive: boolean, unwrittenModelFields: Array<string>, entries: Array<ProviderAppEntry>, loadError?: string | null, };

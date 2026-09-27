@@ -49,6 +49,7 @@ impl AppAdapter for CodexAdapter {
             supported_protocols: &[ProviderProtocol::OpenaiResponses],
             additive: false,
             required_model_fields: &[],
+            unwritten_model_fields: super::NO_MODEL_METADATA,
             supported_reasoning_levels: SUPPORTED_LEVELS,
         }
     }

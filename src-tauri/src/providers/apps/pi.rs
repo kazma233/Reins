@@ -58,6 +58,8 @@ impl AppAdapter for PiAdapter {
             supported_protocols: ProviderProtocol::all(),
             additive: true,
             required_model_fields: &[],
+            // Pi 的 models.json 逐模型写 reasoning/contextWindow/maxTokens/input。
+            unwritten_model_fields: &[],
             supported_reasoning_levels: ReasoningLevel::all(),
         }
     }

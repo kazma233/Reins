@@ -714,6 +714,108 @@ fn grok_max_reasoning_writes_xhigh() -> Result<()> {
     Ok(())
 }
 
+// 模型元数据齐全时逐模型写 context_window 与 supports_reasoning_effort：
+// 缺 context_window 时 grok 按 200000 兜底计算自动压缩时机；未声明
+// supports_reasoning_effort 的模型会被判为不支持思考等级，[models] 里写的
+// default_reasoning_effort 被静默丢弃（grok 1.0.41 debug 日志实测）。
+#[test]
+fn grok_apply_writes_context_window_and_reasoning_support() -> Result<()> {
+    let isolated = Isolated::new()?;
+    isolated.seed_model("p1", "model-a")?;
+    isolated.set_key("p1")?;
+
+    isolated.apply(
+        "p1",
+        ProviderAppId::Grokbuild,
+        &["model-a"],
+        "model-a",
+        Some(ReasoningLevel::High),
+    )?;
+    let content = read_text(&grok_path());
+    assert!(content.contains("context_window = 200000"));
+    assert!(content.contains("supports_reasoning_effort = true"));
+    assert!(content.contains("default_reasoning_effort = \"high\""));
+    // 新增字段不影响反读归类。
+    let state = isolated.state()?;
+    let grok = state
+        .apps
+        .iter()
+        .find(|app| app.app == ProviderAppId::Grokbuild)
+        .expect("grok state");
+    assert_eq!(grok.entries[0].status, ProviderAppEntryStatus::Applied);
+    Ok(())
+}
+
+// 元数据缺失或明确不支持思考时两个字段都不写，不落无依据的猜测值；
+// 最大输出（max_completion_tokens）与图像输入本就没有落点。
+#[test]
+fn grok_apply_omits_absent_model_metadata() -> Result<()> {
+    let isolated = Isolated::new()?;
+    isolated.store.upsert(ProviderUpsertInput {
+        provider_id: "p1".to_string(),
+        label: "Label p1".to_string(),
+        protocol: ProviderProtocol::OpenaiChatCompletions,
+        base_url: "https://p1.test/v1".to_string(),
+        models: vec![ProviderModelInput {
+            id: "model-a".to_string(),
+            label: "Model A".to_string(),
+            context_window: None,
+            max_output_tokens: Some(64_000),
+            supports_images: Some(true),
+            reasoning: Some(false),
+            reasoning_levels: None,
+        }],
+    })?;
+    isolated.set_key("p1")?;
+
+    isolated.apply(
+        "p1",
+        ProviderAppId::Grokbuild,
+        &["model-a"],
+        "model-a",
+        None,
+    )?;
+    let content = read_text(&grok_path());
+    assert!(!content.contains("context_window"));
+    assert!(!content.contains("supports_reasoning_effort"));
+    assert!(!content.contains("max_completion_tokens"));
+    Ok(())
+}
+
+// 应用弹窗的「不写入的模型元数据」清单来自能力表：Codex/Claude/OpenCode
+// 不落任何 per-model 元数据，Pi 全覆盖，Grok 缺最大输出与图像输入。
+#[test]
+fn app_states_declare_unwritten_model_fields() -> Result<()> {
+    let isolated = Isolated::new()?;
+    let state = isolated.state()?;
+    let fields = |app: ProviderAppId| {
+        state
+            .apps
+            .iter()
+            .find(|item| item.app == app)
+            .expect("app state")
+            .unwritten_model_fields
+            .clone()
+    };
+
+    assert_eq!(
+        fields(ProviderAppId::Grokbuild),
+        vec!["最大输出", "图像输入"]
+    );
+    assert!(fields(ProviderAppId::Pi).is_empty());
+    for app in [
+        ProviderAppId::Codex,
+        ProviderAppId::Claude,
+        ProviderAppId::Opencode,
+    ] {
+        assert_eq!(
+            fields(app),
+            vec!["上下文窗口", "最大输出", "图像输入", "推理能力"]
+        );
+    }
+    Ok(())
+}
+
 // Grok 的 messages 后端固定请求 {base_url}/messages 不补 /v1（grok 1.0.41
 // 实测）：providers.yaml 按 anthropic 生态习惯不带 /v1 时，写入补 /v1，
 // 且反读按同一口径比对、不误判漂移。

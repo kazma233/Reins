@@ -77,7 +77,15 @@ providers:
 | Claude Code | `env.ANTHROPIC_BASE_URL`（聚合平台必写；不写官方端点）、`env.ANTHROPIC_API_KEY`、`model`、`effortLevel`；保留文件中其他键 |
 | OpenCode v2 | `providers["reins-x"]`（v2 规范 schema：`name`、`package` 按协议选 `@opencode/ai/providers/openai-compatible` / `@opencode/ai/providers/anthropic`、`settings.baseURL`、`settings.apiKey` 明文、`models`）+ 顶层 `model="reins-x/<id>"`；写入只用 v2 规范格式，v1 遗留格式（`provider`/`npm`/`options`）只读展示、可删除，不写入 |
 | Pi | `models.json` 的 `providers["reins-x"]`（baseUrl、api、apiKey、models 含 reasoning 等元数据）+ `settings.json` 的 `defaultProvider`、`defaultModel`、`defaultThinkingLevel` |
-| Grok Build | `[model_providers.reins-x]`（base_url、api_backend；`anthropic_messages` 的 base_url 写入时规范化为 `/v1` 结尾，见验证文档 2026-09-27 实测）+ 每个 `[model."reins-x--<id>"]`（model、name、model_provider、api_key；`anthropic_messages` 用 `extra_headers` 携带 `x-api-key` 与 `anthropic-version`）+ `[models] default`、`default_reasoning_effort`（`Max` 档映射写出 `"xhigh"`：Grok UI 无 max 档且请求层两者等价） |
+| Grok Build | `[model_providers.reins-x]`（base_url、api_backend；`anthropic_messages` 的 base_url 写入时规范化为 `/v1` 结尾，见验证文档 2026-09-27 实测）+ 每个 `[model."reins-x--<id>"]`（model、name、model_provider、api_key；`anthropic_messages` 用 `extra_headers` 携带 `x-api-key` 与 `anthropic-version`；模型有元数据时另写 `context_window` 与 `supports_reasoning_effort = true`，见下条）+ `[models] default`、`default_reasoning_effort`（`Max` 档映射写出 `"xhigh"`：Grok UI 无 max 档且请求层两者等价）。模型的最大输出与图像输入在该工具无落点，应用弹窗明示 |
+
+逐模型元数据的写入口径（能力表 `unwritten_model_fields` 与各适配器 apply 同源）：
+
+- Grok Build：`context_window` 有元数据就写；grok 1.0.41 实测缺该字段时按 200000 兜底，而自动压缩按该窗口计算（默认阈值 85%），对非 200K 模型时机失准。`supports_reasoning_effort = true` 在模型 `reasoning` 为真时写；实测未声明该字段的模型被判为不支持思考等级，`[models].default_reasoning_effort` 被静默忽略（`model does not support effort; ignoring it`），即该声明是默认档生效的前提。
+- Pi：逐模型写 `reasoning`、`contextWindow`、`maxTokens`、`input`（text/image），四类元数据全覆盖。
+- Codex / Claude Code / OpenCode：只写模型 ID 与默认值，四类 per-model 元数据（上下文窗口、最大输出、图像输入、推理能力）均不落盘。
+- Grok 的最大输出（`max_completion_tokens` 属采样上限，非元数据落点）与图像输入（配置无对应字段，1.0.41 实测 `supports_images`/`input`/`supports_vision` 均被静默忽略）不写。
+- 应用弹窗展示 `ProviderAppState.unwritten_model_fields`，明示本次应用不写入哪些模型元数据，避免用户误以为填写值已生效。
 
 移除规则：
 

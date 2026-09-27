@@ -9,6 +9,7 @@ import {
   reasoningEffortMappingText,
   reasoningEffortWrite,
   reasoningLevelOptions,
+  unwrittenModelFieldsText,
 } from "./model";
 
 function appState(overrides: Partial<ProviderAppState> = {}): ProviderAppState {
@@ -20,6 +21,7 @@ function appState(overrides: Partial<ProviderAppState> = {}): ProviderAppState {
     supportedReasoningLevels: ["minimal", "low", "medium", "high"],
     reasoningLevelWrites: [],
     additive: false,
+    unwrittenModelFields: [],
     entries: [],
     loadError: null,
     ...overrides,
@@ -102,6 +104,20 @@ describe("reasoningEffortMappingText", () => {
       reasoningLevelWrites: [{ level: "low", writes: "low" }],
     });
     expect(reasoningEffortMappingText(app)).toBeNull();
+  });
+});
+
+describe("unwrittenModelFieldsText", () => {
+  it("lists the model metadata the app does not write", () => {
+    const text = unwrittenModelFieldsText(
+      appState({ app: "grokbuild", unwrittenModelFields: ["最大输出", "图像输入"] })
+    );
+    expect(text).toContain("Grok Build");
+    expect(text).toContain("最大输出、图像输入");
+  });
+
+  it("returns null when the app writes every field", () => {
+    expect(unwrittenModelFieldsText(appState({ app: "pi" }))).toBeNull();
   });
 });
 

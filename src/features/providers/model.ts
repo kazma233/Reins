@@ -116,6 +116,17 @@ export function reasoningEffortMappingText(
   return mappings.map((item) => `${item.level}→${item.writes}`).join("、");
 }
 
+// 应用弹窗提示：该工具不会写入的模型元数据（标签由后端能力表下发）。
+// 无此类字段的提供商返回 null，不产生噪音。
+export function unwrittenModelFieldsText(
+  appState: ProviderAppState
+): string | null {
+  if (appState.unwrittenModelFields.length === 0) {
+    return null;
+  }
+  return `${APP_LABELS[appState.app]} 不会写入这些模型元数据：${appState.unwrittenModelFields.join("、")}；在模型里填写的对应值不会应用到该工具。`;
+}
+
 // 勾选语义两处模型表单共用：选中且未填等级时给常用默认集，
 // 取消时连同思考等级一并清空（应用时不写该元数据）。
 export function toggleReasoning(

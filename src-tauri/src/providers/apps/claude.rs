@@ -42,6 +42,7 @@ impl AppAdapter for ClaudeAdapter {
             supported_protocols: &[ProviderProtocol::AnthropicMessages],
             additive: false,
             required_model_fields: &[],
+            unwritten_model_fields: super::NO_MODEL_METADATA,
             supported_reasoning_levels: SUPPORTED_LEVELS,
         }
     }

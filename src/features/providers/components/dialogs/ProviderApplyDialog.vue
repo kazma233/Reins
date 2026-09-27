@@ -21,6 +21,7 @@ import {
   reasoningEffortWrite,
   reasoningLevelOptions,
   REASONING_LEVEL_LABELS,
+  unwrittenModelFieldsText,
 } from "../../model";
 import { useProvidersNotice } from "../../composables/useProvidersNotice";
 
@@ -78,6 +79,10 @@ watch(
 
 const appState = computed(() => findAppState(props.state, props.app));
 const additive = computed(() => appState.value?.additive ?? true);
+// 该工具不写入的模型元数据提示；无此类字段时为 null 不展示。
+const unwrittenFieldsText = computed(() =>
+  appState.value ? unwrittenModelFieldsText(appState.value) : null
+);
 
 const blockers = computed(() =>
   appState.value ? applyBlockers(appState.value, props.provider, selectedModelIds.value) : []
@@ -215,6 +220,10 @@ function renderDiff(lines: DiffLine[]): string {
             ? "该工具支持多个聚合提供商并存，本次应用只新增/更新本提供商的条目。"
             : "该工具只保留一个活动聚合提供商，本次应用会替换旧提供商的配置。"
         }}
+      </p>
+
+      <p v-if="unwrittenFieldsText" class="providers-section-hint providers-unwritten-fields">
+        {{ unwrittenFieldsText }}
       </p>
 
       <ul v-if="blockers.length > 0" class="providers-blockers">

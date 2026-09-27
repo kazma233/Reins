@@ -115,6 +115,7 @@ impl AppAdapter for OpencodeAdapter {
             ],
             additive: true,
             required_model_fields: &[],
+            unwritten_model_fields: super::NO_MODEL_METADATA,
             supported_reasoning_levels: SUPPORTED_LEVELS,
         }
     }

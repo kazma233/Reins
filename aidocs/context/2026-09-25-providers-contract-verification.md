@@ -71,6 +71,9 @@
 | --- | --- | --- |
 | `api_backend: chat_completions \| responses \| messages` | ✅ 一致 | settings-reference 原文，与实测值相同 |
 | `[model.<id>]` 的 `api_key`/`base_url`/`name`/`extra_headers` | ✅ 一致 | settings-reference（`extra_headers` 可承载 anthropic 头） |
+| `[model.<id>].context_window` | ✅ 已补写（2026-09-27） | settings-reference 原文「Context window size (drives auto-compact timing)」；此前未写，grok 缺该字段按 200000 兜底，见 2026-09-27 补充节 |
+| `[model.<id>].supports_reasoning_effort` | ✅ 已补写（2026-09-27） | settings-reference 原文「Reasoning controls when supported」；此前未写，grok 判该模型不支持思考等级并丢弃 `[models].default_reasoning_effort`，见 2026-09-27 补充节 |
+| `[model.<id>]` 的图像/多模态字段 | ⛔ 不存在 | settings-reference 全表无 image/vision 字段；1.0.41 实测 `supports_images`/`input`/`supports_vision` 被静默忽略，模型元数据无变化。图片相关只有 `[models].image_description`（语义为图片描述模型），Reins 不写图像输入 |
 | `[models].default` / `[models].default_reasoning_effort` | ✅ 键名与位置一致 | settings-reference（位于 `[models]` 段） |
 | `[model_providers]` 表 + `model_provider` 字段 | ⚠️ 备注：官方未文档化 | 官方简化格式是 `[model.<id>]` 直接带 `base_url`/`env_key`；我们的写法来自 grok 1.0.40 实测（`grok inspect --json` 可识别），需真机复测当前版本 |
 | `default_reasoning_effort` 值域 | ✅ 已实测 | 2026-09-27 grok 1.0.41：接受 `none/minimal/low/medium/high/xhigh/max`，拒绝 `off`（报 `invalid reasoning effort`）。Grok 交互 UI 只渲染 low/medium/high/xhigh 四档并把用户选择写回 config；Reins 已把 `Max` 档映射写出 `"xhigh"`（请求层两者等价，见下条），其余档同名直写 |
@@ -106,6 +109,16 @@
 - `default_reasoning_effort` 请求层映射实测（messages 后端，本地监听）：`low/medium/high/xhigh/max` 五档发出的 `thinking` 参数完全相同（`{"type":"adaptive","display":"summarized"}`），无量化差异；`none`/`minimal`/缺省则不带 `thinking` 字段。即对第三方 messages 端点，high 以上各档在请求上等价，`max` 与 `xhigh` 无请求层区别，且 Grok UI 无 max 档可选。
 - 另注意到 `chat_completions`/`responses` 后端的路径拼接规则未实测；OpenAI 生态习惯 base_url 带 `/v1`，暂按用户配置原样写入。
 
+## 2026-09-27 补充：Grok per-model 元数据字段实测（grok 1.0.41）
+
+方法：隔离 `GROK_HOME` + 合成 config.toml（两个自定义模型对照：裸模型 / 带 `context_window` 等字段），`grok -p --debug-file` 与 `grok models`，读 debug 日志与 `session/new` 响应的 `availableModels[]._meta`；另用三个候选字段名探测未知字段行为。
+
+- **`context_window` 缺失时按 200000 兜底**：debug 日志原文 `new model missing context_window, defaulting to 200000 -- set context_window in [model.<key>] to override`；模型 _meta 为 `totalContextTokens: 200000`。写上 `context_window = 128000` 后日志不再出现该条、_meta 为 `128000`。该值驱动自动压缩时机（`[session].auto_compact_threshold_percent` 默认 85）——Reins 此前不写该字段，对非 200K 窗口的模型时机失准。处置：apply 现在有元数据就写 `context_window`，新增测试 `grok_apply_writes_context_window_and_reasoning_support`、`grok_apply_omits_absent_model_metadata`。
+- **`supports_reasoning_effort` 是默认档生效前提**：裸模型 + `[models].default_reasoning_effort = "high"` 时 grok 打 WARN `reasoning_effort: model does not support effort; ignoring it session_id=… model=test-bare effort=high`；模型写 `supports_reasoning_effort = true` 后 _meta 出现 `supportsReasoningEffort: true`（`reasoning_effort = "low"` 亦反映到 _meta 的 `reasoningEffort`）。即 Reins 此前写的 `default_reasoning_effort` 在其自定义模型上被静默忽略。处置：`model.reasoning == Some(true)` 时写 `supports_reasoning_effort = true`。
+- **图像输入无配置落点**：`[model.<id>]` 表无任何 image/vision 字段（settings-reference 全表核对），探测 `supports_images = true`、`input = ["text","image"]`、`supports_vision = true` 三个候选字段全部被静默忽略（debug 日志无 unknown-field 警告，模型 _meta 与裸模型完全相同）；连内置 `grok-4.6` 的 _meta 也没有图片能力字段。Reins 的 `supports_images` 元数据在 Grok 侧不写，由应用弹窗明示。
+- 交叉观察：`_meta.agentType` 均为 `grok-build-plan`；`max_completion_tokens` 实测被接受（解析无 unknown-field 警告），但它是采样上限而非元数据落点，Reins 不写。
+- 上述事实与各工具写入口径汇总到能力表 `unwritten_model_fields`，经 `ProviderAppState` 下发到应用弹窗；对应测试 `app_states_declare_unwritten_model_fields`。
+
 ## 2026-09-27 补充：OpenCode openai_responses 复测（opencode v2.0.18）
 
 方法：隔离目录 + 项目级 `opencode.json`，同一探针条目仅换 `package`；注册级用 `opencode models`（负对照：无配置目录不出现探针条目，确认按目录解析无缓存串扰）；请求级用 `opencode run` + 本地 HTTP 监听器（baseURL `http://127.0.0.1:18081/v1`）。
@@ -124,6 +137,8 @@
 4. ✅ Codex 能力表收掉 off 档（写入 "none" 无文档依据；minimal 保留，用户决策 A），新增测试 `codex_off_reasoning_level_is_rejected`。
 5. ✅ Grok `Max` 档映射写出 `"xhigh"`（2026-09-27：Grok UI 无 max 档、messages 后端请求层 max 与 xhigh 等价），新增测试 `grok_max_reasoning_writes_xhigh`；`messages` 后端 base_url 写入补 `/v1`，新增测试 `grok_anthropic_base_url_gets_v1_suffix_and_inspect_stays_applied`。
 6. ✅ OpenCode `openai_responses` 恢复放行（2026-09-27 v2.0.18 复测 `openai/responses` 端到端可用；`openai-compatible/responses` 仍有包解析缺陷，不采用），apply 写 `openai/responses`，新增测试 `opencode_apply_responses_uses_openai_responses_package`。
+7. ✅ Grok 逐模型补写 `context_window`（有元数据时）与 `supports_reasoning_effort = true`（`reasoning` 为真时），新增测试 `grok_apply_writes_context_window_and_reasoning_support`、`grok_apply_omits_absent_model_metadata`（2026-09-27，依据见上节）。
+8. ✅ 能力表新增 `unwritten_model_fields`，`ProviderAppState` 下发到应用弹窗明示不写入的模型元数据（Codex/Claude/OpenCode 四类全列、Grok 列最大输出与图像输入、Pi 为空），新增测试 `app_states_declare_unwritten_model_fields` 与前端 `model.test.ts` 用例。
 
 ## 后续动作
 
