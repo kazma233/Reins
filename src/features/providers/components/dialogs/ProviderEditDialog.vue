@@ -5,8 +5,8 @@ import AppInput from "@shared/ui/AppInput.vue";
 import AppSelect from "@shared/ui/AppSelect.vue";
 import AppSecretInput from "@shared/ui/AppSecretInput.vue";
 import { extractErrorMessage } from "@shared/lib/errors";
-import { fetchModelsdevCatalog, getProviderKey } from "../../api";
-import type { FetchedModel, ModelsDevCandidate, ProviderModelInput } from "../../generated";
+import { getProviderKey } from "../../api";
+import type { FetchedModel, ModelsDevMeta, ProviderModelInput } from "../../generated";
 import {
   applyModelsDevMeta,
   emptyModelForm,
@@ -16,7 +16,7 @@ import {
   type ProviderFormState,
 } from "../../model";
 import { useProvidersNotice } from "../../composables/useProvidersNotice";
-import ModelsDevCandidatesDialog from "./ModelsDevCandidatesDialog.vue";
+import ModelsDevCompleteDialog from "./ModelsDevCompleteDialog.vue";
 import ProviderFetchModelsDialog from "./ProviderFetchModelsDialog.vue";
 import ProviderModelDialog from "./ProviderModelDialog.vue";
 import ReasoningLevelsSelect from "./ReasoningLevelsSelect.vue";
@@ -43,12 +43,12 @@ const emit = defineEmits<{
 
 const { showNotice } = useProvidersNotice();
 
-// models.dev 多候选的待选状态：候选弹窗确认后回填对应模型行。
-const candidatesDialog = reactive({
+// models.dev 补全的查询状态：弹窗打开后自行发请求，回填落回对应模型行。
+const modelsDevDialog = reactive({
   open: false,
   rowKey: "",
+  providerId: "",
   modelId: "",
-  candidates: [] as ModelsDevCandidate[],
 });
 // 可选密钥：不进表单持久化状态，提交时随 confirm 交给面板写入密钥管理。
 const apiKey = ref("");
@@ -107,10 +107,10 @@ async function loadExistingKey() {
 }
 
 function resetTransient() {
-  candidatesDialog.open = false;
-  candidatesDialog.rowKey = "";
-  candidatesDialog.modelId = "";
-  candidatesDialog.candidates = [];
+  modelsDevDialog.open = false;
+  modelsDevDialog.rowKey = "";
+  modelsDevDialog.providerId = "";
+  modelsDevDialog.modelId = "";
   apiKey.value = "";
   fetchDialogOpen.value = false;
   modelDialogOpen.value = false;
@@ -139,15 +139,15 @@ function addModelRow(model: ProviderModelInput) {
 }
 
 function removeModel(index: number) {
-  // 移除行时同步关掉该行的候选弹窗，避免弹窗确认找不到目标行。
+  // 移除行时同步关掉该行的补全弹窗，避免弹窗回填找不到目标行。
   const rowKey = props.form.models[index]?.rowKey;
-  if (rowKey && candidatesDialog.rowKey === rowKey) {
-    candidatesDialog.open = false;
+  if (rowKey && modelsDevDialog.rowKey === rowKey) {
+    modelsDevDialog.open = false;
   }
   props.form.models.splice(index, 1);
 }
 
-async function completeFromModelsDev(row: ProviderFormState["models"][number]) {
+function openModelsDevDialog(row: ProviderFormState["models"][number]) {
   // models.dev 补全只按提供商名 + 模型 ID 查公共目录；已保存提供商用落库 ID
   // （originalProviderId），新增第一步还没保存时退回表单 ID。
   const providerId = (props.form.originalProviderId ?? props.form.providerId).trim();
@@ -156,35 +156,18 @@ async function completeFromModelsDev(row: ProviderFormState["models"][number]) {
     showNotice("请先填写提供商 ID 与模型 ID。", "error");
     return;
   }
-  try {
-    const result = await fetchModelsdevCatalog(providerId, modelId);
-    if (result.status === "exact" && result.meta) {
-      applyModelsDevMeta(row, result.meta);
-      showNotice("已从 models.dev 预填空缺字段。", "success");
-      return;
-    }
-    if (result.status === "candidates" && result.candidates.length > 0) {
-      // 多候选改弹窗让用户选，不再用行内单选。
-      candidatesDialog.rowKey = row.rowKey;
-      candidatesDialog.modelId = modelId;
-      candidatesDialog.candidates = result.candidates;
-      candidatesDialog.open = true;
-      return;
-    }
-    showNotice("models.dev 未找到该模型。", "error");
-  } catch (error) {
-    showNotice(extractErrorMessage(error, "models.dev 查询失败。"), "error");
-  }
+  modelsDevDialog.rowKey = row.rowKey;
+  modelsDevDialog.providerId = providerId;
+  modelsDevDialog.modelId = modelId;
+  modelsDevDialog.open = true;
 }
 
-// 候选弹窗确认后回填对应模型行的空缺元数据。
-function confirmCandidate(candidate: ModelsDevCandidate) {
-  const row = props.form.models.find(
-    (item) => item.rowKey === candidatesDialog.rowKey
-  );
-  candidatesDialog.open = false;
-  if (row && candidate.meta) {
-    applyModelsDevMeta(row, candidate.meta);
+// 弹窗命中的元数据回填到发起查询的模型行。
+function applyModelsDevCompletion(meta: ModelsDevMeta) {
+  const row = props.form.models.find((item) => item.rowKey === modelsDevDialog.rowKey);
+  modelsDevDialog.open = false;
+  if (row) {
+    applyModelsDevMeta(row, meta);
     showNotice("已从 models.dev 预填空缺字段。", "success");
   }
 }
@@ -289,7 +272,7 @@ function confirmCandidate(candidate: ModelsDevCandidate) {
               class="secondary-button"
               :disabled="loading"
               type="button"
-              @click="completeFromModelsDev(row)"
+              @click="openModelsDevDialog(row)"
             >
               从 models.dev 补全
             </button>
@@ -390,12 +373,12 @@ function confirmCandidate(candidate: ModelsDevCandidate) {
       @confirm="addModelRow"
     />
 
-    <ModelsDevCandidatesDialog
-      :open="candidatesDialog.open"
-      :model-id="candidatesDialog.modelId"
-      :candidates="candidatesDialog.candidates"
-      @close="candidatesDialog.open = false"
-      @confirm="confirmCandidate"
+    <ModelsDevCompleteDialog
+      :open="modelsDevDialog.open"
+      :provider-id="modelsDevDialog.providerId"
+      :model-id="modelsDevDialog.modelId"
+      @close="modelsDevDialog.open = false"
+      @apply="applyModelsDevCompletion"
     />
   </DialogShell>
 </template>
