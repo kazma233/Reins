@@ -196,6 +196,14 @@ fn opencode_path() -> PathBuf {
         .join("opencode.json")
 }
 
+fn opencode_jsonc_path() -> PathBuf {
+    opencode_path().with_file_name("opencode.jsonc")
+}
+
+fn codex_catalog_path() -> PathBuf {
+    codex_path().with_file_name("reins-models.json")
+}
+
 fn pi_models_path() -> PathBuf {
     crate::support::fs::user_home_dir()
         .unwrap()
@@ -393,6 +401,75 @@ fn codex_remove_clears_model_context_window() -> Result<()> {
     Ok(())
 }
 
+// model_catalog_json + reins-models.json：条目带齐 codex 0.145.0 必填字段
+// （缺 supports_parallel_tool_calls 等无默认字段会让配置加载整体失败，
+// 隔离环境实测过），base_instructions 用内置兜底提示词，visibility=list
+// 让模型进选择器。
+#[test]
+fn codex_apply_writes_model_catalog_and_remove_clears_pointer() -> Result<()> {
+    let isolated = Isolated::new()?;
+    isolated.seed_model("p1", "model-a")?;
+
+    isolated.apply(
+        "p1",
+        ProviderAppId::Codex,
+        &["model-a"],
+        "model-a",
+        Some(ReasoningLevel::High),
+    )?;
+    let config: TomlValue = toml::from_str(&read_text(&codex_path()))?;
+    let catalog_path = codex_catalog_path();
+    assert_eq!(
+        config
+            .get("model_catalog_json")
+            .and_then(TomlValue::as_str),
+        Some(catalog_path.display().to_string().as_str())
+    );
+    let catalog: JsonValue = serde_json::from_str(&read_text(&catalog_path))?;
+    let entry = &catalog["models"][0];
+    assert_eq!(entry["slug"], "model-a");
+    assert_eq!(entry["visibility"], "list");
+    assert_eq!(entry["supported_in_api"], true);
+    assert_eq!(entry["shell_type"], "default");
+    assert_eq!(entry["supports_parallel_tool_calls"], false);
+    assert_eq!(entry["truncation_policy"]["mode"], "bytes");
+    assert_eq!(entry["context_window"], 200_000);
+    assert_eq!(entry["input_modalities"][1], "image");
+    assert_eq!(entry["default_reasoning_level"], "high");
+    // base_instructions 非空：空提示词会让会话直接失焦。
+    assert!(entry["base_instructions"].as_str().unwrap().len() > 100);
+
+    // 移除平台：指针随条目清掉；目录文件不再被引用，留在原地无害。
+    isolated.remove_from("p1", ProviderAppId::Codex)?;
+    assert!(!read_text(&codex_path()).contains("model_catalog_json"));
+    assert!(catalog_path.exists());
+    Ok(())
+}
+
+// 用户自己的 model_catalog_json 指向不归 Reins 管，移除时不动。
+#[test]
+fn codex_remove_keeps_user_model_catalog_json() -> Result<()> {
+    let isolated = Isolated::new()?;
+    isolated.seed_model("p1", "model-a")?;
+    isolated.apply("p1", ProviderAppId::Codex, &["model-a"], "model-a", None)?;
+
+    let path = codex_path();
+    let mut edited: TomlValue = toml::from_str(&read_text(&path))?;
+    edited
+        .as_table_mut()
+        .unwrap()
+        .insert("model_catalog_json".to_string(), TomlValue::String("C:/custom/models.json".to_string()));
+    fs::write(&path, toml::to_string(&edited)?)?;
+
+    isolated.remove_from("p1", ProviderAppId::Codex)?;
+    let after: TomlValue = toml::from_str(&read_text(&codex_path()))?;
+    assert_eq!(
+        after.get("model_catalog_json").and_then(TomlValue::as_str),
+        Some("C:/custom/models.json")
+    );
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // Claude Code
 // ---------------------------------------------------------------------------
@@ -442,7 +519,7 @@ fn claude_apply_preserves_keys_and_remove_matches_base_url() -> Result<()> {
     let applied: JsonValue = serde_json::from_str(&read_text(&path))?;
     assert_eq!(applied["theme"], "dark");
     assert_eq!(applied["env"]["ANTHROPIC_BASE_URL"], "https://agg.test/api");
-    assert_eq!(applied["env"]["ANTHROPIC_API_KEY"], "sk-test-secret");
+    assert_eq!(applied["env"]["ANTHROPIC_AUTH_TOKEN"], "sk-test-secret");
     assert_eq!(applied["model"], "model-a");
     assert_eq!(applied["effortLevel"], "high");
 
@@ -501,6 +578,81 @@ fn claude_external_base_url_shows_as_external() -> Result<()> {
         .unwrap();
     assert_eq!(claude.entries.len(), 1);
     assert_eq!(claude.entries[0].status, ProviderAppEntryStatus::External);
+    Ok(())
+}
+
+// 认证键为 ANTHROPIC_AUTH_TOKEN（Bearer 头）；旧版写过的 ANTHROPIC_API_KEY
+// 随重新应用清理（两个凭据头并存会被部分网关拒绝），反读时给出提示。
+#[test]
+fn claude_apply_cleans_legacy_api_key_and_notes_it() -> Result<()> {
+    let isolated = Isolated::new()?;
+    let path = claude_path();
+    fs::create_dir_all(path.parent().unwrap())?;
+    fs::write(
+        &path,
+        json!({"env": {"ANTHROPIC_API_KEY": "old-key"}}).to_string(),
+    )?;
+    isolated.seed_provider(
+        "agg",
+        ProviderProtocol::AnthropicMessages,
+        "https://agg.test/api",
+    )?;
+
+    isolated.apply("agg", ProviderAppId::Claude, &["model-a"], "model-a", None)?;
+    let applied: JsonValue = serde_json::from_str(&read_text(&path))?;
+    assert_eq!(applied["env"]["ANTHROPIC_AUTH_TOKEN"], "sk-test-secret");
+    assert!(applied["env"].get("ANTHROPIC_API_KEY").is_none());
+
+    // 手工塞回遗留键 → 反读出现提示；移除时两个认证键一并清理。
+    let with_legacy: JsonValue = serde_json::from_str(&read_text(&path))?;
+    let mut env = with_legacy["env"].clone();
+    env["ANTHROPIC_API_KEY"] = json!("leftover");
+    let mut root = with_legacy.clone();
+    root["env"] = env;
+    fs::write(&path, serde_json::to_string(&root)?)?;
+    let state = isolated.state()?;
+    let claude = state
+        .apps
+        .iter()
+        .find(|app| app.app == ProviderAppId::Claude)
+        .unwrap();
+    assert!(claude.entries[0]
+        .notes
+        .iter()
+        .any(|note| note.contains("ANTHROPIC_API_KEY")));
+
+    isolated.remove_from("agg", ProviderAppId::Claude)?;
+    let removed: JsonValue = serde_json::from_str(&read_text(&path))?;
+    assert!(removed.get("env").is_none());
+    Ok(())
+}
+
+// CLAUDE_CONFIG_DIR 重定位配置目录（官方支持），与 CODEX_HOME 等同一模式。
+#[test]
+fn claude_honors_claude_config_dir() -> Result<()> {
+    let isolated = Isolated::new()?;
+    isolated.seed_provider(
+        "agg",
+        ProviderProtocol::AnthropicMessages,
+        "https://agg.test/api",
+    )?;
+    let custom_dir = TestDir::new("claude-config-dir")?;
+    let env = ToolEnv {
+        claude_config_dir: Some(custom_dir.path().to_path_buf()),
+        ..ToolEnv::default()
+    };
+
+    apply_provider_inner(
+        &isolated.store,
+        &env,
+        &plan("agg", ProviderAppId::Claude, &["model-a"], "model-a", None),
+    )?;
+
+    let settings = custom_dir.path().join("settings.json");
+    let applied: JsonValue = serde_json::from_str(&read_text(&settings))?;
+    assert_eq!(applied["env"]["ANTHROPIC_BASE_URL"], "https://agg.test/api");
+    // 默认路径不受影响：未在 ~/.claude 下创建文件。
+    assert!(!claude_path().exists());
     Ok(())
 }
 
@@ -873,6 +1025,92 @@ fn opencode_inspect_reads_both_v1_and_v2_nodes() -> Result<()> {
         .find(|entry| entry.key == "gateway-b")
         .expect("gateway-b");
     assert_eq!(b.protocol, Some(ProviderProtocol::OpenaiChatCompletions));
+    Ok(())
+}
+
+// 只有 opencode.jsonc（带注释）时：反读可见、apply 写进同一文件，不再
+// 另建 opencode.json。
+#[test]
+fn opencode_reads_and_writes_jsonc_when_only_jsonc_exists() -> Result<()> {
+    let isolated = Isolated::new()?;
+    let jsonc = opencode_jsonc_path();
+    fs::create_dir_all(jsonc.parent().unwrap())?;
+    fs::write(
+        &jsonc,
+        "// 用户注释\n{\"providers\":{\"manual\":{\"name\":\"Manual\",\"package\":\"@opencode/ai/providers/openai-compatible\",\"settings\":{\"baseURL\":\"https://manual.test/v1\"}}}}",
+    )?;
+    isolated.seed_model("p1", "model-a")?;
+
+    let state = isolated.state()?;
+    let opencode = state
+        .apps
+        .iter()
+        .find(|app| app.app == ProviderAppId::Opencode)
+        .expect("opencode state");
+    assert_eq!(opencode.entries.len(), 1);
+    assert_eq!(opencode.entries[0].key, "manual");
+    assert_eq!(opencode.entries[0].status, ProviderAppEntryStatus::External);
+
+    isolated.apply("p1", ProviderAppId::Opencode, &["model-a"], "model-a", None)?;
+    let written: JsonValue = serde_json::from_str(&read_text(&jsonc))?;
+    assert_eq!(written["model"], "reins-p1/model-a");
+    assert!(written["providers"]["reins-p1"].is_object());
+    // 未另建 opencode.json。
+    assert!(!opencode_path().exists());
+    Ok(())
+}
+
+// 两个文件并存：.jsonc 顶层键整键覆盖 .json；apply 目标选 .jsonc，并把
+// 留在 .json 里的旧注册键清掉，避免同一 reins- 条目散在两个文件。
+#[test]
+fn opencode_jsonc_takes_precedence_and_apply_migrates_registration() -> Result<()> {
+    let isolated = Isolated::new()?;
+    isolated.seed_model("p1", "model-a")?;
+    // 先只在 opencode.json 里应用一次。
+    isolated.apply("p1", ProviderAppId::Opencode, &["model-a"], "model-a", None)?;
+
+    // 用户随后创建了 opencode.jsonc（只定义 providers 键）。
+    let jsonc = opencode_jsonc_path();
+    fs::write(
+        &jsonc,
+        json!({"providers": {"manual": {
+            "name": "Manual",
+            "package": "@opencode/ai/providers/openai-compatible",
+            "settings": {"baseURL": "https://manual.test/v1"}
+        }}})
+        .to_string(),
+    )?;
+
+    // 反读：.json 里的条目标注被覆盖，不生效。
+    let state = isolated.state()?;
+    let opencode = state
+        .apps
+        .iter()
+        .find(|app| app.app == ProviderAppId::Opencode)
+        .expect("opencode state");
+    let shadowed = opencode
+        .entries
+        .iter()
+        .find(|entry| entry.key == "reins-p1")
+        .expect("reins-p1 in opencode.json");
+    assert!(shadowed
+        .notes
+        .iter()
+        .any(|note| note.contains("opencode.jsonc")));
+
+    // 再次应用：写入 .jsonc，.json 里的旧键清掉。
+    isolated.apply("p1", ProviderAppId::Opencode, &["model-a"], "model-a", None)?;
+    let json_root: JsonValue = serde_json::from_str(&read_text(&opencode_path()))?;
+    let jsonc_root: JsonValue = serde_json::from_str(&read_text(&jsonc))?;
+    assert!(json_root.get("providers").and_then(|p| p.get("reins-p1")).is_none());
+    assert!(jsonc_root["providers"]["reins-p1"].is_object());
+    assert_eq!(jsonc_root["model"], "reins-p1/model-a");
+
+    // 移除：从 .jsonc 清掉注册键与默认模型。
+    isolated.remove_from("p1", ProviderAppId::Opencode)?;
+    let after: JsonValue = serde_json::from_str(&read_text(&jsonc))?;
+    assert!(after.get("providers").and_then(|p| p.get("reins-p1")).is_none());
+    assert!(after.get("model").is_none());
     Ok(())
 }
 

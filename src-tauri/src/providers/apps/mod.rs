@@ -39,6 +39,7 @@ pub(crate) struct ToolEnv {
     pub(crate) codex_home: Option<PathBuf>,
     pub(crate) pi_agent_dir: Option<PathBuf>,
     pub(crate) grok_home: Option<PathBuf>,
+    pub(crate) claude_config_dir: Option<PathBuf>,
 }
 
 impl ToolEnv {
@@ -47,6 +48,7 @@ impl ToolEnv {
             codex_home: std::env::var("CODEX_HOME").ok().map(PathBuf::from),
             pi_agent_dir: std::env::var("PI_CODING_AGENT_DIR").ok().map(PathBuf::from),
             grok_home: std::env::var("GROK_HOME").ok().map(PathBuf::from),
+            claude_config_dir: std::env::var("CLAUDE_CONFIG_DIR").ok().map(PathBuf::from),
         }
     }
 }
@@ -501,26 +503,60 @@ fn home_dir() -> Result<PathBuf> {
     user_home_dir().ok_or_else(|| anyhow::anyhow!("无法解析 HOME 目录。"))
 }
 
-pub(crate) fn codex_config_path(env: &ToolEnv) -> Result<PathBuf> {
-    let base = match &env.codex_home {
+pub(crate) fn codex_home_dir(env: &ToolEnv) -> Result<PathBuf> {
+    Ok(match &env.codex_home {
         Some(dir) => dir.clone(),
         None => home_dir()?.join(".codex"),
-    };
-    Ok(base.join("config.toml"))
+    })
+}
+
+pub(crate) fn codex_config_path(env: &ToolEnv) -> Result<PathBuf> {
+    Ok(codex_home_dir(env)?.join("config.toml"))
 }
 
 pub(crate) fn claude_settings_path(env: &ToolEnv) -> Result<PathBuf> {
-    let _ = env;
-    Ok(home_dir()?.join(".claude").join("settings.json"))
+    // Claude Code 官方支持 CLAUDE_CONFIG_DIR 重定位配置目录，与
+    // CODEX_HOME / PI_CODING_AGENT_DIR / GROK_HOME 同一模式。
+    Ok(match &env.claude_config_dir {
+        Some(dir) => dir.clone(),
+        None => home_dir()?.join(".claude"),
+    }
+    .join("settings.json"))
 }
 
 // OpenCode 在 Windows 上不认 XDG_CONFIG_HOME（v2.0.16 实测，官方文档未写
 // 差异），统一按 HOME/.config 解析，避免与工具实际读取位置分叉。
-pub(crate) fn opencode_config_path(_env: &ToolEnv) -> Result<PathBuf> {
-    Ok(home_dir()?
-        .join(".config")
-        .join("opencode")
-        .join("opencode.json"))
+pub(crate) fn opencode_config_dir() -> Result<PathBuf> {
+    Ok(home_dir()?.join(".config").join("opencode"))
+}
+
+// opencode.json 与 opencode.jsonc 都会被 OpenCode 加载并按顶层键合并，
+// 后者覆盖前者（v2.0.18 config/discovery.ts + config.ts findLast）；
+// 顺序即优先级：低 → 高。
+pub(crate) fn opencode_candidate_paths() -> Result<Vec<PathBuf>> {
+    let dir = opencode_config_dir()?;
+    Ok(vec![
+        dir.join("opencode.json"),
+        dir.join("opencode.jsonc"),
+    ])
+}
+
+// jsonc 容忍注释与尾逗号，用 json5 解析；行为与 read_json_object 对齐。
+pub(crate) fn read_jsonc_object(path: &Path) -> Result<JsonMap<String, JsonValue>> {
+    if !path.exists() {
+        return Ok(JsonMap::new());
+    }
+    let content = std::fs::read_to_string(path)
+        .with_context(|| format!("Failed to read {}", path.display()))?;
+    if content.trim().is_empty() {
+        return Ok(JsonMap::new());
+    }
+    let value: JsonValue = json5::from_str(&content)
+        .with_context(|| format!("JSONC 解析失败：{}", path.display()))?;
+    match value {
+        JsonValue::Object(map) => Ok(map),
+        _ => bail!("配置文件顶层必须是 JSON 对象：{}", path.display()),
+    }
 }
 
 pub(crate) fn pi_models_path(env: &ToolEnv) -> Result<PathBuf> {

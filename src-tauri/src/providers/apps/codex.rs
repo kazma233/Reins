@@ -1,16 +1,22 @@
 // Codex：$CODEX_HOME/config.toml（默认 ~/.codex/config.toml）。
 // 单活动 Provider：应用即替换；仅接受 openai_responses。
+// 另写 $CODEX_HOME/reins-models.json 并以顶层 model_catalog_json 指向它：
+// Codex 不认识的模型会走兜底元数据（272000 窗口）并从选择器消失（fallback
+// visibility=none），目录条目让已选模型带着正确元数据回到选择器。
+// 注意该键是「整体替换」语义：应用期间 Codex 内置模型不出现在选择器，
+// 移除平台后恢复。
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use anyhow::{Result, bail};
+use serde_json::{Value as JsonValue, json};
 use toml::Value as TomlValue;
 
 use super::{
     AppAdapter, AppCapability, ModelField, ToolEnv, classify_reins_entry, codex_config_path,
-    display_path, ensure_protocol_supported, external_entry, read_toml, registration_key,
-    serialize_toml,
+    codex_home_dir, display_path, ensure_protocol_supported, external_entry, read_toml,
+    registration_key, serialize_toml,
 };
 use crate::providers::types::{
     ApplyProviderInput, ProviderAppId, ProviderAppState, ProviderProtocol, ReasoningLevel,
@@ -20,6 +26,91 @@ use crate::providers::types::{
 pub(crate) struct CodexAdapter;
 
 const WIRE_API: &str = "responses";
+const CATALOG_FILE_NAME: &str = "reins-models.json";
+
+// codex 0.145.0 内置兜底提示词（codex-rs/models-manager/prompt.md，
+// Apache-2.0，openai/codex rust-v0.145.0）。目录条目的 base_instructions
+// 是每个模型的系统提示，留空会让 Codex 发出空提示词，因此对齐兜底值：
+// 从「未知模型走 fallback」切到「目录条目」行为零变化。
+const CODEX_PROMPT: &str = include_str!("codex_prompt.md");
+
+// 目录条目中该模型支持的思考档位：优先用模型元数据 reasoning_levels；
+// 只声明 reasoning=true 时给保守三档；其余给空集（Codex 接受空数组）。
+fn catalog_efforts(
+    reasoning: Option<bool>,
+    reasoning_levels: &Option<Vec<ReasoningLevel>>,
+) -> Vec<ReasoningLevel> {
+    if let Some(levels) = reasoning_levels {
+        if !levels.is_empty() {
+            return levels.clone();
+        }
+    }
+    if reasoning == Some(true) {
+        return vec![
+            ReasoningLevel::Low,
+            ReasoningLevel::Medium,
+            ReasoningLevel::High,
+        ];
+    }
+    Vec::new()
+}
+
+// 生成 reins-models.json 内容：条目字段对齐 codex 0.145.0 未知模型兜底
+// 元数据（shell_type/truncation/并行工具调用），仅 visibility 改为 list
+// 让模型进选择器。supports_parallel_tool_calls 等无 serde default 的字段
+// 必须显式写出，缺字段会让 Codex 配置加载整体失败（0.145.0 实测）。
+fn build_catalog(
+    provider: &ResolvedProvider,
+    plan: &ApplyProviderInput,
+) -> Result<String> {
+    let mut models = Vec::new();
+    for (index, model_id) in plan.model_ids.iter().enumerate() {
+        let model = provider
+            .models
+            .iter()
+            .find(|m| m.id == *model_id)
+            .expect("validated by validate_plan");
+        let efforts = catalog_efforts(model.reasoning, &model.reasoning_levels);
+        let mut entry = json!({
+            "slug": model.id,
+            "display_name": model.label,
+            "description": format!("{}（{}）", model.label, provider.label),
+            "base_instructions": CODEX_PROMPT,
+            "supported_reasoning_levels": efforts
+                .iter()
+                .map(|level| json!({ "effort": level.as_str(), "description": "" }))
+                .collect::<Vec<_>>(),
+            "shell_type": "default",
+            "visibility": "list",
+            "supported_in_api": true,
+            "priority": index + 1,
+            "support_verbosity": false,
+            "default_verbosity": JsonValue::Null,
+            "apply_patch_tool_type": JsonValue::Null,
+            "truncation_policy": { "mode": "bytes", "limit": 10_000 },
+            "experimental_supported_tools": [],
+            "input_modalities": if model.supports_images == Some(true) {
+                json!(["text", "image"])
+            } else {
+                json!(["text"])
+            },
+            "service_tiers": [],
+            "supports_parallel_tool_calls": false,
+        });
+        if let Some(context_window) = model.context_window {
+            entry["context_window"] = json!(context_window);
+        }
+        if let Some(level) = plan.default_reasoning_level {
+            if efforts.contains(&level) {
+                entry["default_reasoning_level"] = json!(level.as_str());
+            }
+        }
+        models.push(entry);
+    }
+    let mut content = serde_json::to_string_pretty(&json!({ "models": models }))?;
+    content.push('\n');
+    Ok(content)
+}
 
 // 聚合模型多不在 codex 内置目录里，缺该键时 codex 会走兜底元数据
 // （context_window = 272000）并告警 Unknown model；有元数据就写默认模型的窗口。
@@ -230,6 +321,13 @@ impl AppAdapter for CodexAdapter {
             "model".to_string(),
             TomlValue::String(plan.default_model_id.clone()),
         );
+        // 目录文件先于 config.toml 生成：model_catalog_json 一旦指向缺失或
+        // 非法文件，Codex 配置加载整体失败，两个文件由 commands 层按序原子写。
+        let catalog_path = codex_home_dir(env)?.join(CATALOG_FILE_NAME);
+        root_table.insert(
+            "model_catalog_json".to_string(),
+            TomlValue::String(catalog_path.to_string_lossy().into_owned()),
+        );
         match default_model_context_window(provider, &plan.default_model_id) {
             Some(context_window) => {
                 root_table.insert(
@@ -261,7 +359,10 @@ impl AppAdapter for CodexAdapter {
             }
         }
 
-        Ok(vec![(path, serialize_toml(&root)?)])
+        Ok(vec![
+            (catalog_path, build_catalog(provider, plan)?),
+            (path, serialize_toml(&root)?),
+        ])
     }
 
     fn remove(
@@ -302,6 +403,18 @@ impl AppAdapter for CodexAdapter {
         }
         if !recognizable {
             bail!("Codex 中没有可识别的 {} 条目。", registration);
+        }
+
+        // model_catalog_json 只在仍指向 Reins 的目录文件时清；用户自己
+        // 的目录指向不动。目录文件本身留在原地（写入契约只产出文件
+        // 内容），下次 apply 覆盖，不再被引用即无害。
+        let catalog_path = codex_home_dir(env)?.join(CATALOG_FILE_NAME);
+        let catalog_is_ours = root_table
+            .get("model_catalog_json")
+            .and_then(TomlValue::as_str)
+            .is_some_and(|value| PathBuf::from(value) == catalog_path);
+        if catalog_is_ours {
+            root_table.remove("model_catalog_json");
         }
 
         if root_table.get("model_provider").and_then(TomlValue::as_str)

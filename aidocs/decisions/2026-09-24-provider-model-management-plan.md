@@ -53,7 +53,7 @@ providers:
 - 用户点击「应用到工具」时，Reins 从 `providers.yaml` 读 Key，**明文写入目标工具的全局配置文件**。
 - 禁止出现在：日志、错误、预览（预览中显示 `******`）。
 - 首期仅支持 API Key 认证；不做 Bearer Token/OAuth/apiKeyHelper 类型区分。
-- Claude Code 凭据固定写 `ANTHROPIC_API_KEY`。
+- Claude Code 凭据写 `ANTHROPIC_AUTH_TOKEN`（Authorization: Bearer 头；2026-09-28 由 `ANTHROPIC_API_KEY` 改为该键，只认 Bearer 的网关也能通，见验证文档 2026-09-28 补充（三））。
 
 变更原因（对照）：系统密钥管理（macOS Keychain）会在每次取明文时弹一次登录钥匙串密码，而列表反显、编辑回显、预览脱敏各需要一次读取，一次操作串起来要输多次密码；dev 构建的二进制签名每次编译都变，「始终允许」不生效。用户在知晓明文落盘风险后明确选择废弃密钥链，接受这里的安全降级：`providers.yaml` 即凭据文件，备份/同步/误提交会直接泄露 Key。
 
@@ -66,8 +66,8 @@ providers:
 | 工具 | 只操作的全局文件 | Provider 语义 | 接受协议 |
 | --- | --- | --- | --- |
 | Codex | `$CODEX_HOME/config.toml`（默认 `~/.codex/config.toml`） | 单活动 Provider，应用即替换 | 仅 `openai_responses` |
-| Claude Code | `~/.claude/settings.json` | 单活动，替换 | 仅 `anthropic_messages` |
-| OpenCode v2 | `~/.config/opencode/opencode.json`（Windows 上 OpenCode 不认 `XDG_CONFIG_HOME`，v2.0.16 实测，统一按 `HOME/.config` 解析） | 多 Provider 并存，新增 | `openai_chat_completions`、`openai_responses`（2026-09-27 复测后放行，apply 写 `openai/responses` 包）、`anthropic_messages` |
+| Claude Code | `$CLAUDE_CONFIG_DIR/settings.json`（默认 `~/.claude/settings.json`；官方支持该变量重定位，2026-09-28 接入） | 单活动，替换 | 仅 `anthropic_messages` |
+| OpenCode v2 | `~/.config/opencode/opencode.json(c)`（Windows 上 OpenCode 不认 `XDG_CONFIG_HOME`，v2.0.16 实测，统一按 `HOME/.config` 解析；两个文件都加载、`.jsonc` 顶层键覆盖 `.json`，写入目标选已存在的最高优先级文件，2026-09-28 接入） | 多 Provider 并存，新增 | `openai_chat_completions`、`openai_responses`（2026-09-27 复测后放行，apply 写 `openai/responses` 包）、`anthropic_messages` |
 | Pi | `$PI_CODING_AGENT_DIR/models.json` + `settings.json` | 多 Provider 并存，新增 | 三种均可 |
 | Grok Build | `$GROK_HOME/config.toml`（默认 `~/.grok/config.toml`） | 多 Provider 并存，新增；项目 `.grok/` 不加载模型配置 | 三种均可 |
 
@@ -77,8 +77,8 @@ providers:
 
 | 工具 | 写入内容 |
 | --- | --- |
-| Codex | `model_provider="reins-x"`、`model=<id>`、`model_reasoning_effort`、`model_context_window`（模型有 `context_window` 元数据时写默认模型的窗口，否则清空 Reins 自己写入的值）、`[model_providers.reins-x]`（name、base_url、wire_api="responses"、静态 Bearer Token 字段） |
-| Claude Code | `env.ANTHROPIC_BASE_URL`（聚合平台必写；不写官方端点）、`env.ANTHROPIC_API_KEY`、`env.CLAUDE_CODE_MAX_CONTEXT_TOKENS` / `env.CLAUDE_CODE_MAX_OUTPUT_TOKENS`（取自默认模型元数据，缺失时清空）、`model`、`effortLevel`；保留文件中其他键 |
+| Codex | `model_provider="reins-x"`、`model=<id>`、`model_reasoning_effort`、`model_context_window`（模型有 `context_window` 元数据时写默认模型的窗口，否则清空 Reins 自己写入的值）、`model_catalog_json` 指向 `$CODEX_HOME/reins-models.json`（已选模型逐个生成目录条目，字段对齐 codex 0.145.0 兜底元数据、visibility=list 进选择器、base_instructions 用内置兜底提示词；该键为整体替换语义，见验证文档 2026-09-28 补充（三））、`[model_providers.reins-x]`（name、base_url、wire_api="responses"、静态 Bearer Token 字段） |
+| Claude Code | `env.ANTHROPIC_BASE_URL`（聚合平台必写；不写官方端点）、`env.ANTHROPIC_AUTH_TOKEN`（2026-09-28 起由 `ANTHROPIC_API_KEY` 改写此键，旧键随重新应用清理）、`env.CLAUDE_CODE_MAX_CONTEXT_TOKENS` / `env.CLAUDE_CODE_MAX_OUTPUT_TOKENS`（取自默认模型元数据，缺失时清空）、`model`、`effortLevel`；保留文件中其他键 |
 | OpenCode v2 | `providers["reins-x"]`（v2 规范 schema：`name`、`package` 按协议选 `@opencode/ai/providers/openai-compatible` / `@opencode/ai/providers/responses` / `@opencode/ai/providers/anthropic`、`settings.baseURL`、`settings.apiKey` 明文、`models`）+ 顶层 `model="reins-x/<id>"`；`models.<id>` 逐模型写 `limit{context,output}`（两项都齐全才写）、`capabilities{tools,input,output}`（`supports_images` 决定输入模态）、`settings` 思考设置（openai 系写 `reasoningEffort`，anthropic 包写 `thinking` 预算，见下条）；写入只用 v2 规范格式，v1 遗留格式（`provider`/`npm`/`options`）只读展示、可删除，不写入 |
 | Pi | `models.json` 的 `providers["reins-x"]`（baseUrl、api、apiKey、models 含 reasoning 等元数据）+ `settings.json` 的 `defaultProvider`、`defaultModel`、`defaultThinkingLevel` |
 | Grok Build | `[model_providers.reins-x]`（base_url、api_backend；`anthropic_messages` 的 base_url 写入时规范化为 `/v1` 结尾，见验证文档 2026-09-27 实测）+ 每个 `[model."reins-x--<id>"]`（model、name、model_provider、api_key；`anthropic_messages` 用 `extra_headers` 携带 `x-api-key` 与 `anthropic-version`；模型有元数据时另写 `context_window` 与 `supports_reasoning_effort = true`，见下条）+ `[models] default`、`default_reasoning_effort`（`Max` 档映射写出 `"xhigh"`：Grok UI 无 max 档且请求层两者等价）。模型的最大输出与图像输入在该工具无落点，应用弹窗明示 |

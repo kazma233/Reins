@@ -1,6 +1,7 @@
-// Claude Code：~/.claude/settings.json。单活动 Provider：应用即替换；
-// 仅接受 anthropic_messages。写入覆盖 env.ANTHROPIC_BASE_URL /
-// env.ANTHROPIC_API_KEY / model / effortLevel，保留文件中其他键。
+// Claude Code：$CLAUDE_CONFIG_DIR/settings.json（默认 ~/.claude/settings.json）。
+// 单活动 Provider：应用即替换；仅接受 anthropic_messages。写入覆盖
+// env.ANTHROPIC_BASE_URL / env.ANTHROPIC_AUTH_TOKEN / model / effortLevel，
+// 保留文件中其他键。
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -20,7 +21,12 @@ use crate::providers::types::{
 pub(crate) struct ClaudeAdapter;
 
 const BASE_URL_KEY: &str = "ANTHROPIC_BASE_URL";
-const API_KEY_ENV_KEY: &str = "ANTHROPIC_API_KEY";
+// 认证键用 ANTHROPIC_AUTH_TOKEN（Authorization: Bearer 头）：官方键，且
+// 只认 Bearer 的网关也能通（用户决策 2026-09-28，方案 c）。
+const AUTH_TOKEN_KEY: &str = "ANTHROPIC_AUTH_TOKEN";
+// 旧版 Reins 写的认证键（X-Api-Key 头）。两个凭据头并存会被部分网关
+// 拒绝，应用态下认证由 Reins 管理，apply 时清掉这个遗留键。
+const LEGACY_API_KEY_KEY: &str = "ANTHROPIC_API_KEY";
 // 聚合模型对 Claude Code 是「不认识的模型 ID」：窗口按内置同名 ID 推断、
 // 输出默认 32000（code.claude.com/docs/en/env-vars）。这两个 env 键正是
 // 官方为此场景提供的纠正入口，随活动 provider 由 Reins 管理。
@@ -97,10 +103,15 @@ impl AppAdapter for ClaudeAdapter {
                 // Claude 的 env 写法语义固定为 Anthropic Messages，无字段可反推。
                 Some(ProviderProtocol::AnthropicMessages),
             );
-            if env_table.get(API_KEY_ENV_KEY).is_none() {
+            if env_table.get(AUTH_TOKEN_KEY).is_none() {
                 entry
                     .notes
-                    .push(format!("缺少 {API_KEY_ENV_KEY}，应用后才能生效。"));
+                    .push(format!("缺少 {AUTH_TOKEN_KEY}，应用后才能生效。"));
+            }
+            if env_table.get(LEGACY_API_KEY_KEY).is_some() {
+                entry
+                    .notes
+                    .push(format!("检测到遗留的 {LEGACY_API_KEY_KEY}，重新应用可清理。"));
             }
             entry
         } else {
@@ -137,9 +148,10 @@ impl AppAdapter for ClaudeAdapter {
             JsonValue::String(provider.base_url.clone()),
         );
         env_table.insert(
-            API_KEY_ENV_KEY.to_string(),
+            AUTH_TOKEN_KEY.to_string(),
             JsonValue::String(api_key.to_string()),
         );
+        env_table.remove(LEGACY_API_KEY_KEY);
         // 窗口与输出上限取自默认模型元数据；缺失时清空，避免上一个 provider
         // 的值残留在唯一的活动配置上。
         let default_model = provider
@@ -189,7 +201,7 @@ impl AppAdapter for ClaudeAdapter {
         // 不能误删用户自己的官方配置。
         let Some(provider) = provider else {
             bail!(
-                "平台 {provider_id} 的元数据已删除，无法安全移除 Claude Code 配置；请手动清理 settings.json 中的 {BASE_URL_KEY} 与 {API_KEY_ENV_KEY}。"
+                "平台 {provider_id} 的元数据已删除，无法安全移除 Claude Code 配置；请手动清理 settings.json 中的 {BASE_URL_KEY} 与 {AUTH_TOKEN_KEY}。"
             );
         };
         let path = claude_settings_path(env)?;
@@ -208,7 +220,8 @@ impl AppAdapter for ClaudeAdapter {
 
         if let Some(env_table) = root.get_mut("env").and_then(JsonValue::as_object_mut) {
             env_table.remove(BASE_URL_KEY);
-            env_table.remove(API_KEY_ENV_KEY);
+            env_table.remove(AUTH_TOKEN_KEY);
+            env_table.remove(LEGACY_API_KEY_KEY);
             env_table.remove(MAX_CONTEXT_TOKENS_KEY);
             env_table.remove(MAX_OUTPUT_TOKENS_KEY);
             if env_table.is_empty() {

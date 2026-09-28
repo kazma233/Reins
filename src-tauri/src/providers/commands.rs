@@ -231,7 +231,7 @@ fn app_config_paths(env: &ToolEnv, app: ProviderAppId) -> Vec<PathBuf> {
         Ok(match app {
             ProviderAppId::Codex => vec![super::apps::codex_config_path(env)?],
             ProviderAppId::Claude => vec![super::apps::claude_settings_path(env)?],
-            ProviderAppId::Opencode => vec![super::apps::opencode_config_path(env)?],
+            ProviderAppId::Opencode => super::apps::opencode_candidate_paths()?,
             ProviderAppId::Pi => vec![
                 super::apps::pi_models_path(env)?,
                 super::apps::pi_settings_path(env)?,

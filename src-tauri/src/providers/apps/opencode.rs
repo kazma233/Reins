@@ -1,5 +1,11 @@
-// OpenCode v2：~/.config/opencode/opencode.json。多 Provider 并存：新增
+// OpenCode v2：~/.config/opencode/opencode.json(c)。多 Provider 并存：新增
 // reins- 条目，不动用户已有 Provider。
+//
+// opencode.json 与 opencode.jsonc 都会被 OpenCode 加载，顶层键按「后文件
+// 整键覆盖先文件」合并，.jsonc 优先（v2.0.18 config/discovery.ts 的
+// names 顺序 + config.ts 的 findLast）；OpenCode 自身的配置更新也优先写
+// .jsonc。因此读取看两个文件，写入目标选已存在的最高优先级文件，两个
+// 都不存在时创建 opencode.json。
 //
 // 写入一律用 v2 规范 schema（providers 节点 + package + settings，见
 // opencode.ai/v2/docs/providers）；v2 运行时同时兼容 v1 遗留 schema
@@ -11,14 +17,15 @@
 // Cannot find package '@opencode/ai'，不采用。
 
 use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Result, bail};
 use serde_json::{Map as JsonMap, Value as JsonValue};
 
 use super::{
-    AppAdapter, AppCapability, ToolEnv, display_path, ensure_protocol_supported, external_entry,
-    opencode_config_path, read_json_object, registration_key, serialize_json,
+    AppAdapter, AppCapability, ToolEnv, ensure_protocol_supported, external_entry,
+    opencode_candidate_paths, read_json_object, read_jsonc_object, registration_key,
+    serialize_json,
 };
 use crate::providers::types::{
     ApplyProviderInput, ProviderAppEntry, ProviderAppId, ProviderAppState, ProviderProtocol,
@@ -26,6 +33,45 @@ use crate::providers::types::{
 };
 
 pub(crate) struct OpencodeAdapter;
+
+// 按低→高优先级加载两个候选文件；缺失文件返回空对象，是否真实存在以
+// path.exists() 判断。.jsonc 走 json5 解析（容忍注释）。
+fn load_config_files() -> Result<Vec<(PathBuf, JsonMap<String, JsonValue>)>> {
+    opencode_candidate_paths()?
+        .into_iter()
+        .map(|path| {
+            let root = if is_jsonc(&path) {
+                read_jsonc_object(&path)?
+            } else {
+                read_json_object(&path)?
+            };
+            Ok((path, root))
+        })
+        .collect()
+}
+
+fn is_jsonc(path: &Path) -> bool {
+    path.extension()
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("jsonc"))
+}
+
+fn file_display_name(path: &Path) -> String {
+    path.file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| path.display().to_string())
+}
+
+// 顶层键的生效归属：最后定义该键的文件整键生效（findLast 语义）。
+fn effective_file<'a>(
+    files: &'a [(PathBuf, JsonMap<String, JsonValue>)],
+    key: &str,
+) -> Option<&'a JsonMap<String, JsonValue>> {
+    files
+        .iter()
+        .rev()
+        .find(|(_, root)| root.contains_key(key))
+        .map(|(_, root)| root)
+}
 
 // v2 原生运行时包：OpenAI 请求格式的端点走 openai-compatible；Responses
 // 协议走 openai/responses（compatible/responses 有包解析缺陷，见文件头）；
@@ -193,6 +239,31 @@ fn entry_from_provider_value(
     }
 }
 
+// 从单个文件根里移除注册键：v2 providers 与 v1 provider 两个节点都查，
+// 并清掉指向该键的顶层 model。调用方负责可识别性校验。
+fn remove_registration_from(
+    root: &mut JsonMap<String, JsonValue>,
+    registration: &str,
+) -> Result<()> {
+    for node in ["providers", "provider"] {
+        let Some(table) = root.get_mut(node).and_then(JsonValue::as_object_mut) else {
+            continue;
+        };
+        if table.remove(registration).is_some() && table.is_empty() {
+            root.remove(node);
+        }
+    }
+    let prefix = format!("{registration}/");
+    if root
+        .get("model")
+        .and_then(JsonValue::as_str)
+        .is_some_and(|model| model.starts_with(&prefix))
+    {
+        root.remove("model");
+    }
+    Ok(())
+}
+
 impl AppAdapter for OpencodeAdapter {
     fn id(&self) -> ProviderAppId {
         ProviderAppId::Opencode
@@ -219,52 +290,93 @@ impl AppAdapter for OpencodeAdapter {
         env: &ToolEnv,
         providers: &BTreeMap<String, ResolvedProvider>,
     ) -> Result<ProviderAppState> {
-        let path = opencode_config_path(env)?;
-        let mut state = super::empty_state(ProviderAppId::Opencode, vec![path.clone()]);
-        if !path.exists() {
+        let _ = env;
+        let files = load_config_files()?;
+        let existing: Vec<PathBuf> = files
+            .iter()
+            .filter(|(path, _)| path.exists())
+            .map(|(path, _)| path.clone())
+            .collect();
+        let state_paths = if existing.is_empty() {
+            // 两个候选都不存在时展示默认写入目标。
+            vec![opencode_candidate_paths()?.first().expect("候选非空").clone()]
+        } else {
+            existing
+        };
+        let mut state = super::empty_state(ProviderAppId::Opencode, state_paths);
+        if files.iter().all(|(path, _)| !path.exists()) {
             return Ok(state);
         }
         state.config_exists = true;
-        let root = read_json_object(&path)?;
-        // 应用弹窗据此预选；反读值只用于回显，不参与漂移判定。
-        state.default_reasoning_level = current_reasoning_level(&root);
-        let default_model = root.get("model").and_then(JsonValue::as_str);
 
-        // v2 规范节点 providers；v1 遗留节点 provider。两个节点都读。
-        for (node, is_v2) in [("providers", true), ("provider", false)] {
-            let Some(table) = root.get(node).and_then(JsonValue::as_object) else {
+        // model 与 providers 各自取生效文件的值组成合并视图，供默认档位
+        // 反读（current_reasoning_level 只读这两个键）。
+        let mut merged = JsonMap::new();
+        for key in ["model", "providers"] {
+            if let Some(root) = effective_file(&files, key) {
+                merged.insert(key.to_string(), root.get(key).expect("checked").clone());
+            }
+        }
+        // 应用弹窗据此预选；反读值只用于回显，不参与漂移判定。
+        state.default_reasoning_level = current_reasoning_level(&merged);
+        let default_model = merged.get("model").and_then(JsonValue::as_str);
+
+        for (path, root) in &files {
+            if !path.exists() {
                 continue;
-            };
-            for (key, value) in table {
-                let (base_url, package, models) = if is_v2 {
-                    (
-                        value
-                            .get("settings")
-                            .and_then(|settings| settings.get("baseURL"))
-                            .and_then(JsonValue::as_str),
-                        value.get("package").and_then(JsonValue::as_str),
-                        value.get("models").and_then(JsonValue::as_object),
-                    )
-                } else {
-                    (
-                        value
-                            .get("options")
-                            .and_then(|options| options.get("baseURL"))
-                            .and_then(JsonValue::as_str),
-                        value.get("npm").and_then(JsonValue::as_str),
-                        value.get("models").and_then(JsonValue::as_object),
-                    )
+            }
+            let file_name = file_display_name(path);
+            for (node, is_v2) in [("providers", true), ("provider", false)] {
+                let Some(table) = root.get(node).and_then(JsonValue::as_object) else {
+                    continue;
                 };
-                let protocol = protocol_from_package(package);
-                let entry = entry_from_provider_value(
-                    key,
-                    base_url,
-                    protocol,
-                    models,
-                    default_model,
-                    providers,
-                );
-                state.entries.push(entry);
+                // 该文件在此节点被更高优先级文件覆盖时，条目仍列出但注明
+                // 不生效，避免用户在低优先级文件里改了个寂寞。
+                let file_index = files
+                    .iter()
+                    .position(|(other_path, _)| other_path == path)
+                    .expect("iterating over files");
+                let shadowed_by = files[file_index + 1..]
+                    .iter()
+                    .rev()
+                    .find(|(_, other_root)| other_root.contains_key(node))
+                    .map(|(other_path, _)| file_display_name(other_path));
+                for (key, value) in table {
+                    let (base_url, package, models) = if is_v2 {
+                        (
+                            value
+                                .get("settings")
+                                .and_then(|settings| settings.get("baseURL"))
+                                .and_then(JsonValue::as_str),
+                            value.get("package").and_then(JsonValue::as_str),
+                            value.get("models").and_then(JsonValue::as_object),
+                        )
+                    } else {
+                        (
+                            value
+                                .get("options")
+                                .and_then(|options| options.get("baseURL"))
+                                .and_then(JsonValue::as_str),
+                            value.get("npm").and_then(JsonValue::as_str),
+                            value.get("models").and_then(JsonValue::as_object),
+                        )
+                    };
+                    let protocol = protocol_from_package(package);
+                    let mut entry = entry_from_provider_value(
+                        key,
+                        base_url,
+                        protocol,
+                        models,
+                        default_model,
+                        providers,
+                    );
+                    if let Some(shadow_name) = &shadowed_by {
+                        entry.notes.push(format!(
+                            "{file_name} 的 {node} 键被 {shadow_name} 覆盖，不生效。"
+                        ));
+                    }
+                    state.entries.push(entry);
+                }
             }
         }
 
@@ -278,106 +390,136 @@ impl AppAdapter for OpencodeAdapter {
         plan: &ApplyProviderInput,
         api_key: &str,
     ) -> Result<Vec<(PathBuf, String)>> {
+        let _ = env;
         ensure_protocol_supported(self, provider)?;
-        let path = opencode_config_path(env)?;
-        let mut root = read_json_object(&path)?;
+        let mut files = load_config_files()?;
         let registration = registration_key(&provider.id);
-        // 该平台上一次写入的模型条目：本次没选思考等级时沿用其中的
-        // settings，重新应用不会把上次选的等级写没。
-        let previous_models = root
-            .get("providers")
-            .and_then(|providers| providers.get(registration.as_str()))
-            .and_then(|provider| provider.get("models"))
-            .and_then(JsonValue::as_object)
-            .cloned();
+        // 写入目标：已存在的最高优先级文件（与 OpenCode 自身更新器的选择
+        // 一致）；都不存在时创建 opencode.json。
+        let target_index = files
+            .iter()
+            .rposition(|(path, _)| path.exists())
+            .unwrap_or(0);
 
-        let mut models = JsonMap::new();
-        for model_id in &plan.model_ids {
-            let model = provider.models.iter().find(|m| &m.id == model_id);
-            let label = model
-                .map(|m| m.label.clone())
-                .unwrap_or_else(|| model_id.clone());
-            let mut model_entry = JsonMap::new();
-            model_entry.insert("name".to_string(), JsonValue::String(label));
-            if let Some(model) = model {
-                // limit 的 context/output 在官方 schema 里成对必填；只有一项时
-                // 整段不写，避免半截限制参与压缩与输出截断判断。
-                if let (Some(context_window), Some(max_output_tokens)) =
-                    (model.context_window, model.max_output_tokens)
-                {
-                    let mut limit = JsonMap::new();
-                    limit.insert("context".to_string(), JsonValue::from(context_window));
-                    limit.insert("output".to_string(), JsonValue::from(max_output_tokens));
-                    model_entry.insert("limit".to_string(), JsonValue::Object(limit));
-                }
-                // capabilities 同时表达工具支持与输入模态；官方对目录外模型
-                // 默认假设 text+image 输入，有元数据就显式声明。
-                if let Some(supports_images) = model.supports_images {
-                    let mut input = vec![JsonValue::String("text".to_string())];
-                    if supports_images {
-                        input.push(JsonValue::String("image".to_string()));
-                    }
-                    let mut capabilities = JsonMap::new();
-                    capabilities.insert("tools".to_string(), JsonValue::Bool(true));
-                    capabilities.insert("input".to_string(), JsonValue::Array(input));
-                    capabilities.insert(
-                        "output".to_string(),
-                        JsonValue::Array(vec![JsonValue::String("text".to_string())]),
-                    );
-                    model_entry.insert("capabilities".to_string(), JsonValue::Object(capabilities));
-                }
-                if let Some(level) = plan.default_reasoning_level {
-                    model_entry.insert(
-                        "settings".to_string(),
-                        reasoning_settings(provider.protocol, level),
-                    );
-                } else if let Some(settings) = previous_models
-                    .as_ref()
-                    .and_then(|models| models.get(model_id))
-                    .and_then(|model| model.get("settings"))
-                {
-                    model_entry.insert("settings".to_string(), settings.clone());
-                }
-            }
-            models.insert(model_id.clone(), JsonValue::Object(model_entry));
-        }
-
-        let mut settings = JsonMap::new();
-        settings.insert(
-            "baseURL".to_string(),
-            JsonValue::String(provider.base_url.clone()),
-        );
-        settings.insert("apiKey".to_string(), JsonValue::String(api_key.to_string()));
-
-        let mut provider_entry = JsonMap::new();
-        provider_entry.insert(
-            "name".to_string(),
-            JsonValue::String(provider.label.clone()),
-        );
-        provider_entry.insert(
-            "package".to_string(),
-            JsonValue::String(runtime_package(provider.protocol).to_string()),
-        );
-        provider_entry.insert("settings".to_string(), JsonValue::Object(settings));
-        provider_entry.insert("models".to_string(), JsonValue::Object(models));
-
-        if !root
-            .entry("providers")
-            .or_insert_with(|| JsonValue::Object(JsonMap::new()))
-            .is_object()
+        let mut outputs: Vec<(PathBuf, String)> = Vec::new();
         {
-            bail!("providers 段不是对象：{}", path.display());
-        }
-        root.get_mut("providers")
-            .and_then(JsonValue::as_object_mut)
-            .expect("checked above")
-            .insert(registration.clone(), JsonValue::Object(provider_entry));
-        root.insert(
-            "model".to_string(),
-            JsonValue::String(format!("{registration}/{}", plan.default_model_id)),
-        );
+            let (target_path, root) = &mut files[target_index];
+            // 该平台上一次写入的模型条目：本次没选思考等级时沿用其中的
+            // settings，重新应用不会把上次选的等级写没。
+            let previous_models = root
+                .get("providers")
+                .and_then(|providers| providers.get(registration.as_str()))
+                .and_then(|provider| provider.get("models"))
+                .and_then(JsonValue::as_object)
+                .cloned();
 
-        Ok(vec![(path, serialize_json(&root)?)])
+            let mut models = JsonMap::new();
+            for model_id in &plan.model_ids {
+                let model = provider.models.iter().find(|m| &m.id == model_id);
+                let label = model
+                    .map(|m| m.label.clone())
+                    .unwrap_or_else(|| model_id.clone());
+                let mut model_entry = JsonMap::new();
+                model_entry.insert("name".to_string(), JsonValue::String(label));
+                if let Some(model) = model {
+                    // limit 的 context/output 在官方 schema 里成对必填；只有一项时
+                    // 整段不写，避免半截限制参与压缩与输出截断判断。
+                    if let (Some(context_window), Some(max_output_tokens)) =
+                        (model.context_window, model.max_output_tokens)
+                    {
+                        let mut limit = JsonMap::new();
+                        limit.insert("context".to_string(), JsonValue::from(context_window));
+                        limit.insert("output".to_string(), JsonValue::from(max_output_tokens));
+                        model_entry.insert("limit".to_string(), JsonValue::Object(limit));
+                    }
+                    // capabilities 同时表达工具支持与输入模态；官方对目录外模型
+                    // 默认假设 text+image 输入，有元数据就显式声明。
+                    if let Some(supports_images) = model.supports_images {
+                        let mut input = vec![JsonValue::String("text".to_string())];
+                        if supports_images {
+                            input.push(JsonValue::String("image".to_string()));
+                        }
+                        let mut capabilities = JsonMap::new();
+                        capabilities.insert("tools".to_string(), JsonValue::Bool(true));
+                        capabilities.insert("input".to_string(), JsonValue::Array(input));
+                        capabilities.insert(
+                            "output".to_string(),
+                            JsonValue::Array(vec![JsonValue::String("text".to_string())]),
+                        );
+                        model_entry.insert("capabilities".to_string(), JsonValue::Object(capabilities));
+                    }
+                    if let Some(level) = plan.default_reasoning_level {
+                        model_entry.insert(
+                            "settings".to_string(),
+                            reasoning_settings(provider.protocol, level),
+                        );
+                    } else if let Some(settings) = previous_models
+                        .as_ref()
+                        .and_then(|models| models.get(model_id))
+                        .and_then(|model| model.get("settings"))
+                    {
+                        model_entry.insert("settings".to_string(), settings.clone());
+                    }
+                }
+                models.insert(model_id.clone(), JsonValue::Object(model_entry));
+            }
+
+            let mut settings = JsonMap::new();
+            settings.insert(
+                "baseURL".to_string(),
+                JsonValue::String(provider.base_url.clone()),
+            );
+            settings.insert("apiKey".to_string(), JsonValue::String(api_key.to_string()));
+
+            let mut provider_entry = JsonMap::new();
+            provider_entry.insert(
+                "name".to_string(),
+                JsonValue::String(provider.label.clone()),
+            );
+            provider_entry.insert(
+                "package".to_string(),
+                JsonValue::String(runtime_package(provider.protocol).to_string()),
+            );
+            provider_entry.insert("settings".to_string(), JsonValue::Object(settings));
+            provider_entry.insert("models".to_string(), JsonValue::Object(models));
+
+            if !root
+                .entry("providers")
+                .or_insert_with(|| JsonValue::Object(JsonMap::new()))
+                .is_object()
+            {
+                bail!("providers 段不是对象：{}", target_path.display());
+            }
+            root.get_mut("providers")
+                .and_then(JsonValue::as_object_mut)
+                .expect("checked above")
+                .insert(registration.clone(), JsonValue::Object(provider_entry));
+            root.insert(
+                "model".to_string(),
+                JsonValue::String(format!("{registration}/{}", plan.default_model_id)),
+            );
+            outputs.push((target_path.clone(), serialize_json(root)?));
+        }
+
+        // 写入目标之外还留有本平台旧注册键的文件：清掉旧键，避免同一个
+        // reins- 条目散在两个文件里误导反读。
+        for (index, (path, root)) in files.iter_mut().enumerate() {
+            if index == target_index || !path.exists() {
+                continue;
+            }
+            let has_registration = ["providers", "provider"].iter().any(|node| {
+                root.get(*node)
+                    .and_then(|node| node.get(registration.as_str()))
+                    .is_some()
+            });
+            if !has_registration {
+                continue;
+            }
+            remove_registration_from(root, &registration)?;
+            outputs.push((path.clone(), serialize_json(root)?));
+        }
+
+        Ok(outputs)
     }
 
     fn remove(
@@ -386,79 +528,96 @@ impl AppAdapter for OpencodeAdapter {
         provider_id: &str,
         provider: Option<&ResolvedProvider>,
     ) -> Result<Vec<(PathBuf, String)>> {
+        let _ = env;
         let _ = provider;
-        let path = opencode_config_path(env)?;
-        if !path.exists() {
-            bail!("OpenCode 配置文件不存在：{}", display_path(&path));
-        }
-        let mut root = read_json_object(&path)?;
         let registration = registration_key(provider_id);
-
-        // 默认模型仍指向该平台时随移除清掉；model 是顶层单值键，
-        // 留空后由用户在 OpenCode 内重选，不再要求先切换。
-        let default_refs_registration = root
-            .get("model")
-            .and_then(JsonValue::as_str)
-            .is_some_and(|model| model.starts_with(&format!("{registration}/")));
-        if default_refs_registration {
-            root.remove("model");
-        }
-
-        // 本版 Reins 写 v2 providers 节点；旧版 Reins 写 v1 provider 节点。
-        for node in ["providers", "provider"] {
-            let Some(table) = root.get_mut(node).and_then(JsonValue::as_object_mut) else {
+        let files = load_config_files()?;
+        let mut outputs = Vec::new();
+        let mut found = false;
+        for (path, mut root) in files {
+            if !path.exists() {
                 continue;
-            };
-            let Some(entry) = table.get(&registration) else {
-                continue;
-            };
-            // 只删内容仍可识别的条目：baseURL 必须是字符串。
-            let recognized = ["settings", "options"].iter().any(|section| {
-                entry
-                    .get(section)
-                    .and_then(|settings| settings.get("baseURL"))
-                    .and_then(JsonValue::as_str)
+            }
+            let contains_registration = ["providers", "provider"].iter().any(|node| {
+                root.get(*node)
+                    .and_then(|node| node.get(registration.as_str()))
                     .is_some()
             });
-            if !recognized {
-                bail!("条目 {registration} 已被手工修改，无法自动识别，请手动处理。");
+            if !contains_registration {
+                continue;
             }
-            table.remove(&registration);
-            if table.is_empty() {
-                root.remove(node);
+            // 只删内容仍可识别的条目：baseURL 必须是字符串；两个节点里的
+            // 同名条目都要通过校验后再动文件。
+            for node in ["providers", "provider"] {
+                if let Some(entry) = root
+                    .get(node)
+                    .and_then(|node| node.get(registration.as_str()))
+                {
+                    let recognized = ["settings", "options"].iter().any(|section| {
+                        entry
+                            .get(*section)
+                            .and_then(|settings| settings.get("baseURL"))
+                            .and_then(JsonValue::as_str)
+                            .is_some()
+                    });
+                    if !recognized {
+                        bail!("条目 {registration} 已被手工修改，无法自动识别，请手动处理。");
+                    }
+                }
             }
-            return Ok(vec![(path, serialize_json(&root)?)]);
+            found = true;
+            // 默认 Provider 仍指向该平台时随移除清掉；model 是顶层单值键，
+            // 留空后由用户在 OpenCode 内重选，不再要求先切换。
+            remove_registration_from(&mut root, &registration)?;
+            outputs.push((path, serialize_json(&root)?));
         }
-        bail!("OpenCode 中没有可识别的 {registration} 条目。");
+        if !found {
+            bail!("OpenCode 中没有可识别的 {registration} 条目。");
+        }
+        Ok(outputs)
     }
 
     fn remove_external(&self, env: &ToolEnv, entry_key: &str) -> Result<Vec<(PathBuf, String)>> {
-        let path = opencode_config_path(env)?;
-        if !path.exists() {
-            bail!("OpenCode 配置文件不存在：{}", display_path(&path));
-        }
-        let mut root = read_json_object(&path)?;
-
-        // 与 reins- 条目移除一致：默认模型指向被删条目时随删除清空。
-        let default_refs_entry = root
-            .get("model")
-            .and_then(JsonValue::as_str)
-            .is_some_and(|model| model.starts_with(&format!("{entry_key}/")));
-        if default_refs_entry {
-            root.remove("model");
-        }
-
-        for node in ["providers", "provider"] {
-            let Some(table) = root.get_mut(node).and_then(JsonValue::as_object_mut) else {
+        let _ = env;
+        let files = load_config_files()?;
+        let mut outputs = Vec::new();
+        let mut removed = false;
+        for (path, mut root) in files {
+            if !path.exists() {
                 continue;
-            };
-            if table.remove(entry_key).is_some() {
-                if table.is_empty() {
-                    root.remove(node);
+            }
+            // 与 reins- 条目移除一致：默认模型指向被删条目时随删除清空。
+            // 外部条目可能同时出现在两个文件里（低优先级那份本就不生效），
+            // 一并删除。
+            let mut changed = false;
+            let prefix = format!("{entry_key}/");
+            if root
+                .get("model")
+                .and_then(JsonValue::as_str)
+                .is_some_and(|model| model.starts_with(&prefix))
+            {
+                root.remove("model");
+                changed = true;
+            }
+            for node in ["providers", "provider"] {
+                let Some(table) = root.get_mut(node).and_then(JsonValue::as_object_mut) else {
+                    continue;
+                };
+                if table.remove(entry_key).is_some() {
+                    changed = true;
+                    if table.is_empty() {
+                        root.remove(node);
+                    }
                 }
-                return Ok(vec![(path, serialize_json(&root)?)]);
+            }
+            if changed {
+                outputs.push((path, serialize_json(&root)?));
+                removed = true;
             }
         }
-        bail!("OpenCode 中没有外部条目 {entry_key}。");
+        if !removed {
+            bail!("OpenCode 中没有外部条目 {entry_key}。");
+        }
+        Ok(outputs)
     }
 }

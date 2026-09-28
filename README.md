@@ -31,6 +31,8 @@
 - 提供商元数据与 API Key 存在同一份 `<reins 目录>/providers.yaml`，Key 为明文（不加密），文件即凭据边界
 - 模型支持手工新增、从提供商 `/models` 接口拉取、从 models.dev 预填元数据（本地缓存 24 小时）
 - 一键应用到 Codex、Claude Code、OpenCode（v2）、Pi、Grok Build 的全局配置文件：应用前可预览变更 diff（密钥脱敏），支持指定默认模型与思考等级
+- 应用细节对齐各工具官方契约：Codex 同步生成 `model_catalog_json` 模型目录，已选模型出现在 Codex 自己的模型选择器；Claude Code 认证写 `ANTHROPIC_AUTH_TOKEN`（Bearer 头）；OpenCode 同时读写 `opencode.json` 与 `opencode.jsonc`，被覆盖文件里的条目标注不生效
+- 支持 `CODEX_HOME`、`PI_CODING_AGENT_DIR`、`GROK_HOME`、`CLAUDE_CONFIG_DIR` 环境变量重定向各工具的配置目录
 - 反读工具配置，识别「已应用 / 配置有偏差 / 外部配置」；已应用的提供商不再重复出现在「应用提供商」候选里；只管理 `reins-` 前缀条目，用户手工配置不受影响
 
 ### Skills 导入项管理
@@ -68,6 +70,13 @@ skills tab 直接列出全部已配置来源。顶部 `新增来源` 用于导�
 - **如果被应用的技能不再匹配 include name/path patterns**：编辑 source 后不会自动撤回；用户对该 target 再次同步时，旧链接会被移除，并按本次勾选的 skills 重建。
 
 软链天然跟随其指向的源头目录：源头被同步/导入流程重建时，软链下的 skill 自然可见；删 source 时，属于该 source 的软链会被一并删除。
+
+## 参考项目
+
+同类开源工具，Reins 的模型配置模块在写入口径上与它们互为对照：
+
+- [cc-switch](https://github.com/farion1231/cc-switch)：Tauri 2 桌面应用，一站管理 Claude Code、Claude Desktop、Codex、Gemini CLI、Grok Build、OpenCode、Pi 等十个工具的 Provider 切换。内置 90+ 提供商预设与本地协议路由（Anthropic / OpenAI / Gemini 格式互转、自动故障转移），MCP、Skills 与 Prompts 集中分发，并带用量与配额展示。
+- [magpie](https://github.com/yetone/magpie)：菜单栏应用（Go + Wails），让所有 agent 统一指向一个本地网关（`127.0.0.1:3425`，同时说 OpenAI Chat / Responses、Anthropic Messages 与 Gemini API），由网关做协议翻译与转发；已登录的订阅（Claude Code、Codex、Copilot 等）也能作为 Provider 共享给其它工具；模型列表来自厂商实时接口与 models.dev，配置编辑保留注释与键序。
 
 ## 开发与构建
 
