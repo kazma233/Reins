@@ -2,10 +2,11 @@
 import { reactive, ref } from "vue";
 import ConfirmDialog from "@shared/ui/ConfirmDialog.vue";
 import AppCard from "@shared/ui/AppCard.vue";
-import { deleteProvider, setProviderKey, upsertProvider } from "../../api";
+import { deleteProvider, upsertProvider } from "../../api";
 import {
   formFromProvider,
   formToInput,
+  hasApiKey,
   protocolLabel,
   emptyProviderForm,
   type ProviderFormState,
@@ -38,38 +39,29 @@ function openEdit(providerId: string) {
     return;
   }
   Object.assign(form, formFromProvider(provider));
-  editKeyPresent.value = provider.keyPresent;
+  editKeyPresent.value = hasApiKey(provider);
   editCreating.value = false;
   editStep.value = 2;
   editOpen.value = true;
 }
 
-function confirmEdit(apiKey: string) {
+function confirmEdit() {
   const input = formToInput(form);
   runProvidersAction({
-    // 先持久化提供商，再写密钥；upsert 幂等，密钥写入失败后重试安全。
-    // upsert 返回归一化后的落库 ID，后续动作一律用它。
-    action: async () => {
-      const providerId = await upsertProvider(input);
-      if (apiKey) {
-        await setProviderKey(providerId, apiKey);
-      }
-      return providerId;
-    },
+    // 元数据与明文 API Key 在同一份 providers.yaml 里，一次 upsert 原子落盘。
+    action: () => upsertProvider(input),
     success: (providerId) => ({
       message:
         editCreating.value && editStep.value === 1
           ? `提供商 ${providerId} 已保存，请继续设置模型目录。`
-          : apiKey
-            ? `提供商 ${providerId} 已保存，API Key 已存入系统密钥管理。`
-            : `提供商 ${providerId} 已保存。`,
+          : `提供商 ${providerId} 已保存。`,
     }),
     after: (providerId) => {
       if (editCreating.value && editStep.value === 1) {
         // 新增第一步：不关弹窗，原地进入模型目录设置；
         // 填上 originalProviderId 后，拉取即按已保存提供商走。
         form.originalProviderId = providerId;
-        editKeyPresent.value = Boolean(apiKey);
+        editKeyPresent.value = Boolean(form.apiKey.trim());
         editStep.value = 2;
         return;
       }
@@ -103,7 +95,7 @@ function confirmDeleteProvider() {
       <div>
         <h3 class="providers-section-title">聚合提供商</h3>
         <p class="providers-section-hint">
-          提供商元数据保存在 {{ state?.configPath ?? "providers.yaml" }}；API Key 在编辑弹窗中设置，存系统密钥管理。官方
+          提供商元数据与 API Key（明文）保存在 {{ state?.configPath ?? "providers.yaml" }}。官方
           OpenAI / Anthropic 不在此纳管。
         </p>
       </div>
@@ -121,8 +113,8 @@ function confirmDeleteProvider() {
         </template>
         <template #ext>
           <span class="providers-card__models">{{ provider.models.length }} 个模型</span>
-          <span class="providers-badge" :class="provider.keyPresent ? 'providers-badge--applied' : 'providers-badge--muted'">
-            {{ provider.keyPresent ? "已设 Key" : "未设 Key" }}
+          <span class="providers-badge" :class="hasApiKey(provider) ? 'providers-badge--applied' : 'providers-badge--muted'">
+            {{ hasApiKey(provider) ? "已设 Key" : "未设 Key" }}
           </span>
         </template>
 
@@ -171,7 +163,7 @@ function confirmDeleteProvider() {
       :open="deleteDialog.open"
       title-id="provider-delete-title"
       title="删除提供商"
-      :description="`将删除提供商 ${deleteDialog.providerLabel} 的元数据与系统密钥条目。已写入工具的配置不会被自动清理；如 Claude Code 仍在引用该提供商，删除会被拒绝，请先在「Agent」页移除。`"
+      :description="`将删除提供商 ${deleteDialog.providerLabel} 的元数据与其中的明文 API Key。已写入工具的配置不会被自动清理；如 Claude Code 仍在引用该提供商，删除会被拒绝，请先在「Agent」页移除。`"
       confirm-label="删除"
       :loading="runningAction"
       @close="deleteDialog.open = false"

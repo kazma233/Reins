@@ -142,6 +142,7 @@ impl ProviderConfigStore {
                 label: raw.label,
                 protocol: raw.protocol,
                 base_url: raw.base_url,
+                api_key: raw.api_key,
                 models: raw.models,
             };
             providers.insert(id, resolved);
@@ -161,6 +162,7 @@ impl ProviderConfigStore {
                             label: provider.label.clone(),
                             protocol: provider.protocol,
                             base_url: provider.base_url.clone(),
+                            api_key: provider.stored_api_key(),
                             models: provider.models.clone(),
                         },
                     )
@@ -199,6 +201,10 @@ impl ProviderConfigStore {
                 label: label.to_string(),
                 protocol: input.protocol,
                 base_url,
+                api_key: {
+                    let trimmed = input.api_key.trim();
+                    (!trimmed.is_empty()).then(|| trimmed.to_string())
+                },
                 models,
             },
         );

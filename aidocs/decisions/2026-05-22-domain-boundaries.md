@@ -51,10 +51,10 @@
 
 ### `providers`
 
-1. 负责聚合平台模型管理：`providers.yaml` 读写（`config.rs`）、系统密钥封装（`keychain.rs`）、模型目录与 models.dev 补全（`catalog.rs`）、各工具配置适配器（`apps/`）。
+1. 负责聚合平台模型管理：`providers.yaml` 读写（`config.rs`，含明文 API Key）、模型目录与 models.dev 补全（`catalog.rs`）、各工具配置适配器（`apps/`）。
 2. `types.rs` 只定义 providers 域 DTO、view model、mutation 输入输出；Raw 类型对应 providers.yaml 的 snake_case，View 类型 camelCase。
 3. `commands.rs` 只负责 Tauri command 入参与调度；适配器只生成新文件内容，diff 预览与原子写入统一在 commands 层完成。
-4. 凭据明文只允许出现在：系统密钥管理、写入时的内存、目标工具配置文件；`providers.yaml`、日志、错误、预览（`******` 占位）中禁止出现。Tauri 返回值同样禁止明文，唯一例外是 `get_provider_key`：本地单用户桌面应用，编辑弹窗回显确认用，明文只经当次 IPC 返回，不落日志与任何持久化。
+4. 凭据明文只允许出现在：`providers.yaml`、写入时的内存、目标工具配置文件；日志、错误、预览（`******` 占位）中禁止出现。前端只在编辑/应用弹窗需要时持有表单值，不回显到日志。（2026-09-28 变更：原先的「系统密钥管理 + `keychain.rs`」已废弃，明文直接存 `providers.yaml`，详见 `2026-09-24-provider-model-management-plan.md` 凭据章节。）
 
 ### `state`
 

@@ -11,7 +11,6 @@ pub fn run() {
     tauri::Builder::default()
         .manage(workspace::WorkspaceConfigStore::app())
         .manage(providers::ProviderConfigStore::app())
-        .manage(providers::ProviderKeyStore::native())
         .manage(state::session_index::SessionIndexState::default())
         .manage(state::skill_discovery::SkillDiscoveryState::default())
         .invoke_handler(tauri::generate_handler![
@@ -61,8 +60,6 @@ pub fn run() {
             providers::commands::get_provider_app_state,
             providers::commands::upsert_provider,
             providers::commands::delete_provider,
-            providers::commands::get_provider_key,
-            providers::commands::set_provider_key,
             providers::commands::fetch_provider_models,
             providers::commands::fetch_provider_models_direct,
             providers::commands::fetch_modelsdev_catalog,

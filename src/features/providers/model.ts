@@ -62,6 +62,11 @@ export function protocolLabel(protocol: ProviderProtocol): string {
   return PROTOCOL_LABELS[protocol];
 }
 
+// 落库与展示共用同一个空值口径：trim 后为空视为没有 Key。
+export function hasApiKey(provider: ProviderView): boolean {
+  return Boolean(provider.apiKey?.trim());
+}
+
 export function findAppState(
   state: ProvidersState | null,
   app: ProviderAppId
@@ -153,7 +158,7 @@ export function applyBlockers(
       `${APP_LABELS[appState.app]} 不支持协议 ${protocolLabel(provider.protocol)}。`
     );
   }
-  if (!provider.keyPresent) {
+  if (!hasApiKey(provider)) {
     blockers.push("尚未设置该提供商的 API Key。");
   }
   if (selectedModelIds.length === 0) {
@@ -258,12 +263,14 @@ export type ProviderModelForm = ProviderModelInput & {
 };
 
 export type ProviderFormState = {
-  // null = 新建；非 null = 编辑且 ID 不可改（凭据 account 绑定 ID）。
+  // null = 新建；非 null = 编辑且 ID 不可改（落库 ID 同时是 Key 的归属字段）。
   originalProviderId: string | null;
   providerId: string;
   label: string;
   protocol: ProviderProtocol;
   baseUrl: string;
+  // 明文回显：表单里的值就是 providers.yaml 里的值，留空保存即清除。
+  apiKey: string;
   models: ProviderModelForm[];
 };
 
@@ -316,6 +323,7 @@ export function emptyProviderForm(): ProviderFormState {
     label: "",
     protocol: "openai_chat_completions",
     baseUrl: "",
+    apiKey: "",
     models: [],
   };
 }
@@ -327,6 +335,7 @@ export function formFromProvider(provider: ProviderView): ProviderFormState {
     label: provider.label,
     protocol: provider.protocol,
     baseUrl: provider.baseUrl,
+    apiKey: provider.apiKey ?? "",
     models: provider.models.map((model) => ({
       ...emptyModelForm(model.id),
       id: model.id,
@@ -366,6 +375,7 @@ export function formToInput(form: ProviderFormState): ProviderUpsertInput {
     label: form.label,
     protocol: form.protocol,
     baseUrl: form.baseUrl,
+    apiKey: form.apiKey.trim(),
     models: form.models.map((model) => ({
       id: model.id,
       label: model.label,

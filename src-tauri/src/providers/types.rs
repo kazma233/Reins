@@ -134,6 +134,9 @@ pub(crate) struct RawProvider {
     pub(crate) label: String,
     pub(crate) protocol: ProviderProtocol,
     pub(crate) base_url: String,
+    // 明文 API Key：用户确认的取舍是有意不带任何保护地存在本机配置里。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) api_key: Option<String>,
     #[serde(default)]
     pub(crate) models: Vec<ProviderModelRecord>,
 }
@@ -162,7 +165,19 @@ pub(crate) struct ResolvedProvider {
     pub(crate) label: String,
     pub(crate) protocol: ProviderProtocol,
     pub(crate) base_url: String,
+    pub(crate) api_key: Option<String>,
     pub(crate) models: Vec<ProviderModelRecord>,
+}
+
+// 落库与下发共用同一个空值口径：trim 后为空一律视为「没有 Key」。
+impl ResolvedProvider {
+    pub(crate) fn stored_api_key(&self) -> Option<String> {
+        self.api_key
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -203,7 +218,9 @@ pub(crate) struct ProviderView {
     pub(crate) label: String,
     pub(crate) protocol: ProviderProtocol,
     pub(crate) base_url: String,
-    pub(crate) key_present: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional = nullable)]
+    pub(crate) api_key: Option<String>,
     pub(crate) models: Vec<ProviderModelView>,
 }
 
@@ -328,6 +345,9 @@ pub(crate) struct ProviderUpsertInput {
     pub(crate) label: String,
     pub(crate) protocol: ProviderProtocol,
     pub(crate) base_url: String,
+    // 所见即所得：表单里的值就是落盘值，留空即清除已存 Key。
+    #[serde(default)]
+    pub(crate) api_key: String,
     #[serde(default)]
     pub(crate) models: Vec<ProviderModelInput>,
 }

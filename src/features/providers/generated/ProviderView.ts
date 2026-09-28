@@ -2,4 +2,4 @@
 import type { ProviderModelView } from "./ProviderModelView";
 import type { ProviderProtocol } from "./ProviderProtocol";
 
-export type ProviderView = { id: string, label: string, protocol: ProviderProtocol, baseUrl: string, keyPresent: boolean, models: Array<ProviderModelView>, };
+export type ProviderView = { id: string, label: string, protocol: ProviderProtocol, baseUrl: string, apiKey?: string | null, models: Array<ProviderModelView>, };

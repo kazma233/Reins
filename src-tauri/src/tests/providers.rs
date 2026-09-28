@@ -1,9 +1,8 @@
 // providers 域端到级行为测试：适配器「生成 → 反读 → 幂等 → 移除」闭环，
-// 全部在虚拟 HOME 隔离目录下进行，密钥用 FakeKeyBackend。
+// 全部在虚拟 HOME 隔离目录下进行，密钥明文写在 providers.yaml 里。
 
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 
 use anyhow::Result;
 use serde_json::{Value as JsonValue, json};
@@ -15,7 +14,6 @@ use crate::providers::commands::{
     providers_state_inner, remove_external_entry_inner, remove_provider_from_app_inner,
 };
 use crate::providers::config::ProviderConfigStore;
-use crate::providers::keychain::{FakeKeyBackend, ProviderKeyStore};
 use crate::providers::types::{
     ApplyProviderInput, ProviderAppEntryStatus, ProviderAppId, ProviderModelInput,
     ProviderProtocol, ProviderUpsertInput, ReasoningLevel,
@@ -28,7 +26,6 @@ struct Isolated {
     _data_dir: TestDir,
     _home_dir: TestDir,
     store: ProviderConfigStore,
-    keys: ProviderKeyStore,
     env: ToolEnv,
 }
 
@@ -37,7 +34,6 @@ impl Isolated {
         let data_dir = TestDir::new("providers-data")?;
         let home_dir = TestDir::new("providers-home")?;
         let guard = TestEnvGuard::set_home(home_dir.path());
-        let keys = ProviderKeyStore::with_backend(Arc::new(FakeKeyBackend::default()));
         // 先取路径再移动 TestDir，字段求值顺序不保证可用性。
         let data_path = data_dir.path().to_path_buf();
         Ok(Self {
@@ -45,7 +41,6 @@ impl Isolated {
             _data_dir: data_dir,
             _home_dir: home_dir,
             store: ProviderConfigStore::at(data_path),
-            keys,
             env: ToolEnv::default(),
         })
     }
@@ -75,6 +70,7 @@ impl Isolated {
             label: format!("Label {id}"),
             protocol,
             base_url: base_url.to_string(),
+            api_key: "sk-test-secret".to_string(),
             models: models
                 .into_iter()
                 .map(|model_id| ProviderModelInput {
@@ -95,8 +91,16 @@ impl Isolated {
         Ok(())
     }
 
-    fn set_key(&self, provider_id: &str) -> Result<()> {
-        self.keys.set_key(provider_id, "sk-test-secret")
+    // 走产品同一条写路径：upsert 留空即清除已存 Key。因为 upsert 是整条替换，
+    // 这里用 provider_input 的单模型夹具重建输入，只适用于 seed_model 造出的平台。
+    fn clear_key(&self, provider_id: &str) -> Result<()> {
+        let providers = self.store.load()?;
+        let provider = providers.get(provider_id).expect("平台应先 seed");
+        self.store.upsert(ProviderUpsertInput {
+            api_key: String::new(),
+            ..provider_input(provider_id, provider.protocol, &provider.base_url)
+        })?;
+        Ok(())
     }
 
     fn apply(
@@ -109,7 +113,6 @@ impl Isolated {
     ) -> Result<()> {
         apply_provider_inner(
             &self.store,
-            &self.keys,
             &self.env,
             &plan(provider_id, app, models, default, level),
         )?;
@@ -127,7 +130,7 @@ impl Isolated {
     }
 
     fn state(&self) -> Result<crate::providers::types::ProvidersState> {
-        providers_state_inner(&self.store, &self.keys, &self.env)
+        providers_state_inner(&self.store, &self.env)
     }
 }
 
@@ -137,6 +140,7 @@ fn provider_input(id: &str, protocol: ProviderProtocol, base_url: &str) -> Provi
         label: format!("Label {id}"),
         protocol,
         base_url: base_url.to_string(),
+        api_key: "sk-test-secret".to_string(),
         models: vec![ProviderModelInput {
             id: "model-a".to_string(),
             label: "Model A".to_string(),
@@ -223,7 +227,6 @@ fn grok_path() -> PathBuf {
 fn codex_apply_writes_entry_and_pointer() -> Result<()> {
     let isolated = Isolated::new()?;
     isolated.seed_model("p1", "model-a")?;
-    isolated.set_key("p1")?;
 
     isolated.apply(
         "p1",
@@ -262,7 +265,6 @@ fn codex_apply_writes_entry_and_pointer() -> Result<()> {
 fn codex_off_reasoning_level_is_rejected() -> Result<()> {
     let isolated = Isolated::new()?;
     isolated.seed_model("p1", "model-a")?;
-    isolated.set_key("p1")?;
 
     let error = isolated
         .apply(
@@ -282,8 +284,6 @@ fn codex_apply_is_idempotent_and_replaces_previous_platform() -> Result<()> {
     let isolated = Isolated::new()?;
     isolated.seed_model("p1", "model-a")?;
     isolated.seed_model("p2", "model-b")?;
-    isolated.set_key("p1")?;
-    isolated.set_key("p2")?;
 
     isolated.apply("p1", ProviderAppId::Codex, &["model-a"], "model-a", None)?;
     let first = read_text(&codex_path());
@@ -302,7 +302,6 @@ fn codex_apply_is_idempotent_and_replaces_previous_platform() -> Result<()> {
 fn codex_remove_cleans_pointer_and_rejects_modified_entry() -> Result<()> {
     let isolated = Isolated::new()?;
     isolated.seed_model("p1", "model-a")?;
-    isolated.set_key("p1")?;
     isolated.apply(
         "p1",
         ProviderAppId::Codex,
@@ -334,8 +333,6 @@ fn codex_reapply_keeps_reasoning_effort_but_switch_clears_it() -> Result<()> {
     let isolated = Isolated::new()?;
     isolated.seed_model("p1", "model-a")?;
     isolated.seed_model("p2", "model-a")?;
-    isolated.set_key("p1")?;
-    isolated.set_key("p2")?;
 
     isolated.apply(
         "p1",
@@ -358,7 +355,6 @@ fn codex_reapply_keeps_reasoning_effort_but_switch_clears_it() -> Result<()> {
 fn codex_apply_writes_and_clears_model_context_window() -> Result<()> {
     let isolated = Isolated::new()?;
     isolated.seed_model("p1", "model-a")?;
-    isolated.set_key("p1")?;
 
     isolated.apply("p1", ProviderAppId::Codex, &["model-a"], "model-a", None)?;
     assert!(read_text(&codex_path()).contains("model_context_window = 200000"));
@@ -369,6 +365,7 @@ fn codex_apply_writes_and_clears_model_context_window() -> Result<()> {
         label: "Label p1".to_string(),
         protocol: ProviderProtocol::OpenaiResponses,
         base_url: "https://p1.test/v1".to_string(),
+        api_key: "sk-test-secret".to_string(),
         models: vec![ProviderModelInput {
             id: "model-a".to_string(),
             label: "Model A".to_string(),
@@ -389,7 +386,6 @@ fn codex_apply_writes_and_clears_model_context_window() -> Result<()> {
 fn codex_remove_clears_model_context_window() -> Result<()> {
     let isolated = Isolated::new()?;
     isolated.seed_model("p1", "model-a")?;
-    isolated.set_key("p1")?;
     isolated.apply("p1", ProviderAppId::Codex, &["model-a"], "model-a", None)?;
 
     isolated.remove_from("p1", ProviderAppId::Codex)?;
@@ -412,7 +408,6 @@ fn claude_apply_writes_context_and_output_env_and_remove_clears_them() -> Result
         "https://agg.test/api",
         vec!["model-a".to_string()],
     )?;
-    isolated.set_key("agg")?;
 
     isolated.apply("agg", ProviderAppId::Claude, &["model-a"], "model-a", None)?;
     let applied: JsonValue = serde_json::from_str(&read_text(&claude_path()))?;
@@ -436,7 +431,6 @@ fn claude_apply_preserves_keys_and_remove_matches_base_url() -> Result<()> {
         ProviderProtocol::AnthropicMessages,
         "https://agg.test/api",
     )?;
-    isolated.set_key("agg")?;
 
     isolated.apply(
         "agg",
@@ -539,7 +533,6 @@ fn opencode_apply_adds_entry_and_remove_clears_default_model() -> Result<()> {
         "https://p1.test/v1",
         vec!["model-a".to_string()],
     )?;
-    isolated.set_key("p1")?;
 
     isolated.apply("p1", ProviderAppId::Opencode, &["model-a"], "model-a", None)?;
     let applied: JsonValue = serde_json::from_str(&read_text(&path))?;
@@ -576,7 +569,6 @@ fn opencode_apply_anthropic_uses_native_anthropic_package() -> Result<()> {
         "https://p1.test/anthropic",
         vec!["model-a".to_string()],
     )?;
-    isolated.set_key("p1")?;
 
     isolated.apply("p1", ProviderAppId::Opencode, &["model-a"], "model-a", None)?;
     let applied: JsonValue = serde_json::from_str(&read_text(&path))?;
@@ -612,7 +604,6 @@ fn opencode_reapply_keeps_reasoning_settings() -> Result<()> {
         "https://p1.test/v1",
         vec!["model-a".to_string()],
     )?;
-    isolated.set_key("p1")?;
 
     isolated.apply(
         "p1",
@@ -652,7 +643,6 @@ fn opencode_reads_back_thinking_budget_level() -> Result<()> {
         "https://p1.test/anthropic",
         vec!["model-a".to_string()],
     )?;
-    isolated.set_key("p1")?;
 
     isolated.apply(
         "p1",
@@ -691,7 +681,6 @@ fn opencode_apply_responses_uses_openai_responses_package() -> Result<()> {
         "https://p1.test/v1",
         vec!["model-a".to_string()],
     )?;
-    isolated.set_key("p1")?;
 
     isolated.apply("p1", ProviderAppId::Opencode, &["model-a"], "model-a", None)?;
     let applied: JsonValue = serde_json::from_str(&read_text(&path))?;
@@ -728,7 +717,6 @@ fn opencode_apply_writes_model_limit_and_capabilities() -> Result<()> {
         "https://p1.test/v1",
         vec!["model-a".to_string()],
     )?;
-    isolated.set_key("p1")?;
 
     isolated.apply("p1", ProviderAppId::Opencode, &["model-a"], "model-a", None)?;
     let applied: JsonValue = serde_json::from_str(&read_text(&path))?;
@@ -754,6 +742,7 @@ fn opencode_apply_omits_incomplete_limit_and_narrows_modalities() -> Result<()> 
         label: "Label p1".to_string(),
         protocol: ProviderProtocol::OpenaiChatCompletions,
         base_url: "https://p1.test/v1".to_string(),
+        api_key: "sk-test-secret".to_string(),
         models: vec![ProviderModelInput {
             id: "model-a".to_string(),
             label: "Model A".to_string(),
@@ -764,7 +753,6 @@ fn opencode_apply_omits_incomplete_limit_and_narrows_modalities() -> Result<()> 
             reasoning_levels: None,
         }],
     })?;
-    isolated.set_key("p1")?;
 
     isolated.apply("p1", ProviderAppId::Opencode, &["model-a"], "model-a", None)?;
     let applied: JsonValue = serde_json::from_str(&read_text(&path))?;
@@ -790,7 +778,6 @@ fn opencode_apply_writes_reasoning_effort_or_thinking_budget() -> Result<()> {
         "https://oai.test/v1",
         vec!["model-a".to_string()],
     )?;
-    isolated.set_key("oai")?;
     isolated.apply(
         "oai",
         ProviderAppId::Opencode,
@@ -810,7 +797,6 @@ fn opencode_apply_writes_reasoning_effort_or_thinking_budget() -> Result<()> {
         "https://ant.test/anthropic",
         vec!["model-a".to_string()],
     )?;
-    isolated.set_key("ant")?;
     isolated.apply(
         "ant",
         ProviderAppId::Opencode,
@@ -898,7 +884,6 @@ fn opencode_inspect_reads_both_v1_and_v2_nodes() -> Result<()> {
 fn pi_apply_writes_models_and_settings_then_remove_clears_defaults() -> Result<()> {
     let isolated = Isolated::new()?;
     isolated.seed_model("p1", "model-a")?;
-    isolated.set_key("p1")?;
 
     isolated.apply(
         "p1",
@@ -933,7 +918,6 @@ fn pi_apply_writes_models_and_settings_then_remove_clears_defaults() -> Result<(
 fn pi_off_level_writes_off() -> Result<()> {
     let isolated = Isolated::new()?;
     isolated.seed_model("p1", "model-a")?;
-    isolated.set_key("p1")?;
 
     isolated.apply(
         "p1",
@@ -968,7 +952,6 @@ fn grok_anthropic_apply_uses_extra_headers_and_remove_clears_default() -> Result
         ProviderProtocol::AnthropicMessages,
         "https://p1.test/v1",
     )?;
-    isolated.set_key("p1")?;
 
     isolated.apply(
         "p1",
@@ -1019,8 +1002,6 @@ fn grok_reapply_switches_default_and_keeps_other_provider() -> Result<()> {
         "https://p2.test/v1",
         vec!["m3".to_string()],
     )?;
-    isolated.set_key("p1")?;
-    isolated.set_key("p2")?;
 
     isolated.apply("p1", ProviderAppId::Grokbuild, &["m1"], "m1", None)?;
     isolated.apply("p2", ProviderAppId::Grokbuild, &["m3"], "m3", None)?;
@@ -1062,7 +1043,6 @@ fn grok_reapply_switches_default_and_keeps_other_provider() -> Result<()> {
 fn grok_max_reasoning_writes_xhigh() -> Result<()> {
     let isolated = Isolated::new()?;
     isolated.seed_model("p1", "model-a")?;
-    isolated.set_key("p1")?;
     isolated.apply(
         "p1",
         ProviderAppId::Grokbuild,
@@ -1083,7 +1063,6 @@ fn grok_max_reasoning_writes_xhigh() -> Result<()> {
 fn grok_apply_writes_context_window_and_reasoning_support() -> Result<()> {
     let isolated = Isolated::new()?;
     isolated.seed_model("p1", "model-a")?;
-    isolated.set_key("p1")?;
 
     isolated.apply(
         "p1",
@@ -1117,6 +1096,7 @@ fn grok_apply_omits_absent_model_metadata() -> Result<()> {
         label: "Label p1".to_string(),
         protocol: ProviderProtocol::OpenaiChatCompletions,
         base_url: "https://p1.test/v1".to_string(),
+        api_key: "sk-test-secret".to_string(),
         models: vec![ProviderModelInput {
             id: "model-a".to_string(),
             label: "Model A".to_string(),
@@ -1127,7 +1107,6 @@ fn grok_apply_omits_absent_model_metadata() -> Result<()> {
             reasoning_levels: None,
         }],
     })?;
-    isolated.set_key("p1")?;
 
     isolated.apply(
         "p1",
@@ -1191,7 +1170,6 @@ fn applied_reasoning_level_is_read_back_for_each_app() -> Result<()> {
     ] {
         let isolated = Isolated::new()?;
         isolated.seed_provider("p1", protocol, "https://p1.test/v1")?;
-        isolated.set_key("p1")?;
         isolated.apply(
             "p1",
             app,
@@ -1220,7 +1198,6 @@ fn applied_reasoning_level_is_read_back_for_each_app() -> Result<()> {
 fn app_state_inner_matches_full_state_entry() -> Result<()> {
     let isolated = Isolated::new()?;
     isolated.seed_model("p1", "model-a")?;
-    isolated.set_key("p1")?;
     isolated.apply(
         "p1",
         ProviderAppId::Grokbuild,
@@ -1254,7 +1231,6 @@ fn grok_anthropic_base_url_gets_v1_suffix_and_inspect_stays_applied() -> Result<
         ProviderProtocol::AnthropicMessages,
         "https://p1.test/anthropic",
     )?;
-    isolated.set_key("p1")?;
 
     isolated.apply(
         "p1",
@@ -1284,7 +1260,6 @@ fn grok_anthropic_base_url_gets_v1_suffix_and_inspect_stays_applied() -> Result<
 fn drifted_base_url_is_reported_and_protocol_gate_blocks_apply() -> Result<()> {
     let isolated = Isolated::new()?;
     isolated.seed_model("p1", "model-a")?;
-    isolated.set_key("p1")?;
     isolated.apply("p1", ProviderAppId::Codex, &["model-a"], "model-a", None)?;
 
     // 平台 base_url 变化 → 反显为漂移。
@@ -1308,10 +1283,8 @@ fn drifted_base_url_is_reported_and_protocol_gate_blocks_apply() -> Result<()> {
         ProviderProtocol::OpenaiChatCompletions,
         "https://p2.test/v1",
     )?;
-    isolated.set_key("p2")?;
     let error = apply_provider_inner(
         &isolated.store,
-        &isolated.keys,
         &isolated.env,
         &plan("p2", ProviderAppId::Codex, &["model-a"], "model-a", None),
     )
@@ -1328,23 +1301,22 @@ fn delete_provider_blocked_by_claude_reference_then_succeeds() -> Result<()> {
         ProviderProtocol::AnthropicMessages,
         "https://agg.test/api",
     )?;
-    isolated.set_key("agg")?;
     isolated.apply("agg", ProviderAppId::Claude, &["model-a"], "model-a", None)?;
 
-    let error = delete_provider_inner(&isolated.store, &isolated.keys, &isolated.env, "agg")
+    let error = delete_provider_inner(&isolated.store, &isolated.env, "agg")
         .expect_err("Claude 引用中的平台不应允许删除");
     assert!(error.to_string().contains("Claude Code"));
 
     isolated.remove_from("agg", ProviderAppId::Claude)?;
-    let result = delete_provider_inner(&isolated.store, &isolated.keys, &isolated.env, "agg")?;
+    let result = delete_provider_inner(&isolated.store, &isolated.env, "agg")?;
     assert!(result.detail.contains("已删除"));
     assert!(
-        providers_state_inner(&isolated.store, &isolated.keys, &isolated.env)?
+        providers_state_inner(&isolated.store, &isolated.env)?
             .providers
             .is_empty()
     );
-    // 密钥也一并清理。
-    assert!(!isolated.keys.key_present("agg")?);
+    // 明文 Key 随平台条目一起从文件里消失。
+    assert!(!fs::read_to_string(isolated.store.config_path())?.contains("sk-test-secret"));
     Ok(())
 }
 
@@ -1352,11 +1324,9 @@ fn delete_provider_blocked_by_claude_reference_then_succeeds() -> Result<()> {
 fn preview_masks_key_and_does_not_write() -> Result<()> {
     let isolated = Isolated::new()?;
     isolated.seed_model("p1", "model-a")?;
-    isolated.set_key("p1")?;
 
     let preview = preview_apply_inner(
         &isolated.store,
-        &isolated.keys,
         &isolated.env,
         &plan("p1", ProviderAppId::Codex, &["model-a"], "model-a", None),
     )?;
@@ -1377,11 +1347,10 @@ fn preview_masks_key_and_does_not_write() -> Result<()> {
     assert!(!codex_path().exists(), "预览不应写文件");
 
     // 缺 Key 时预览直接报错。
-    isolated.keys.remove_key("p1")?;
+    isolated.clear_key("p1")?;
     assert!(
         preview_apply_inner(
             &isolated.store,
-            &isolated.keys,
             &isolated.env,
             &plan("p1", ProviderAppId::Codex, &["model-a"], "model-a", None),
         )
@@ -1396,7 +1365,6 @@ fn preview_masks_key_and_does_not_write() -> Result<()> {
 fn preview_after_apply_masks_secret_in_old_file() -> Result<()> {
     let isolated = Isolated::new()?;
     isolated.seed_model("p1", "model-a")?;
-    isolated.set_key("p1")?;
 
     isolated.apply("p1", ProviderAppId::Codex, &["model-a"], "model-a", None)?;
     let raw = std::fs::read_to_string(codex_path())?;
@@ -1404,7 +1372,6 @@ fn preview_after_apply_masks_secret_in_old_file() -> Result<()> {
 
     let preview = preview_apply_inner(
         &isolated.store,
-        &isolated.keys,
         &isolated.env,
         &plan("p1", ProviderAppId::Codex, &["model-a"], "model-a", None),
     )?;

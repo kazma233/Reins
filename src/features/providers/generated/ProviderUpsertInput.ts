@@ -2,4 +2,4 @@
 import type { ProviderModelInput } from "./ProviderModelInput";
 import type { ProviderProtocol } from "./ProviderProtocol";
 
-export type ProviderUpsertInput = { providerId: string, label: string, protocol: ProviderProtocol, baseUrl: string, models: Array<ProviderModelInput>, };
+export type ProviderUpsertInput = { providerId: string, label: string, protocol: ProviderProtocol, baseUrl: string, apiKey: string, models: Array<ProviderModelInput>, };

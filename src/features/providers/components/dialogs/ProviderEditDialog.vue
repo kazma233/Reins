@@ -4,8 +4,6 @@ import DialogShell from "@shared/ui/DialogShell.vue";
 import AppInput from "@shared/ui/AppInput.vue";
 import AppSelect from "@shared/ui/AppSelect.vue";
 import AppSecretInput from "@shared/ui/AppSecretInput.vue";
-import { extractErrorMessage } from "@shared/lib/errors";
-import { getProviderKey } from "../../api";
 import type { FetchedModel, ModelsDevMeta, ProviderModelInput } from "../../generated";
 import {
   applyModelsDevMeta,
@@ -25,8 +23,7 @@ type ProviderEditDialogProps = {
   open: boolean;
   loading: boolean;
   form: ProviderFormState;
-  // 仅编辑态有意义：该提供商是否已设 Key。已设时打开弹窗会经
-  // get_provider_key 回显明文（当次 IPC，不落日志），便于确认当前 Key。
+  // 仅编辑态有意义：该提供商当前是否已设 Key；明文已随 form.apiKey 下发。
   keyPresent: boolean;
   // 新增流程分两步：step 1 服务商元数据，step 2 模型目录。
   // 编辑态不走两步控制，元数据与模型一屏编辑。
@@ -38,7 +35,7 @@ const props = defineProps<ProviderEditDialogProps>();
 
 const emit = defineEmits<{
   close: [];
-  confirm: [apiKey: string];
+  confirm: [];
 }>();
 
 const { showNotice } = useProvidersNotice();
@@ -50,8 +47,7 @@ const modelsDevDialog = reactive({
   providerId: "",
   modelId: "",
 });
-// 可选密钥：不进表单持久化状态，提交时随 confirm 交给面板写入密钥管理。
-const apiKey = ref("");
+// 可选密钥：随表单状态一并落盘，弹窗不再单独拉取。
 const fetchDialogOpen = ref(false);
 const modelDialogOpen = ref(false);
 
@@ -67,11 +63,11 @@ const confirmLabel = computed(() => {
 
 const apiKeyHint = computed(() => {
   if (props.form.originalProviderId === null) {
-    return "存入系统密钥管理，不写入 providers.yaml；删除提供商时一并清除。";
+    return "明文写入 providers.yaml，不加密；留空表示不设置。";
   }
   return props.keyPresent
-    ? "已加载当前 Key；修改后保存将覆盖。"
-    : "未设置。填写后随保存写入系统密钥管理。";
+    ? "当前已存 Key（明文显示）；修改后保存将覆盖，清空保存即删除。"
+    : "未设置。填写后随保存明文写入 providers.yaml。";
 });
 
 const dialogTitle = computed(() => {
@@ -87,38 +83,22 @@ watch(
   (open) => {
     if (open) {
       resetTransient();
-      void loadExistingKey();
     }
   }
 );
-
-// 编辑态回显已存密钥，便于确认当前用的是哪个 Key；
-// 读取失败仅提示，留空保持不变的语义不受影响。
-async function loadExistingKey() {
-  const providerId = props.form.originalProviderId;
-  if (!providerId || !props.keyPresent) {
-    return;
-  }
-  try {
-    apiKey.value = (await getProviderKey(providerId)) ?? "";
-  } catch (error) {
-    showNotice(extractErrorMessage(error, "读取已存 API Key 失败。"), "error");
-  }
-}
 
 function resetTransient() {
   modelsDevDialog.open = false;
   modelsDevDialog.rowKey = "";
   modelsDevDialog.providerId = "";
   modelsDevDialog.modelId = "";
-  apiKey.value = "";
   fetchDialogOpen.value = false;
   modelDialogOpen.value = false;
 }
 
-// Key 可选：留空时面板只保存提供商元数据。
+// Key 可选：留空时面板只保存提供商元数据，同时清除已存 Key。
 function confirm() {
-  emit("confirm", apiKey.value.trim());
+  emit("confirm");
 }
 
 // 拉取/新增都在子弹窗内完成，确认后把结果落回模型目录。
@@ -201,7 +181,7 @@ function applyModelsDevCompletion(meta: ModelsDevMeta) {
           @update:model-value="form.providerId = normalizeProviderIdInput(String($event))"
         />
         <small class="providers-field__hint">
-          唯一标识，保存后不可修改（系统密钥以它命名）。只允许小写字母、数字和 `-`，不能以
+          唯一标识，保存后不可修改（纯本地标识，Key 存同一份 providers.yaml 的条目里）。只允许小写字母、数字和 `-`，不能以
           `reins-` 开头。
         </small>
       </label>
@@ -237,7 +217,7 @@ function applyModelsDevCompletion(meta: ModelsDevMeta) {
 
       <label class="providers-field" style="grid-column: span 2">
         <span>API Key（可选）</span>
-        <AppSecretInput v-model="apiKey" :disabled="loading" />
+        <AppSecretInput v-model="form.apiKey" :disabled="loading" />
         <small class="providers-field__hint">{{ apiKeyHint }}</small>
       </label>
     </div>
@@ -360,7 +340,7 @@ function applyModelsDevCompletion(meta: ModelsDevMeta) {
       :key-present="keyPresent"
       :protocol="form.protocol"
       :base-url="form.baseUrl"
-      :api-key="apiKey"
+      :api-key="form.apiKey"
       @close="fetchDialogOpen = false"
       @confirm="addFetchedModels"
     />

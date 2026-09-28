@@ -9,7 +9,7 @@ type ProviderFetchModelsDialogProps = {
   open: boolean;
   // 已保存提供商传其 ID；新建态传空串。是否按 ID 拉取还要看 keyPresent。
   providerId: string;
-  // 该提供商在系统密钥管理里是否已有 Key：有则按提供商 ID 拉取（读密钥链），
+  // 该提供商当前是否已存 Key：有则按提供商 ID 拉取（读 providers.yaml），
   // 没有则走直连，用当次输入的 apiKey，不报「未设 Key」。
   keyPresent: boolean;
   protocol: ProviderProtocol;
@@ -48,7 +48,7 @@ async function runFetch() {
   fetching.value = true;
   errorText.value = "";
   try {
-    // 密钥链有 Key 时按已保存提供商拉取，与编辑提供商行为一致；
+    // 已存 Key 时按已保存提供商拉取，与编辑提供商行为一致；
     // 没有时退回直连，用表单 Base URL + 当次输入的 Key。
     // 后端可能经历多级候选路径回退，url 是实际命中的那一个。
     const result =

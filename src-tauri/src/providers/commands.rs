@@ -11,7 +11,6 @@ use super::apps::{
 };
 use super::catalog::{fetch_provider_models_inner, match_modelsdev};
 use super::config::ProviderConfigStore;
-use super::keychain::ProviderKeyStore;
 use super::types::{
     ApplyProviderInput, FetchedModelsResult, ModelsDevMatchResult, ProviderAppId, ProviderAppState,
     ProviderApplyPreview, ProviderFilePreview, ProviderModelView, ProviderMutationResult,
@@ -26,13 +25,11 @@ use crate::support::fs::display_path;
 #[tauri::command]
 pub(crate) async fn get_providers_state(
     store: tauri::State<'_, ProviderConfigStore>,
-    keys: tauri::State<'_, ProviderKeyStore>,
 ) -> std::result::Result<ProvidersState, String> {
     let store = store.inner().clone();
-    let keys = keys.inner().clone();
     run_blocking(move || {
         let env = ToolEnv::from_env();
-        providers_state_inner(&store, &keys, &env)
+        providers_state_inner(&store, &env)
     })
     .await
 }
@@ -54,7 +51,7 @@ pub(crate) async fn upsert_provider(
     let store = store.inner().clone();
     logger::log_info(format!("upsert_provider provider_id={}", input.provider_id));
     run_blocking(move || {
-        // upsert 会归一化平台 ID（小写、`_`→`-`），后续写密钥必须用落库 ID。
+        // upsert 会归一化平台 ID（小写、`_`→`-`），并连带写入表单里的明文 API Key。
         store.upsert(input)
     })
     .await
@@ -63,63 +60,24 @@ pub(crate) async fn upsert_provider(
 #[tauri::command]
 pub(crate) async fn delete_provider(
     store: tauri::State<'_, ProviderConfigStore>,
-    keys: tauri::State<'_, ProviderKeyStore>,
     provider_id: String,
 ) -> std::result::Result<ProviderMutationResult, String> {
     let store = store.inner().clone();
-    let keys = keys.inner().clone();
     logger::log_info(format!("delete_provider provider_id={provider_id}"));
-    run_blocking(move || delete_provider_inner(&store, &keys, &ToolEnv::from_env(), &provider_id))
-        .await
-}
-
-#[tauri::command]
-pub(crate) async fn set_provider_key(
-    store: tauri::State<'_, ProviderConfigStore>,
-    keys: tauri::State<'_, ProviderKeyStore>,
-    provider_id: String,
-    api_key: String,
-) -> std::result::Result<(), String> {
-    let store = store.inner().clone();
-    let keys = keys.inner().clone();
-    run_blocking(move || {
-        ensure_provider_exists(&store, &provider_id)?;
-        // 任何日志只出现 provider_id，密钥内容不落日志。
-        keys.set_key(&provider_id, api_key.trim())
-    })
-    .await
-}
-
-#[tauri::command]
-pub(crate) async fn get_provider_key(
-    store: tauri::State<'_, ProviderConfigStore>,
-    keys: tauri::State<'_, ProviderKeyStore>,
-    provider_id: String,
-) -> std::result::Result<Option<String>, String> {
-    let store = store.inner().clone();
-    let keys = keys.inner().clone();
-    run_blocking(move || {
-        ensure_provider_exists(&store, &provider_id)?;
-        // 本地单用户桌面应用，编辑弹窗回显用；明文只经当次 IPC 返回，
-        // 任何日志只出现 provider_id，不记录密钥内容。
-        keys.read_key(&provider_id)
-    })
-    .await
+    run_blocking(move || delete_provider_inner(&store, &ToolEnv::from_env(), &provider_id)).await
 }
 
 #[tauri::command]
 pub(crate) async fn fetch_provider_models(
     store: tauri::State<'_, ProviderConfigStore>,
-    keys: tauri::State<'_, ProviderKeyStore>,
     provider_id: String,
 ) -> std::result::Result<FetchedModelsResult, String> {
     let store = store.inner().clone();
-    let keys = keys.inner().clone();
-    run_blocking(move || fetch_models_inner(&store, &keys, &provider_id)).await
+    run_blocking(move || fetch_models_inner(&store, &provider_id)).await
 }
 
 // 新增平台未落盘时的直连拉取：只用表单数据与当次输入的密钥，
-// 不读 providers.yaml、不读系统密钥管理器，密钥不写入任何持久状态。
+// 不读 providers.yaml、不写任何持久状态。
 #[tauri::command]
 pub(crate) async fn fetch_provider_models_direct(
     protocol: ProviderProtocol,
@@ -145,6 +103,7 @@ pub(crate) fn fetch_provider_models_direct_inner(
         label: String::new(),
         protocol: *protocol,
         base_url: base_url.to_string(),
+        api_key: None,
         models: Vec::new(),
     };
     fetch_provider_models_inner(&provider, api_key.trim())
@@ -172,27 +131,23 @@ pub(crate) async fn fetch_modelsdev_catalog(
 #[tauri::command]
 pub(crate) async fn preview_provider_apply(
     store: tauri::State<'_, ProviderConfigStore>,
-    keys: tauri::State<'_, ProviderKeyStore>,
     input: ApplyProviderInput,
 ) -> std::result::Result<ProviderApplyPreview, String> {
     let store = store.inner().clone();
-    let keys = keys.inner().clone();
-    run_blocking(move || preview_apply_inner(&store, &keys, &ToolEnv::from_env(), &input)).await
+    run_blocking(move || preview_apply_inner(&store, &ToolEnv::from_env(), &input)).await
 }
 
 #[tauri::command]
 pub(crate) async fn apply_provider_to_app(
     store: tauri::State<'_, ProviderConfigStore>,
-    keys: tauri::State<'_, ProviderKeyStore>,
     input: ApplyProviderInput,
 ) -> std::result::Result<ProviderMutationResult, String> {
     let store = store.inner().clone();
-    let keys = keys.inner().clone();
     logger::log_info(format!(
         "apply_provider_to_app provider_id={} app={:?}",
         input.provider_id, input.app
     ));
-    run_blocking(move || apply_provider_inner(&store, &keys, &ToolEnv::from_env(), &input)).await
+    run_blocking(move || apply_provider_inner(&store, &ToolEnv::from_env(), &input)).await
 }
 
 #[tauri::command]
@@ -226,7 +181,6 @@ pub(crate) async fn remove_external_entry(
 
 pub(crate) fn providers_state_inner(
     store: &ProviderConfigStore,
-    keys: &ProviderKeyStore,
     env: &ToolEnv,
 ) -> Result<ProvidersState> {
     let providers = store.load()?;
@@ -239,7 +193,7 @@ pub(crate) fn providers_state_inner(
         config_path: display_path(store.config_path()),
         providers: providers
             .values()
-            .map(|provider| provider_view(provider, keys))
+            .map(provider_view)
             .collect::<Result<Vec<_>>>()?,
         apps,
     })
@@ -288,13 +242,13 @@ fn app_config_paths(env: &ToolEnv, app: ProviderAppId) -> Vec<PathBuf> {
     resolve().unwrap_or_default()
 }
 
-fn provider_view(provider: &ResolvedProvider, keys: &ProviderKeyStore) -> Result<ProviderView> {
+fn provider_view(provider: &ResolvedProvider) -> Result<ProviderView> {
     Ok(ProviderView {
         id: provider.id.clone(),
         label: provider.label.clone(),
         protocol: provider.protocol,
         base_url: provider.base_url.clone(),
-        key_present: keys.key_present(&provider.id)?,
+        api_key: provider.stored_api_key(),
         models: provider
             .models
             .iter()
@@ -311,17 +265,8 @@ fn provider_view(provider: &ResolvedProvider, keys: &ProviderKeyStore) -> Result
     })
 }
 
-fn ensure_provider_exists(store: &ProviderConfigStore, provider_id: &str) -> Result<()> {
-    let providers = store.load()?;
-    if !providers.contains_key(provider_id) {
-        bail!("平台不存在：{provider_id}");
-    }
-    Ok(())
-}
-
 pub(crate) fn delete_provider_inner(
     store: &ProviderConfigStore,
-    keys: &ProviderKeyStore,
     env: &ToolEnv,
     provider_id: &str,
 ) -> Result<ProviderMutationResult> {
@@ -341,34 +286,31 @@ pub(crate) fn delete_provider_inner(
     }
 
     store.delete(provider_id)?;
-    keys.remove_key(provider_id)?;
     Ok(ProviderMutationResult {
         app: None,
         provider_id: Some(provider_id.to_string()),
         action: "delete".to_string(),
-        detail: format!("平台 {provider_id} 已删除（含系统密钥条目）。"),
+        detail: format!("平台 {provider_id} 已删除。"),
     })
 }
 
 pub(crate) fn fetch_models_inner(
     store: &ProviderConfigStore,
-    keys: &ProviderKeyStore,
     provider_id: &str,
 ) -> Result<FetchedModelsResult> {
     let providers = store.load()?;
     let provider = providers
         .get(provider_id)
         .ok_or_else(|| anyhow::anyhow!("平台不存在：{provider_id}"))?;
-    let Some(api_key) = keys.read_key(provider_id)? else {
+    let Some(api_key) = provider.stored_api_key() else {
         bail!("请先设置平台 {provider_id} 的 API Key。");
     };
-    fetch_provider_models_inner(provider, api_key.trim())
+    fetch_provider_models_inner(provider, &api_key)
 }
 
 // 生成应用产物。preview=true 时内容里的密钥用脱敏占位符，不读真实密钥。
 fn compute_apply(
     store: &ProviderConfigStore,
-    keys: &ProviderKeyStore,
     env: &ToolEnv,
     input: &ApplyProviderInput,
     preview: bool,
@@ -381,20 +323,13 @@ fn compute_apply(
     ensure_protocol_supported(adapter, provider)?;
     let warnings = validate_plan(adapter, provider, input)?;
 
+    let Some(stored_key) = provider.stored_api_key() else {
+        bail!("请先设置平台 {} 的 API Key。", input.provider_id);
+    };
     let api_key = if preview {
-        if !keys.key_present(&input.provider_id)? {
-            bail!("请先设置平台 {} 的 API Key。", input.provider_id);
-        }
         MASKED_KEY.to_string()
     } else {
-        let Some(api_key) = keys.read_key(&input.provider_id)? else {
-            bail!("请先设置平台 {} 的 API Key。", input.provider_id);
-        };
-        let trimmed = api_key.trim().to_string();
-        if trimmed.is_empty() {
-            bail!("请先设置平台 {} 的 API Key。", input.provider_id);
-        }
-        trimmed
+        stored_key
     };
 
     let env_files = adapter.apply(env, provider, input, &api_key)?;
@@ -403,17 +338,17 @@ fn compute_apply(
 
 pub(crate) fn preview_apply_inner(
     store: &ProviderConfigStore,
-    keys: &ProviderKeyStore,
     env: &ToolEnv,
     input: &ApplyProviderInput,
 ) -> Result<ProviderApplyPreview> {
-    let (files, warnings) = compute_apply(store, keys, env, input, true)?;
+    let (files, warnings) = compute_apply(store, env, input, true)?;
     // 旧文件可能带着上次 apply 写入的真实密钥；diff 的 Context/Remove 行
     // 只允许出现掩码，用当前密钥值替换。密钥轮换后的历史旧值无从得知，
     // 超出此处的能力边界。
-    let secret = keys
-        .read_key(&input.provider_id)?
-        .map(|value| value.trim().to_string())
+    let secret = store
+        .load()?
+        .get(&input.provider_id)
+        .and_then(|provider| provider.stored_api_key())
         .unwrap_or_default();
     let mut previews = Vec::new();
     for (path, new_content) in files {
@@ -445,11 +380,10 @@ pub(crate) fn preview_apply_inner(
 
 pub(crate) fn apply_provider_inner(
     store: &ProviderConfigStore,
-    keys: &ProviderKeyStore,
     env: &ToolEnv,
     input: &ApplyProviderInput,
 ) -> Result<ProviderMutationResult> {
-    let (files, warnings) = compute_apply(store, keys, env, input, false)?;
+    let (files, warnings) = compute_apply(store, env, input, false)?;
     // 原子写逐个文件执行；中途失败时已写文件保持新内容，靠预览 +
     // 幂等重试收敛，不做跨文件回滚。
     super::apps::write_files(&files)?;

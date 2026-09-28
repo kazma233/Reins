@@ -12,8 +12,8 @@ import type {
   ProvidersState,
 } from "./generated";
 
-// 全部 invoke 封装；类型只来自 generated/，密钥只经 setProviderKey
-// 传入后端，任何返回值里都不含明文密钥。
+// 全部 invoke 封装；类型只来自 generated/。明文 API Key 只经
+// upsertProvider 的输入下发，单独的密钥读写命令已废弃。
 
 export function getProvidersState(): Promise<ProvidersState> {
   return invoke("get_providers_state");
@@ -32,14 +32,6 @@ export function upsertProvider(input: ProviderUpsertInput): Promise<string> {
 
 export function deleteProvider(providerId: string): Promise<ProviderMutationResult> {
   return invoke("delete_provider", { providerId });
-}
-
-export function getProviderKey(providerId: string): Promise<string | null> {
-  return invoke("get_provider_key", { providerId });
-}
-
-export function setProviderKey(providerId: string, apiKey: string): Promise<void> {
-  return invoke("set_provider_key", { providerId, apiKey });
 }
 
 export function fetchProviderModels(providerId: string): Promise<FetchedModelsResult> {

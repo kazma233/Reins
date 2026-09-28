@@ -37,7 +37,7 @@ function provider(overrides: Partial<ProviderView> = {}): ProviderView {
     label: "OpenRouter",
     protocol: "openai_responses",
     baseUrl: "https://openrouter.test/v1",
-    keyPresent: true,
+    apiKey: "sk-test-secret",
     models: [],
     ...overrides,
   };
@@ -127,7 +127,7 @@ describe("unwrittenModelFieldsText", () => {
 describe("applyBlockers", () => {
   it("lists protocol, key and model blockers", () => {
     const app = appState({ supportedProtocols: ["anthropic_messages"] });
-    const blockers = applyBlockers(app, provider({ keyPresent: false }), []);
+    const blockers = applyBlockers(app, provider({ apiKey: null }), []);
     expect(blockers).toHaveLength(3);
     expect(blockers[0]).toContain("不支持协议");
     expect(blockers[1]).toContain("API Key");

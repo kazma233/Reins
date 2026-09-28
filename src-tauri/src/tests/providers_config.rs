@@ -16,6 +16,7 @@ fn input(id: &str) -> ProviderUpsertInput {
         label: format!("Label {id}"),
         protocol: ProviderProtocol::OpenaiChatCompletions,
         base_url: format!("https://{id}.test/v1"),
+        api_key: "sk-test-secret".to_string(),
         models: vec![ProviderModelInput {
             id: "model-a".to_string(),
             label: "Model A".to_string(),
@@ -55,6 +56,33 @@ fn upsert_normalizes_and_round_trips() -> Result<()> {
     assert!(raw.contains("version: 1"));
     assert!(raw.contains("context_window: 128000"));
     assert!(raw.contains("reasoning_levels:"));
+    // API Key 明文落盘（用户确认的取舍，不加密）。
+    assert_eq!(provider.stored_api_key().as_deref(), Some("sk-test-secret"));
+    assert!(raw.contains("api_key: sk-test-secret"));
+    Ok(())
+}
+
+// 表单值即落盘值：留空写入即清除 Key，两侧空白不计入。
+#[test]
+fn upsert_overwrites_and_clears_api_key() -> Result<()> {
+    let dir = TestDir::new("providers-store")?;
+    let store = ProviderConfigStore::at(dir.path().to_path_buf());
+    store.upsert(input("p1"))?;
+
+    let mut renamed = input("p1");
+    renamed.label = "Renamed".to_string();
+    store.upsert(renamed)?;
+    assert_eq!(
+        store.load()?["p1"].stored_api_key().as_deref(),
+        Some("sk-test-secret"),
+        "元数据更新不应清掉已存 Key"
+    );
+
+    let mut blank = input("p1");
+    blank.api_key = "   ".to_string();
+    store.upsert(blank)?;
+    assert_eq!(store.load()?["p1"].stored_api_key(), None);
+    assert!(!fs::read_to_string(store.config_path())?.contains("api_key"));
     Ok(())
 }
 
