@@ -3,21 +3,26 @@
 - 日期：2026-09-25
 - 性质：契约核对记录。逐项比对 providers 域五个工具的写入/反读契约与官方文档，给出结论、来源与后续动作。
 - 结论速览：写入契约主体与官方一致；发现 3 个不一致（Pi `off` 值、Claude 思考等级值域、OpenCode 思考等级声明未实现）与 2 条风险备注（Grok `model_providers` 未文档化、OpenCode Windows 路径 XDG 不生效）。
+- 后续复测：2026-09-27 起按日期追加补充节（Grok base_url 与逐模型元数据、OpenCode `openai_responses` 复测、其余四个工具的模型元数据配置面），结论以对应日期的小节为准。
 
 ## 来源
 
 | 工具 | 页面 | 说明 |
 | --- | --- | --- |
-| Codex | https://learn.chatgpt.com/docs/config-file/config-reference | config.toml 完整参考（`/docs/...` 加 `.md` 可取 Markdown） |
+| Codex | https://learn.chatgpt.com/docs/config-file/config-reference | config.toml 完整参考（`/docs/...` 加 `.md` 可取 Markdown）；2026-09-28 起该域名对本机返回 Forbidden，改按源码核对 |
 | Codex | https://learn.chatgpt.com/llms.txt | 文档索引 |
+| Codex | `codex-rs/core/config.schema.json`（`rust-v0.145.0` 标签） | 由 `ConfigToml` 生成的配置键权威清单（`model_context_window`、`model_auto_compact_token_limit` 等） |
+| Codex | `codex-rs/models-manager/src/model_info.rs`（同标签） | `model_context_window` 的覆盖逻辑与未知模型的兜底元数据 |
 | Claude Code | https://code.claude.com/docs/en/settings-reference | `effortLevel`/`env`/`model` 键参考（加 `.md` 取 Markdown） |
-| Claude Code | https://code.claude.com/docs/en/env-vars | `ANTHROPIC_BASE_URL`/`ANTHROPIC_API_KEY` 语义 |
+| Claude Code | https://code.claude.com/docs/en/env-vars | `ANTHROPIC_BASE_URL`/`ANTHROPIC_API_KEY` 语义；`CLAUDE_CODE_MAX_CONTEXT_TOKENS`/`CLAUDE_CODE_MAX_OUTPUT_TOKENS`/`CLAUDE_CODE_AUTO_COMPACT_WINDOW` 等模型窗口与输出旋钮 |
 | OpenCode | https://opencode.ai/v2/docs/config/ | v2 配置位置与顶层键 |
-| OpenCode | https://opencode.ai/v2/docs/providers/ | v2 规范 provider schema（`providers`/`package`/`settings`） |
+| OpenCode | https://opencode.ai/v2/docs/providers/ | v2 规范 provider schema（`providers`/`package`/`settings`）；模型字段表（`capabilities`/`limit`/`variants`） |
+| OpenCode | https://opencode.ai/v2/docs/models/ | 模型字段示例与目录外模型的兜底假设（200000 上下文 / 32000 输出 / text+image 输入） |
+| OpenCode | https://opencode.ai/config.json | `$schema` 指向的 JSON Schema；provider 外壳仍是 v1 形态，模型条目字段（含 `limit`/`modalities`）可作对照 |
 | OpenCode | https://opencode.ai/v2/docs/migrate-v1/ | v1 格式兼容承诺（内存归一化、不改源文件） |
-| Pi | https://pi.dev/docs/latest/models | models.json 形态、`api` 取值示例 |
+| Pi | https://pi.dev/docs/latest/models | models.json 形态、`api` 取值示例、`input`/`inputLimits` 字段 |
 | Pi | https://pi.dev/docs/latest/settings | `defaultProvider`/`defaultModel`/`defaultThinkingLevel` 及枚举 |
-| Pi | 本机 `@earendil-works/pi-ai` 包 `dist/types.d.ts` | `KnownApi` 枚举（openai-completions/openai-responses/anthropic-messages 等全部合法值） |
+| Pi | 本机 `@earendil-works/pi-ai` 包 `dist/types.d.ts` | `KnownApi` 枚举（全部合法值）与模型字段 `contextWindow`/`maxTokens`/`reasoning` |
 | Grok Build | https://docs.x.ai/build/overview | 自定义模型入口、`~/.grok/config.toml` 路径 |
 | Grok Build | https://docs.x.ai/build/settings/reference | config.toml 全量键参考（`api_backend`、`api_key`、`extra_headers`、`[models]`） |
 
@@ -129,6 +134,52 @@
 
 处置：OpenCode 能力表恢复放行 `openai_responses`，apply 写 `openai/responses` 包，新增测试 `opencode_apply_responses_uses_openai_responses_package`；compatible/responses 的包解析缺陷属 OpenCode 侧问题，上游修复后再评估切换。
 
+## 2026-09-28 补充：其余四个工具的模型元数据配置面核对
+
+起因：Grok 补写 `context_window` / `supports_reasoning_effort`（见上节）后，复查 Codex、Claude Code、OpenCode、Pi 是否同样存在「官方有配置面、Reins 未使用」的模型元数据缺口。
+
+方法：以各工具生成的配置 schema、源码与官方文档为准；本机版本 `codex-cli 0.145.0`、`claude 2.1.185`、`opencode v2.0.18`、`pi 0.87.1`。OpenCode 与 Codex 另做隔离实测（临时项目目录 + 合成配置，`opencode models` / `opencode debug config`）。本次只读核对，未改代码。
+
+| 工具 | 上下文窗口 | 最大输出 | 图像输入 | 思考能力 |
+| --- | --- | --- | --- | --- |
+| Codex | `model_context_window` 可用，Reins 未写 | 无字段 | 无字段 | `model_reasoning_effort` 已写 |
+| Claude Code | `env.CLAUDE_CODE_MAX_CONTEXT_TOKENS` 可用，未写 | `env.CLAUDE_CODE_MAX_OUTPUT_TOKENS` 可用，未写 | 无字段 | `effortLevel` 已写 |
+| OpenCode v2 | `models.<id>.limit.context` 可用，未写 | `models.<id>.limit.output` 可用，未写 | `models.<id>.capabilities.input` 可用，未写 | v2 无对应字段（维持不写） |
+| Pi | `contextWindow` 已写 | `maxTokens` 已写 | `input`（text/image）已写 | `reasoning` 已写 |
+
+- **Codex**：`codex-rs/core/config.schema.json`（由 `ConfigToml` 生成，`rust-v0.145.0` 标签，与本机版本对应）含顶层键 `model_context_window`（"Size of the context window for the model, in tokens."）与 `model_auto_compact_token_limit`；`models-manager/src/model_info.rs` 中 `config.model_context_window` 覆盖模型窗口并按 `max_context_window` 收敛。不在内置目录中的模型走兜底描述符并告警 `Unknown model {slug} is used. This will use fallback model metadata.`，兜底 `context_window: 272000`、`input_modalities` 取默认值、`supported_reasoning_levels` 为空集。schema 中无模型输出上限键（`tool_output_token_limit` 是工具输出截断，语义不同）。
+- **Claude Code**：env-vars 文档两条正对网关场景——`CLAUDE_CODE_MAX_CONTEXT_TOKENS`（原文：经 `ANTHROPIC_BASE_URL` 路由到「窗口与内置不符」的模型时用它纠正）、`CLAUDE_CODE_MAX_OUTPUT_TOKENS`（原文：对不认识的网关模型 ID 默认 32000）。两者都能写进我们已在用的 `settings.json` → `env`（该块覆盖同名 shell 变量）。相关旋钮另有 `CLAUDE_CODE_AUTO_COMPACT_WINDOW`（100000–1000000）、`CLAUDE_AUTOCOMPACT_PCT_OVERRIDE`、`CLAUDE_CODE_DISABLE_UNKNOWN_MODEL_WINDOW_ENFORCEMENT`（文档标注需 2.1.223+，本机 2.1.185）。无图像能力字段。
+- **OpenCode v2**：v2 providers 文档的模型字段表含 `limit`（Context/input/output token limits）与 `capabilities`（tools + 接受的输入/输出媒体类型）；models 页明确目录外模型按 200000 上下文、32000 输出、text+image 输入兜底，并注明「These are fallback assumptions, not detected capabilities. Set accurate capabilities and limit values when known」。隔离实测（v2.0.18，项目级 `opencode.json`）：写入 `limit{context:128000,output:16000}` 与 `capabilities{tools,input:[text,image],output:[text]}` 后 `opencode models` 注册成功、`opencode debug config` 原样解析出这些字段；同批写入的 v1 风格 `reasoning: true` 与 `temperature` 未出现在解析结果中（进一步印证 v2 不消费这两个键，与能力表不收思考等级的现状一致）。
+- **Pi**：本地 `@earendil-works/pi-ai/dist/types.d.ts` 的 `contextWindow`/`maxTokens`/`reasoning` 与 apply 写入一致，`input` 模态见 models 文档示例；四类元数据无缺口。更细的 `inputLimits`/`promptCache`/`compat.*` 不属本次四个维度，按模型的 `modelThinkingLevels` 也不写（用全局 `defaultThinkingLevel`）。
+
+影响与取舍（已采纳，见下节）：
+
+- 三个工具对我们接入的聚合模型都按固定兜底值处理窗口/输出（Codex 272000、OpenCode 200000 与 32000、Claude 输出 32000），与模型真实值不符时自动压缩时机与输出上限失准，性质同 Grok 的 200000 兜底。
+- Codex 与 Claude Code 的窗口/输出是「活动模型」级全局配置，不是 per-model：Reins 在这两处都是单活动 provider 且 `model` 写死为所选默认模型，因此写默认模型的窗口是自洽的；用户在工具内切换到其他模型时会失配，若采纳需先定策略（只写默认模型、限制单模型场景，或用 Claude 的 `modelSettings` 分担）。
+- OpenCode 的 `capabilities.input` 正好对上已有元数据 `supports_images`。
+
+未验证：
+
+- OpenCode `limit`/`capabilities` 只验证到被运行时解析进配置（注册 + `debug config`），是否真正驱动压缩与输出上限未做请求级验证。
+- Claude 两个 env 变量本次仅依据官方文档，未做真实网关端到端验证。
+- Codex 兜底描述符 `supported_reasoning_levels` 为空集时，已写入的 `model_reasoning_effort` 在请求层是否被采纳未验证（配置加载层此前已验证可加载）。
+
+## 2026-09-28 补充（二）：三处落点与 OpenCode 思考等级的落地
+
+用户判定上一节的「有落点未写」是缺陷并要求修复，OpenCode 另指出思考等级可配。核对与实测结论：
+
+- OpenCode 思考等级**确实可配**，但写法按协议分叉（上一轮只看到 `compatibility.reasoningField`，漏了模型级 `settings`）：
+  - `providers.<id>.models.<modelId>.settings.reasoningEffort`（官方 models 页字段表：「settings — Provider-package options such as baseURL or reasoningEffort」）。实测（v2.0.18 + 本地监听器）：写入 `"reasoningEffort": "xhigh"` 后，`opencode run` 发出的 `POST /v1/chat/completions` 请求体带 `reasoning_effort: "xhigh"`。✅ 上线。
+  - anthropic 包不消费 `reasoningEffort`（同法实测：请求体只有 model/system/messages/stream/max_tokens）；该包的思考入口是 `settings.thinking`：`{"type":"enabled","budgetTokens":16000}` → 请求体带 `thinking: {type:"enabled", budget_tokens:16000}`；`{"type":"disabled"}` → 带 `thinking: {type:"disabled"}`；**只写 `{"type":"enabled"}` 不带预算时请求不发出**（实测 captured=0），即 enabled 必须带预算。
+- 处置（已实现，测试见处置结果第 9–12 条）：
+  - Codex：写默认模型的 `model_context_window`；元数据缺失时仅在替换 Reins 自身配置的路径上清除，移除时按「值仍等于该模型元数据」归属清理。
+  - Claude Code：写 `env.CLAUDE_CODE_MAX_CONTEXT_TOKENS` 与 `env.CLAUDE_CODE_MAX_OUTPUT_TOKENS`（十进制字符串，官方同类变量示例为纯整数）；移除时随 `env` 块一并清掉。
+  - OpenCode：逐模型写 `limit{context,output}`（两项齐全才写，官方 schema 里二者成对必填）、`capabilities{tools,input,output}`（`supports_images` 决定输入模态）、`settings` 思考设置。
+  - OpenCode 能力表放行思考等级 none/minimal/low/medium/high/xhigh（`max` 不放行：openai 系无该档）；anthropic 包的档位→预算取固定阶梯 minimal 1024 / low 2048 / medium 8192 / high 16384 / xhigh 与 max 32768，`off` 写 `disabled`。该阶梯官方与 OpenCode 都未定义，属 Reins 的产品取值，换档位即换思考预算；**待定**：这组数值待确认（见后续动作第 6 条）。
+  - 能力表 `unwritten_model_fields` 同步收窄：Codex 变「最大输出、图像输入、推理能力」，Claude 变「图像输入、推理能力」，OpenCode 与 Pi 为空，Grok 不变。
+
+证据层级：OpenCode 为请求级实测（用 Reins 实际产出的 `opencode.json`，仅替换 baseURL 指向本地监听器）；Codex 为源码/schema 级（本机 `doctor` 不做未知键校验，未取得运行时证据）；Claude 为官方文档级（未做真实网关验证）。
+
 ## 处置结果
 
 1. ✅ Pi `off` 档：单独映射为 `"off"`（pi.rs `thinking_level`），新增测试 `pi_off_level_writes_off`。
@@ -139,6 +190,10 @@
 6. ✅ OpenCode `openai_responses` 恢复放行（2026-09-27 v2.0.18 复测 `openai/responses` 端到端可用；`openai-compatible/responses` 仍有包解析缺陷，不采用），apply 写 `openai/responses`，新增测试 `opencode_apply_responses_uses_openai_responses_package`。
 7. ✅ Grok 逐模型补写 `context_window`（有元数据时）与 `supports_reasoning_effort = true`（`reasoning` 为真时），新增测试 `grok_apply_writes_context_window_and_reasoning_support`、`grok_apply_omits_absent_model_metadata`（2026-09-27，依据见上节）。
 8. ✅ 能力表新增 `unwritten_model_fields`，`ProviderAppState` 下发到应用弹窗明示不写入的模型元数据（Codex/Claude/OpenCode 四类全列、Grok 列最大输出与图像输入、Pi 为空），新增测试 `app_states_declare_unwritten_model_fields` 与前端 `model.test.ts` 用例。
+9. ✅ Codex 写 `model_context_window`（默认模型元数据；替换时无元数据则清、移除时按元数据归属清），新增测试 `codex_apply_writes_and_clears_model_context_window`、`codex_remove_clears_model_context_window`。
+10. ✅ Claude Code 写 `env.CLAUDE_CODE_MAX_CONTEXT_TOKENS` / `env.CLAUDE_CODE_MAX_OUTPUT_TOKENS`，移除时随 `env` 清掉，新增测试 `claude_apply_writes_context_and_output_env_and_remove_clears_them`。
+11. ✅ OpenCode 逐模型写 `limit{context,output}` 与 `capabilities{tools,input,output}`（limit 两项齐全才写、模态跟随 `supports_images`），新增测试 `opencode_apply_writes_model_limit_and_capabilities`、`opencode_apply_omits_incomplete_limit_and_narrows_modalities`。
+12. ✅ OpenCode 思考等级落地：能力表放行 none/minimal/low/medium/high/xhigh，openai 系写 `settings.reasoningEffort`、anthropic 包写 `settings.thinking`（档位→预算固定阶梯，`off` 写 disabled），新增测试 `opencode_apply_writes_reasoning_effort_or_thinking_budget`；能力表清单同步收窄（依据见 2026-09-28 补充（二））。
 
 ## 后续动作
 
@@ -146,3 +201,5 @@
 2. ~~修复 ❌ 三项~~ 已完成，见处置结果。
 3. plan 文档 unverified 项已同步更新（2026-09-25）。
 4. ~~待定：OpenCode 在 Windows 上不认 `XDG_CONFIG_HOME`~~ 已解决：路径解析去掉 XDG 优先级，统一按 `HOME/.config/opencode` 解析（2026-09-25）。
+5. ~~待决定：是否补写 Codex / Claude Code / OpenCode 的模型窗口与输出落点~~ 已采纳并实现（2026-09-28），见 2026-09-28 补充（二）与处置结果第 9–12 条；plan 文档 §6 写入口径已同步。
+6. 待定（产品取值）：OpenCode anthropic 包的档位→思考预算阶梯（minimal 1024 / low 2048 / medium 8192 / high 16384 / xhigh 32768，`off` 写 disabled）。官方与 OpenCode 都没有该映射，现值是 Reins 自定；可选改为其它阶梯、所有非 off 档统一预算（档位仅表达开关），或对 anthropic 包不写 thinking（只在 openai 系提供商提供档位）。改动范围仅 `opencode.rs` 的 `thinking_budget_tokens` 与对应测试。

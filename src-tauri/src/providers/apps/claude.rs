@@ -9,7 +9,7 @@ use anyhow::{Result, bail};
 use serde_json::{Map as JsonMap, Value as JsonValue};
 
 use super::{
-    AppAdapter, AppCapability, ToolEnv, claude_settings_path, display_path,
+    AppAdapter, AppCapability, ModelField, ToolEnv, claude_settings_path, display_path,
     ensure_protocol_supported, external_entry, read_json_object, serialize_json,
 };
 use crate::providers::types::{
@@ -21,6 +21,11 @@ pub(crate) struct ClaudeAdapter;
 
 const BASE_URL_KEY: &str = "ANTHROPIC_BASE_URL";
 const API_KEY_ENV_KEY: &str = "ANTHROPIC_API_KEY";
+// 聚合模型对 Claude Code 是「不认识的模型 ID」：窗口按内置同名 ID 推断、
+// 输出默认 32000（code.claude.com/docs/en/env-vars）。这两个 env 键正是
+// 官方为此场景提供的纠正入口，随活动 provider 由 Reins 管理。
+const MAX_CONTEXT_TOKENS_KEY: &str = "CLAUDE_CODE_MAX_CONTEXT_TOKENS";
+const MAX_OUTPUT_TOKENS_KEY: &str = "CLAUDE_CODE_MAX_OUTPUT_TOKENS";
 
 // 官方 effortLevel 值域为 low/medium/high/xhigh/max（code.claude.com/docs/en/settings-reference），
 // off/minimal 不在枚举内，不放行避免写出无效值。
@@ -42,7 +47,9 @@ impl AppAdapter for ClaudeAdapter {
             supported_protocols: &[ProviderProtocol::AnthropicMessages],
             additive: false,
             required_model_fields: &[],
-            unwritten_model_fields: super::NO_MODEL_METADATA,
+            // 窗口与最大输出已写 env；图像输入与 per-model 推理能力在
+            // Claude Code 配置里没有对应键。
+            unwritten_model_fields: &[ModelField::SupportsImages, ModelField::Reasoning],
             supported_reasoning_levels: SUPPORTED_LEVELS,
         }
     }
@@ -128,6 +135,31 @@ impl AppAdapter for ClaudeAdapter {
             API_KEY_ENV_KEY.to_string(),
             JsonValue::String(api_key.to_string()),
         );
+        // 窗口与输出上限取自默认模型元数据；缺失时清空，避免上一个 provider
+        // 的值残留在唯一的活动配置上。
+        let default_model = provider
+            .models
+            .iter()
+            .find(|model| model.id == plan.default_model_id);
+        for (key, value) in [
+            (
+                MAX_CONTEXT_TOKENS_KEY,
+                default_model.and_then(|model| model.context_window),
+            ),
+            (
+                MAX_OUTPUT_TOKENS_KEY,
+                default_model.and_then(|model| model.max_output_tokens),
+            ),
+        ] {
+            match value {
+                Some(value) => {
+                    env_table.insert(key.to_string(), JsonValue::String(value.to_string()));
+                }
+                None => {
+                    env_table.remove(key);
+                }
+            }
+        }
         root.insert(
             "model".to_string(),
             JsonValue::String(plan.default_model_id.clone()),
@@ -172,6 +204,8 @@ impl AppAdapter for ClaudeAdapter {
         if let Some(env_table) = root.get_mut("env").and_then(JsonValue::as_object_mut) {
             env_table.remove(BASE_URL_KEY);
             env_table.remove(API_KEY_ENV_KEY);
+            env_table.remove(MAX_CONTEXT_TOKENS_KEY);
+            env_table.remove(MAX_OUTPUT_TOKENS_KEY);
             if env_table.is_empty() {
                 root.remove("env");
             }

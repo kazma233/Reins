@@ -8,8 +8,9 @@ use anyhow::{Result, bail};
 use toml::Value as TomlValue;
 
 use super::{
-    AppAdapter, AppCapability, ToolEnv, classify_reins_entry, codex_config_path, display_path,
-    ensure_protocol_supported, external_entry, read_toml, registration_key, serialize_toml,
+    AppAdapter, AppCapability, ModelField, ToolEnv, classify_reins_entry, codex_config_path,
+    display_path, ensure_protocol_supported, external_entry, read_toml, registration_key,
+    serialize_toml,
 };
 use crate::providers::types::{
     ApplyProviderInput, ProviderAppId, ProviderAppState, ProviderProtocol, ReasoningLevel,
@@ -19,6 +20,19 @@ use crate::providers::types::{
 pub(crate) struct CodexAdapter;
 
 const WIRE_API: &str = "responses";
+
+// 聚合模型多不在 codex 内置目录里，缺该键时 codex 会走兜底元数据
+// （context_window = 272000）并告警 Unknown model；有元数据就写默认模型的窗口。
+fn default_model_context_window(
+    provider: &ResolvedProvider,
+    default_model_id: &str,
+) -> Option<i64> {
+    provider
+        .models
+        .iter()
+        .find(|model| model.id == default_model_id)
+        .and_then(|model| model.context_window)
+}
 
 // 反读时从 wire_api 字段反推协议；其他取值（手工改成 chat 等）无法确认，留空展示。
 fn protocol_from_wire_api(wire_api: Option<&str>) -> Option<ProviderProtocol> {
@@ -49,7 +63,13 @@ impl AppAdapter for CodexAdapter {
             supported_protocols: &[ProviderProtocol::OpenaiResponses],
             additive: false,
             required_model_fields: &[],
-            unwritten_model_fields: super::NO_MODEL_METADATA,
+            // 窗口已写 model_context_window；最大输出与图像输入在 codex 配置里
+            // 没有模型级字段，推理能力也只有全局默认档、没有 per-model 开关。
+            unwritten_model_fields: &[
+                ModelField::MaxOutputTokens,
+                ModelField::SupportsImages,
+                ModelField::Reasoning,
+            ],
             supported_reasoning_levels: SUPPORTED_LEVELS,
         }
     }
@@ -203,6 +223,21 @@ impl AppAdapter for CodexAdapter {
             "model".to_string(),
             TomlValue::String(plan.default_model_id.clone()),
         );
+        match default_model_context_window(provider, &plan.default_model_id) {
+            Some(context_window) => {
+                root_table.insert(
+                    "model_context_window".to_string(),
+                    TomlValue::Integer(context_window),
+                );
+            }
+            None => {
+                // 元数据被清空后不再写；只有本次是替换 Reins 自己的配置时才
+                // 清掉旧值，避免动用户自设的窗口。
+                if replacing_reins {
+                    root_table.remove("model_context_window");
+                }
+            }
+        }
         match plan.default_reasoning_level {
             Some(level) => {
                 root_table.insert(
@@ -272,6 +307,20 @@ impl AppAdapter for CodexAdapter {
                     .and_then(TomlValue::as_str)
                     .map(|model| provider.models.iter().any(|m| m.id == model))
                     .unwrap_or(false);
+                // 窗口值只有仍等于该模型元数据时才清，避免误删用户自设值。
+                let metadata_window = root_table
+                    .get("model")
+                    .and_then(TomlValue::as_str)
+                    .and_then(|model| provider.models.iter().find(|m| m.id == model))
+                    .and_then(|model| model.context_window);
+                if metadata_window.is_some()
+                    && root_table
+                        .get("model_context_window")
+                        .and_then(TomlValue::as_integer)
+                        == metadata_window
+                {
+                    root_table.remove("model_context_window");
+                }
                 if model_matches {
                     root_table.remove("model");
                 }

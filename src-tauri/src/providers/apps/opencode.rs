@@ -67,9 +67,66 @@ fn protocol_from_package(package: Option<&str>) -> Option<ProviderProtocol> {
     }
 }
 
-// v2 文档未确认思考等级的写入方式，apply 也不消费该值；
-// 能力表置空让应用弹窗不出现思考等级选项，避免可选不可写。
-const SUPPORTED_LEVELS: &[ReasoningLevel] = &[];
+// 思考等级：openai 系包写 settings.reasoningEffort，官方 OpenAI 变体档为
+// none/minimal/low/medium/high/xhigh（opencode.ai/v2/docs/models）；anthropic
+// 包的 reasoningEffort 实测不上线，改用显式 thinking 预算，故同档位都能表达。
+// max 不在此列：openai 侧无该档，anthropic 侧落到 xhigh 的预算。
+const SUPPORTED_LEVELS: &[ReasoningLevel] = &[
+    ReasoningLevel::Off,
+    ReasoningLevel::Minimal,
+    ReasoningLevel::Low,
+    ReasoningLevel::Medium,
+    ReasoningLevel::High,
+    ReasoningLevel::Xhigh,
+];
+
+// anthropic 包的 thinking 必须带预算（实测：{type:"enabled"} 无 budgetTokens
+// 时请求不发出，{type:"disabled"} 上线）。官方与 OpenCode 都没有档位到预算的
+// 通用映射，这里是 Reins 的固定阶梯；换档位等于换思考预算。
+fn thinking_budget_tokens(level: ReasoningLevel) -> i64 {
+    match level {
+        ReasoningLevel::Off => 0,
+        ReasoningLevel::Minimal => 1_024,
+        ReasoningLevel::Low => 2_048,
+        ReasoningLevel::Medium => 8_192,
+        ReasoningLevel::High => 16_384,
+        ReasoningLevel::Xhigh | ReasoningLevel::Max => 32_768,
+    }
+}
+
+// 模型条目里的思考设置；openai 系与 anthropic 包写法不同（见上）。
+fn reasoning_settings(protocol: ProviderProtocol, level: ReasoningLevel) -> JsonValue {
+    let mut settings = JsonMap::new();
+    match protocol {
+        ProviderProtocol::AnthropicMessages => {
+            let budget = thinking_budget_tokens(level);
+            settings.insert(
+                "thinking".to_string(),
+                if budget == 0 {
+                    json_thinking("disabled", None)
+                } else {
+                    json_thinking("enabled", Some(budget))
+                },
+            );
+        }
+        _ => {
+            settings.insert(
+                "reasoningEffort".to_string(),
+                JsonValue::String(level.as_str().to_string()),
+            );
+        }
+    }
+    JsonValue::Object(settings)
+}
+
+fn json_thinking(kind: &str, budget_tokens: Option<i64>) -> JsonValue {
+    let mut thinking = JsonMap::new();
+    thinking.insert("type".to_string(), JsonValue::String(kind.to_string()));
+    if let Some(budget_tokens) = budget_tokens {
+        thinking.insert("budgetTokens".to_string(), JsonValue::from(budget_tokens));
+    }
+    JsonValue::Object(thinking)
+}
 
 fn entry_from_provider_value(
     key: &str,
@@ -115,7 +172,9 @@ impl AppAdapter for OpencodeAdapter {
             ],
             additive: true,
             required_model_fields: &[],
-            unwritten_model_fields: super::NO_MODEL_METADATA,
+            // 四类元数据都有落点：limit.context/output、capabilities.input、
+            // settings 的思考等级。
+            unwritten_model_fields: &[],
             supported_reasoning_levels: SUPPORTED_LEVELS,
         }
     }
@@ -189,14 +248,46 @@ impl AppAdapter for OpencodeAdapter {
 
         let mut models = JsonMap::new();
         for model_id in &plan.model_ids {
-            let label = provider
-                .models
-                .iter()
-                .find(|m| &m.id == model_id)
+            let model = provider.models.iter().find(|m| &m.id == model_id);
+            let label = model
                 .map(|m| m.label.clone())
                 .unwrap_or_else(|| model_id.clone());
             let mut model_entry = JsonMap::new();
             model_entry.insert("name".to_string(), JsonValue::String(label));
+            if let Some(model) = model {
+                // limit 的 context/output 在官方 schema 里成对必填；只有一项时
+                // 整段不写，避免半截限制参与压缩与输出截断判断。
+                if let (Some(context_window), Some(max_output_tokens)) =
+                    (model.context_window, model.max_output_tokens)
+                {
+                    let mut limit = JsonMap::new();
+                    limit.insert("context".to_string(), JsonValue::from(context_window));
+                    limit.insert("output".to_string(), JsonValue::from(max_output_tokens));
+                    model_entry.insert("limit".to_string(), JsonValue::Object(limit));
+                }
+                // capabilities 同时表达工具支持与输入模态；官方对目录外模型
+                // 默认假设 text+image 输入，有元数据就显式声明。
+                if let Some(supports_images) = model.supports_images {
+                    let mut input = vec![JsonValue::String("text".to_string())];
+                    if supports_images {
+                        input.push(JsonValue::String("image".to_string()));
+                    }
+                    let mut capabilities = JsonMap::new();
+                    capabilities.insert("tools".to_string(), JsonValue::Bool(true));
+                    capabilities.insert("input".to_string(), JsonValue::Array(input));
+                    capabilities.insert(
+                        "output".to_string(),
+                        JsonValue::Array(vec![JsonValue::String("text".to_string())]),
+                    );
+                    model_entry.insert("capabilities".to_string(), JsonValue::Object(capabilities));
+                }
+                if let Some(level) = plan.default_reasoning_level {
+                    model_entry.insert(
+                        "settings".to_string(),
+                        reasoning_settings(provider.protocol, level),
+                    );
+                }
+            }
             models.insert(model_id.clone(), JsonValue::Object(model_entry));
         }
 

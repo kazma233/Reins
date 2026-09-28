@@ -73,9 +73,9 @@ providers:
 
 | 工具 | 写入内容 |
 | --- | --- |
-| Codex | `model_provider="reins-x"`、`model=<id>`、`model_reasoning_effort`、`[model_providers.reins-x]`（name、base_url、wire_api="responses"、静态 Bearer Token 字段） |
-| Claude Code | `env.ANTHROPIC_BASE_URL`（聚合平台必写；不写官方端点）、`env.ANTHROPIC_API_KEY`、`model`、`effortLevel`；保留文件中其他键 |
-| OpenCode v2 | `providers["reins-x"]`（v2 规范 schema：`name`、`package` 按协议选 `@opencode/ai/providers/openai-compatible` / `@opencode/ai/providers/anthropic`、`settings.baseURL`、`settings.apiKey` 明文、`models`）+ 顶层 `model="reins-x/<id>"`；写入只用 v2 规范格式，v1 遗留格式（`provider`/`npm`/`options`）只读展示、可删除，不写入 |
+| Codex | `model_provider="reins-x"`、`model=<id>`、`model_reasoning_effort`、`model_context_window`（模型有 `context_window` 元数据时写默认模型的窗口，否则清空 Reins 自己写入的值）、`[model_providers.reins-x]`（name、base_url、wire_api="responses"、静态 Bearer Token 字段） |
+| Claude Code | `env.ANTHROPIC_BASE_URL`（聚合平台必写；不写官方端点）、`env.ANTHROPIC_API_KEY`、`env.CLAUDE_CODE_MAX_CONTEXT_TOKENS` / `env.CLAUDE_CODE_MAX_OUTPUT_TOKENS`（取自默认模型元数据，缺失时清空）、`model`、`effortLevel`；保留文件中其他键 |
+| OpenCode v2 | `providers["reins-x"]`（v2 规范 schema：`name`、`package` 按协议选 `@opencode/ai/providers/openai-compatible` / `@opencode/ai/providers/responses` / `@opencode/ai/providers/anthropic`、`settings.baseURL`、`settings.apiKey` 明文、`models`）+ 顶层 `model="reins-x/<id>"`；`models.<id>` 逐模型写 `limit{context,output}`（两项都齐全才写）、`capabilities{tools,input,output}`（`supports_images` 决定输入模态）、`settings` 思考设置（openai 系写 `reasoningEffort`，anthropic 包写 `thinking` 预算，见下条）；写入只用 v2 规范格式，v1 遗留格式（`provider`/`npm`/`options`）只读展示、可删除，不写入 |
 | Pi | `models.json` 的 `providers["reins-x"]`（baseUrl、api、apiKey、models 含 reasoning 等元数据）+ `settings.json` 的 `defaultProvider`、`defaultModel`、`defaultThinkingLevel` |
 | Grok Build | `[model_providers.reins-x]`（base_url、api_backend；`anthropic_messages` 的 base_url 写入时规范化为 `/v1` 结尾，见验证文档 2026-09-27 实测）+ 每个 `[model."reins-x--<id>"]`（model、name、model_provider、api_key；`anthropic_messages` 用 `extra_headers` 携带 `x-api-key` 与 `anthropic-version`；模型有元数据时另写 `context_window` 与 `supports_reasoning_effort = true`，见下条）+ `[models] default`、`default_reasoning_effort`（`Max` 档映射写出 `"xhigh"`：Grok UI 无 max 档且请求层两者等价）。模型的最大输出与图像输入在该工具无落点，应用弹窗明示 |
 
@@ -83,7 +83,9 @@ providers:
 
 - Grok Build：`context_window` 有元数据就写；grok 1.0.41 实测缺该字段时按 200000 兜底，而自动压缩按该窗口计算（默认阈值 85%），对非 200K 模型时机失准。`supports_reasoning_effort = true` 在模型 `reasoning` 为真时写；实测未声明该字段的模型被判为不支持思考等级，`[models].default_reasoning_effort` 被静默忽略（`model does not support effort; ignoring it`），即该声明是默认档生效的前提。
 - Pi：逐模型写 `reasoning`、`contextWindow`、`maxTokens`、`input`（text/image），四类元数据全覆盖。
-- Codex / Claude Code / OpenCode：只写模型 ID 与默认值，四类 per-model 元数据（上下文窗口、最大输出、图像输入、推理能力）均不落盘。
+- Codex：写默认模型的 `model_context_window`（官方 schema 顶层键，聚合模型不在内置目录时会走兜底元数据 272000 并告警 `Unknown model`）；最大输出与图像输入没有模型级字段，推理能力只有全局默认档、无 per-model 开关。
+- Claude Code：写 `env.CLAUDE_CODE_MAX_CONTEXT_TOKENS` 与 `env.CLAUDE_CODE_MAX_OUTPUT_TOKENS`（官方为网关模型提供的纠正入口：不写时输出按 32000、窗口按内置同名 ID 推断）；图像输入与 per-model 推理能力无对应键。
+- OpenCode v2：`limit.context`/`limit.output`、`capabilities.input`（由 `supports_images` 决定是否含 image）、思考设置三者都写。思考等级按协议分写：openai 系包写 `settings.reasoningEffort`（档位 none/minimal/low/medium/high/xhigh，实测请求体带 `reasoning_effort`），anthropic 包写 `settings.thinking`（`{type:"enabled",budgetTokens}`，`off` 写 `{type:"disabled"}`；实测该包不消费 `reasoningEffort`，且 `enabled` 必须带预算）。档位到预算取固定阶梯（minimal 1024 / low 2048 / medium 8192 / high 16384 / xhigh 与 max 32768），官方与 OpenCode 都没有该映射，属 Reins 的产品取值；**待定**：这组数值待确认（见验证文档后续动作第 6 条），可改为其它阶梯、统一预算，或不写 thinking。`max` 不放行（openai 侧无此档）。
 - Grok 的最大输出（`max_completion_tokens` 属采样上限，非元数据落点）与图像输入（配置无对应字段，1.0.41 实测 `supports_images`/`input`/`supports_vision` 均被静默忽略）不写。
 - 应用弹窗展示 `ProviderAppState.unwritten_model_fields`，明示本次应用不写入哪些模型元数据，避免用户误以为填写值已生效。
 

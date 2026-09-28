@@ -102,15 +102,6 @@ impl ModelField {
     }
 }
 
-// 只写模型 ID 与默认值、不落任何 per-model 元数据的工具共用清单
-// （Codex 单模型顶层键、Claude 只写 model、OpenCode 只写模型名称）。
-pub(crate) const NO_MODEL_METADATA: &[ModelField] = &[
-    ModelField::ContextWindow,
-    ModelField::MaxOutputTokens,
-    ModelField::SupportsImages,
-    ModelField::Reasoning,
-];
-
 pub(crate) trait AppAdapter: Sync {
     fn id(&self) -> ProviderAppId;
     fn capability(&self) -> AppCapability;

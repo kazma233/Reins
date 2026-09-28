@@ -327,9 +327,78 @@ fn codex_remove_cleans_pointer_and_rejects_modified_entry() -> Result<()> {
     Ok(())
 }
 
+// 聚合模型的窗口写入顶层 model_context_window：codex 对不在内置目录的模型
+// 会走兜底元数据（272000）并告警 Unknown model。
+#[test]
+fn codex_apply_writes_and_clears_model_context_window() -> Result<()> {
+    let isolated = Isolated::new()?;
+    isolated.seed_model("p1", "model-a")?;
+    isolated.set_key("p1")?;
+
+    isolated.apply("p1", ProviderAppId::Codex, &["model-a"], "model-a", None)?;
+    assert!(read_text(&codex_path()).contains("model_context_window = 200000"));
+
+    // 元数据清空后替换应用不再写该键，避免残留旧窗口。
+    isolated.store.upsert(ProviderUpsertInput {
+        provider_id: "p1".to_string(),
+        label: "Label p1".to_string(),
+        protocol: ProviderProtocol::OpenaiResponses,
+        base_url: "https://p1.test/v1".to_string(),
+        models: vec![ProviderModelInput {
+            id: "model-a".to_string(),
+            label: "Model A".to_string(),
+            context_window: None,
+            max_output_tokens: None,
+            supports_images: None,
+            reasoning: None,
+            reasoning_levels: None,
+        }],
+    })?;
+    isolated.apply("p1", ProviderAppId::Codex, &["model-a"], "model-a", None)?;
+    assert!(!read_text(&codex_path()).contains("model_context_window"));
+    Ok(())
+}
+
+// 移除时窗口随配置清掉（值仍等于该模型元数据 → 归属可确认）。
+#[test]
+fn codex_remove_clears_model_context_window() -> Result<()> {
+    let isolated = Isolated::new()?;
+    isolated.seed_model("p1", "model-a")?;
+    isolated.set_key("p1")?;
+    isolated.apply("p1", ProviderAppId::Codex, &["model-a"], "model-a", None)?;
+
+    isolated.remove_from("p1", ProviderAppId::Codex)?;
+    assert!(!read_text(&codex_path()).contains("model_context_window"));
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // Claude Code
 // ---------------------------------------------------------------------------
+
+// 聚合模型对 Claude Code 是「不认识的模型 ID」（输出默认 32000、窗口按内置
+// 同名 ID 推断），窗口与输出上限经官方 env 入口显式纠正。
+#[test]
+fn claude_apply_writes_context_and_output_env_and_remove_clears_them() -> Result<()> {
+    let isolated = Isolated::new()?;
+    isolated.seed_provider_with_models(
+        "agg",
+        ProviderProtocol::AnthropicMessages,
+        "https://agg.test/api",
+        vec!["model-a".to_string()],
+    )?;
+    isolated.set_key("agg")?;
+
+    isolated.apply("agg", ProviderAppId::Claude, &["model-a"], "model-a", None)?;
+    let applied: JsonValue = serde_json::from_str(&read_text(&claude_path()))?;
+    assert_eq!(applied["env"]["CLAUDE_CODE_MAX_CONTEXT_TOKENS"], "200000");
+    assert_eq!(applied["env"]["CLAUDE_CODE_MAX_OUTPUT_TOKENS"], "64000");
+
+    isolated.remove_from("agg", ProviderAppId::Claude)?;
+    let removed: JsonValue = serde_json::from_str(&read_text(&claude_path()))?;
+    assert!(removed.get("env").is_none());
+    Ok(())
+}
 
 #[test]
 fn claude_apply_preserves_keys_and_remove_matches_base_url() -> Result<()> {
@@ -538,6 +607,130 @@ fn opencode_apply_responses_uses_openai_responses_package() -> Result<()> {
     let entry = &opencode.entries[0];
     assert_eq!(entry.status, ProviderAppEntryStatus::Applied);
     assert_eq!(entry.protocol, Some(ProviderProtocol::OpenaiResponses));
+    Ok(())
+}
+
+// 模型级元数据写 v2 的 limit 与 capabilities：官方对目录外模型按 200000
+// 上下文 / 32000 输出 / text+image 输入兜底，有元数据就显式声明。
+#[test]
+fn opencode_apply_writes_model_limit_and_capabilities() -> Result<()> {
+    let isolated = Isolated::new()?;
+    let path = opencode_path();
+    fs::create_dir_all(path.parent().unwrap())?;
+    fs::write(&path, json!({}).to_string())?;
+    isolated.seed_provider_with_models(
+        "p1",
+        ProviderProtocol::OpenaiChatCompletions,
+        "https://p1.test/v1",
+        vec!["model-a".to_string()],
+    )?;
+    isolated.set_key("p1")?;
+
+    isolated.apply("p1", ProviderAppId::Opencode, &["model-a"], "model-a", None)?;
+    let applied: JsonValue = serde_json::from_str(&read_text(&path))?;
+    let model = &applied["providers"]["reins-p1"]["models"]["model-a"];
+    assert_eq!(model["limit"]["context"], 200_000);
+    assert_eq!(model["limit"]["output"], 64_000);
+    assert_eq!(model["capabilities"]["tools"], true);
+    assert_eq!(model["capabilities"]["input"], json!(["text", "image"]));
+    assert_eq!(model["capabilities"]["output"], json!(["text"]));
+    Ok(())
+}
+
+// limit 的 context/output 在官方 schema 里成对，缺一项时整段不写；
+// supports_images 为假时输入模态收窄为 text。
+#[test]
+fn opencode_apply_omits_incomplete_limit_and_narrows_modalities() -> Result<()> {
+    let isolated = Isolated::new()?;
+    let path = opencode_path();
+    fs::create_dir_all(path.parent().unwrap())?;
+    fs::write(&path, json!({}).to_string())?;
+    isolated.store.upsert(ProviderUpsertInput {
+        provider_id: "p1".to_string(),
+        label: "Label p1".to_string(),
+        protocol: ProviderProtocol::OpenaiChatCompletions,
+        base_url: "https://p1.test/v1".to_string(),
+        models: vec![ProviderModelInput {
+            id: "model-a".to_string(),
+            label: "Model A".to_string(),
+            context_window: Some(128_000),
+            max_output_tokens: None,
+            supports_images: Some(false),
+            reasoning: None,
+            reasoning_levels: None,
+        }],
+    })?;
+    isolated.set_key("p1")?;
+
+    isolated.apply("p1", ProviderAppId::Opencode, &["model-a"], "model-a", None)?;
+    let applied: JsonValue = serde_json::from_str(&read_text(&path))?;
+    let model = &applied["providers"]["reins-p1"]["models"]["model-a"];
+    assert!(model.get("limit").is_none());
+    assert_eq!(model["capabilities"]["input"], json!(["text"]));
+    Ok(())
+}
+
+// 思考等级：openai 系包写 settings.reasoningEffort（实测请求体带
+// reasoning_effort），anthropic 包写 settings.thinking 预算（实测
+// reasoningEffort 不上线，thinking 必须带 budgetTokens）。
+#[test]
+fn opencode_apply_writes_reasoning_effort_or_thinking_budget() -> Result<()> {
+    let isolated = Isolated::new()?;
+    let path = opencode_path();
+    fs::create_dir_all(path.parent().unwrap())?;
+    fs::write(&path, json!({}).to_string())?;
+
+    isolated.seed_provider_with_models(
+        "oai",
+        ProviderProtocol::OpenaiChatCompletions,
+        "https://oai.test/v1",
+        vec!["model-a".to_string()],
+    )?;
+    isolated.set_key("oai")?;
+    isolated.apply(
+        "oai",
+        ProviderAppId::Opencode,
+        &["model-a"],
+        "model-a",
+        Some(ReasoningLevel::High),
+    )?;
+    let applied: JsonValue = serde_json::from_str(&read_text(&path))?;
+    assert_eq!(
+        applied["providers"]["reins-oai"]["models"]["model-a"]["settings"]["reasoningEffort"],
+        "high"
+    );
+
+    isolated.seed_provider_with_models(
+        "ant",
+        ProviderProtocol::AnthropicMessages,
+        "https://ant.test/anthropic",
+        vec!["model-a".to_string()],
+    )?;
+    isolated.set_key("ant")?;
+    isolated.apply(
+        "ant",
+        ProviderAppId::Opencode,
+        &["model-a"],
+        "model-a",
+        Some(ReasoningLevel::High),
+    )?;
+    let applied: JsonValue = serde_json::from_str(&read_text(&path))?;
+    let thinking = &applied["providers"]["reins-ant"]["models"]["model-a"]["settings"]["thinking"];
+    assert_eq!(thinking["type"], "enabled");
+    assert_eq!(thinking["budgetTokens"], 16_384);
+
+    // 「无」档写入 disabled，不臆造预算。
+    isolated.apply(
+        "ant",
+        ProviderAppId::Opencode,
+        &["model-a"],
+        "model-a",
+        Some(ReasoningLevel::Off),
+    )?;
+    let applied: JsonValue = serde_json::from_str(&read_text(&path))?;
+    let thinking = &applied["providers"]["reins-ant"]["models"]["model-a"]["settings"]["thinking"];
+    assert_eq!(thinking["type"], "disabled");
+    assert!(thinking.get("budgetTokens").is_none());
     Ok(())
 }
 
@@ -782,8 +975,8 @@ fn grok_apply_omits_absent_model_metadata() -> Result<()> {
     Ok(())
 }
 
-// 应用弹窗的「不写入的模型元数据」清单来自能力表：Codex/Claude/OpenCode
-// 不落任何 per-model 元数据，Pi 全覆盖，Grok 缺最大输出与图像输入。
+// 应用弹窗的「不写入的模型元数据」清单来自能力表：四个工具都写窗口，Claude
+// 另写最大输出，OpenCode 与 Pi 四类全覆盖，Grok 缺最大输出与图像输入。
 #[test]
 fn app_states_declare_unwritten_model_fields() -> Result<()> {
     let isolated = Isolated::new()?;
@@ -802,17 +995,13 @@ fn app_states_declare_unwritten_model_fields() -> Result<()> {
         fields(ProviderAppId::Grokbuild),
         vec!["最大输出", "图像输入"]
     );
+    assert_eq!(
+        fields(ProviderAppId::Codex),
+        vec!["最大输出", "图像输入", "推理能力"]
+    );
+    assert_eq!(fields(ProviderAppId::Claude), vec!["图像输入", "推理能力"]);
+    assert!(fields(ProviderAppId::Opencode).is_empty());
     assert!(fields(ProviderAppId::Pi).is_empty());
-    for app in [
-        ProviderAppId::Codex,
-        ProviderAppId::Claude,
-        ProviderAppId::Opencode,
-    ] {
-        assert_eq!(
-            fields(app),
-            vec!["上下文窗口", "最大输出", "图像输入", "推理能力"]
-        );
-    }
     Ok(())
 }
 
