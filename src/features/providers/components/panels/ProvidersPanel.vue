@@ -128,15 +128,15 @@ function confirmDeleteProvider() {
 
         <dl class="providers-card__meta">
           <div>
-            <dt>ID</dt>
+            <dt>ID：</dt>
             <dd>{{ provider.id }}</dd>
           </div>
           <div>
-            <dt>协议</dt>
+            <dt>协议：</dt>
             <dd>{{ protocolLabel(provider.protocol) }}</dd>
           </div>
-          <div>
-            <dt>Base URL</dt>
+          <div class="providers-card__meta--wide">
+            <dt>Base URL：</dt>
             <dd class="providers-card__url">{{ provider.baseUrl }}</dd>
           </div>
         </dl>

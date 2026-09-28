@@ -138,6 +138,14 @@
   gap: 4px;
 }
 
+/* Base URL 带域名的长值：标签与值分两行，避免挤在右侧被硬断 */
+.providers-card__meta > .providers-card__meta--wide {
+  flex-direction: column;
+  /* 覆盖基线对齐：列布局下 baseline 会让长值撑到内容宽，超出卡片 */
+  align-items: stretch;
+  gap: 2px;
+}
+
 .providers-card__meta dt {
   color: var(--color-ink);
   font-weight: 600;
@@ -147,7 +155,8 @@
 .providers-card__meta dd {
   margin: 0;
   color: var(--color-body);
-  word-break: break-all;
+  /* 只在必要时断行：break-all 会把 URL 断在字符中间 */
+  overflow-wrap: break-word;
 }
 
 /* Base URL 是外部服务地址，用等宽和普通描述文本区分开 */
