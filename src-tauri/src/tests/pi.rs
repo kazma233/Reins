@@ -358,7 +358,7 @@ fn pi_parses_subagent_tool_result_into_structured_run_block() -> Result<()> {
             "exitCode": 0,
             "stderr": "",
             "usage": { "input": 636783, "output": 31284, "cacheRead": 2916352, "turns": 18 },
-            "model": "fanggeek/gpt-5.6-terra",
+            "model": "acme/chat-b",
             "stopReason": "stop",
             "messages": [
                 { "role": "user", "content": "Task: 梳理代码库", "timestamp": 1789091776409_i64 },

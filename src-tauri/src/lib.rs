@@ -58,6 +58,7 @@ pub fn run() {
             workspace::commands::refresh_git_skill_source,
             workspace::commands::update_skill_source,
             providers::commands::get_providers_state,
+            providers::commands::get_provider_app_state,
             providers::commands::upsert_provider,
             providers::commands::delete_provider,
             providers::commands::get_provider_key,

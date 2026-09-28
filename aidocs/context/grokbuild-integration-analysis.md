@@ -84,7 +84,7 @@ Skill 和 MCP 路径有官方契约，可以开始实现。会话目录与恢复
 
 只运行了可执行文件定位、版本、帮助命令，禁用了自动更新环境开关：
 
-- `command -v grok`：`/Users/fanggeek/.grok/bin/grok`。
+- `command -v grok`：`$HOME/.grok/bin/grok`。
 - `grok version`：`grok 1.0.30 (04b7ffed98c6)`。
 - `grok sessions list --help`：只列出 limit/debug 等选项，没有列出 JSON 输出选项。不能据此设计依赖 `sessions list --json` 的方案。
 - `grok sessions delete --help`：确认接受单个会话 ID。

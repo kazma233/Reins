@@ -11,8 +11,8 @@ use toml::Value as TomlValue;
 
 use crate::providers::apps::{MASKED_KEY, ToolEnv, registration_key};
 use crate::providers::commands::{
-    apply_provider_inner, delete_provider_inner, preview_apply_inner, providers_state_inner,
-    remove_external_entry_inner, remove_provider_from_app_inner,
+    app_state_inner, apply_provider_inner, delete_provider_inner, preview_apply_inner,
+    providers_state_inner, remove_external_entry_inner, remove_provider_from_app_inner,
 };
 use crate::providers::config::ProviderConfigStore;
 use crate::providers::keychain::{FakeKeyBackend, ProviderKeyStore};
@@ -327,6 +327,31 @@ fn codex_remove_cleans_pointer_and_rejects_modified_entry() -> Result<()> {
     Ok(())
 }
 
+// 同一平台重新应用（例如只换默认模型）不选思考等级时保留已写入的值；
+// 换到另一个平台才清掉，避免旧平台的等级留在唯一的活动配置上。
+#[test]
+fn codex_reapply_keeps_reasoning_effort_but_switch_clears_it() -> Result<()> {
+    let isolated = Isolated::new()?;
+    isolated.seed_model("p1", "model-a")?;
+    isolated.seed_model("p2", "model-a")?;
+    isolated.set_key("p1")?;
+    isolated.set_key("p2")?;
+
+    isolated.apply(
+        "p1",
+        ProviderAppId::Codex,
+        &["model-a"],
+        "model-a",
+        Some(ReasoningLevel::High),
+    )?;
+    isolated.apply("p1", ProviderAppId::Codex, &["model-a"], "model-a", None)?;
+    assert!(read_text(&codex_path()).contains("model_reasoning_effort = \"high\""));
+
+    isolated.apply("p2", ProviderAppId::Codex, &["model-a"], "model-a", None)?;
+    assert!(!read_text(&codex_path()).contains("model_reasoning_effort"));
+    Ok(())
+}
+
 // 聚合模型的窗口写入顶层 model_context_window：codex 对不在内置目录的模型
 // 会走兜底元数据（272000）并告警 Unknown model。
 #[test]
@@ -570,6 +595,85 @@ fn opencode_apply_anthropic_uses_native_anthropic_package() -> Result<()> {
     let entry = &opencode.entries[0];
     assert_eq!(entry.status, ProviderAppEntryStatus::Applied);
     assert_eq!(entry.protocol, Some(ProviderProtocol::AnthropicMessages));
+    Ok(())
+}
+
+// OpenCode 重新应用时未选思考等级：沿用该模型上一次写入的 settings，
+// 只换默认模型不会把思考设置写没。
+#[test]
+fn opencode_reapply_keeps_reasoning_settings() -> Result<()> {
+    let isolated = Isolated::new()?;
+    let path = opencode_path();
+    fs::create_dir_all(path.parent().unwrap())?;
+    fs::write(&path, json!({}).to_string())?;
+    isolated.seed_provider_with_models(
+        "p1",
+        ProviderProtocol::OpenaiChatCompletions,
+        "https://p1.test/v1",
+        vec!["model-a".to_string()],
+    )?;
+    isolated.set_key("p1")?;
+
+    isolated.apply(
+        "p1",
+        ProviderAppId::Opencode,
+        &["model-a"],
+        "model-a",
+        Some(ReasoningLevel::High),
+    )?;
+    // 反读按同一字段还原等级。
+    let state = isolated.state()?;
+    let opencode = state
+        .apps
+        .iter()
+        .find(|app| app.app == ProviderAppId::Opencode)
+        .expect("opencode state");
+    assert_eq!(opencode.default_reasoning_level, Some(ReasoningLevel::High));
+
+    isolated.apply("p1", ProviderAppId::Opencode, &["model-a"], "model-a", None)?;
+    let reapplied: JsonValue = serde_json::from_str(&read_text(&path))?;
+    assert_eq!(
+        reapplied["providers"]["reins-p1"]["models"]["model-a"]["settings"]["reasoningEffort"],
+        "high"
+    );
+    Ok(())
+}
+
+// anthropic 包的思考设置是 thinking 预算，反读要按同一阶梯还原成等级。
+#[test]
+fn opencode_reads_back_thinking_budget_level() -> Result<()> {
+    let isolated = Isolated::new()?;
+    let path = opencode_path();
+    fs::create_dir_all(path.parent().unwrap())?;
+    fs::write(&path, json!({}).to_string())?;
+    isolated.seed_provider_with_models(
+        "p1",
+        ProviderProtocol::AnthropicMessages,
+        "https://p1.test/anthropic",
+        vec!["model-a".to_string()],
+    )?;
+    isolated.set_key("p1")?;
+
+    isolated.apply(
+        "p1",
+        ProviderAppId::Opencode,
+        &["model-a"],
+        "model-a",
+        Some(ReasoningLevel::High),
+    )?;
+    let applied: JsonValue = serde_json::from_str(&read_text(&path))?;
+    assert_eq!(
+        applied["providers"]["reins-p1"]["models"]["model-a"]["settings"]["thinking"]["budgetTokens"],
+        16384
+    );
+
+    let state = isolated.state()?;
+    let opencode = state
+        .apps
+        .iter()
+        .find(|app| app.app == ProviderAppId::Opencode)
+        .expect("opencode state");
+    assert_eq!(opencode.default_reasoning_level, Some(ReasoningLevel::High));
     Ok(())
 }
 
@@ -840,6 +944,15 @@ fn pi_off_level_writes_off() -> Result<()> {
     )?;
     let settings: JsonValue = serde_json::from_str(&read_text(&pi_settings_path()))?;
     assert_eq!(settings["defaultThinkingLevel"], "off");
+
+    // 反读要把 "off" 还原成 off，否则应用弹窗预选不出来。
+    let state = isolated.state()?;
+    let pi = state
+        .apps
+        .iter()
+        .find(|app| app.app == ProviderAppId::Pi)
+        .expect("pi state");
+    assert_eq!(pi.default_reasoning_level, Some(ReasoningLevel::Off));
     Ok(())
 }
 
@@ -886,6 +999,61 @@ fn grok_anthropic_apply_uses_extra_headers_and_remove_clears_default() -> Result
             .and_then(|models| models.get("default"))
             .is_none()
     );
+    Ok(())
+}
+
+// 多提供商并存：重新应用已应用的平台只重写自己的模型条目与默认值，另一个
+// 平台的条目保留；界面上的「切换默认模型」正是走这条路径。
+#[test]
+fn grok_reapply_switches_default_and_keeps_other_provider() -> Result<()> {
+    let isolated = Isolated::new()?;
+    isolated.seed_provider_with_models(
+        "p1",
+        ProviderProtocol::OpenaiResponses,
+        "https://p1.test/v1",
+        vec!["m1".to_string(), "m2".to_string()],
+    )?;
+    isolated.seed_provider_with_models(
+        "p2",
+        ProviderProtocol::OpenaiResponses,
+        "https://p2.test/v1",
+        vec!["m3".to_string()],
+    )?;
+    isolated.set_key("p1")?;
+    isolated.set_key("p2")?;
+
+    isolated.apply("p1", ProviderAppId::Grokbuild, &["m1"], "m1", None)?;
+    isolated.apply("p2", ProviderAppId::Grokbuild, &["m3"], "m3", None)?;
+    assert!(read_text(&grok_path()).contains("default = \"reins-p2--m3\""));
+
+    // 重新应用 p1 并把默认模型换成自己的另一个模型。
+    isolated.apply("p1", ProviderAppId::Grokbuild, &["m1", "m2"], "m2", None)?;
+    let content = read_text(&grok_path());
+    assert!(content.contains("default = \"reins-p1--m2\""));
+    assert!(content.contains("[model_providers.reins-p2]"));
+    assert!(content.contains("reins-p2--m3"));
+
+    let state = isolated.state()?;
+    let grok = state
+        .apps
+        .iter()
+        .find(|app| app.app == ProviderAppId::Grokbuild)
+        .expect("grok state");
+    assert_eq!(grok.entries.len(), 2, "{:?}", grok.entries);
+    let p1 = grok
+        .entries
+        .iter()
+        .find(|entry| entry.key == "reins-p1")
+        .expect("p1 条目");
+    assert_eq!(p1.status, ProviderAppEntryStatus::Applied);
+    assert_eq!(p1.model_ids, vec!["m1", "m2"]);
+    assert_eq!(p1.default_model_id.as_deref(), Some("m2"));
+    let p2 = grok
+        .entries
+        .iter()
+        .find(|entry| entry.key == "reins-p2")
+        .expect("p2 条目");
+    assert_eq!(p2.default_model_id, None);
     Ok(())
 }
 
@@ -1002,6 +1170,76 @@ fn app_states_declare_unwritten_model_fields() -> Result<()> {
     assert_eq!(fields(ProviderAppId::Claude), vec!["图像输入", "推理能力"]);
     assert!(fields(ProviderAppId::Opencode).is_empty());
     assert!(fields(ProviderAppId::Pi).is_empty());
+    Ok(())
+}
+
+// 反读当前默认思考等级：应用弹窗据此预选，重新应用才不会悄悄改掉它。
+#[test]
+fn applied_reasoning_level_is_read_back_for_each_app() -> Result<()> {
+    for (app, protocol) in [
+        (ProviderAppId::Codex, ProviderProtocol::OpenaiResponses),
+        (ProviderAppId::Claude, ProviderProtocol::AnthropicMessages),
+        (
+            ProviderAppId::Opencode,
+            ProviderProtocol::OpenaiChatCompletions,
+        ),
+        (ProviderAppId::Pi, ProviderProtocol::OpenaiChatCompletions),
+        (
+            ProviderAppId::Grokbuild,
+            ProviderProtocol::OpenaiChatCompletions,
+        ),
+    ] {
+        let isolated = Isolated::new()?;
+        isolated.seed_provider("p1", protocol, "https://p1.test/v1")?;
+        isolated.set_key("p1")?;
+        isolated.apply(
+            "p1",
+            app,
+            &["model-a"],
+            "model-a",
+            Some(ReasoningLevel::High),
+        )?;
+
+        let state = isolated.state()?;
+        let app_state = state
+            .apps
+            .iter()
+            .find(|item| item.app == app)
+            .expect("app state");
+        assert_eq!(
+            app_state.default_reasoning_level,
+            Some(ReasoningLevel::High),
+            "{app:?}"
+        );
+    }
+    Ok(())
+}
+
+// 定点反显（写操作后按工具刷新）与全量状态里的同一张卡片一致。
+#[test]
+fn app_state_inner_matches_full_state_entry() -> Result<()> {
+    let isolated = Isolated::new()?;
+    isolated.seed_model("p1", "model-a")?;
+    isolated.set_key("p1")?;
+    isolated.apply(
+        "p1",
+        ProviderAppId::Grokbuild,
+        &["model-a"],
+        "model-a",
+        None,
+    )?;
+
+    let full = isolated.state()?;
+    let expected = full
+        .apps
+        .iter()
+        .find(|app| app.app == ProviderAppId::Grokbuild)
+        .expect("grok state");
+    let single = app_state_inner(&isolated.store, &isolated.env, ProviderAppId::Grokbuild)?;
+    assert_eq!(
+        serde_json::to_value(&single)?,
+        serde_json::to_value(expected)?
+    );
     Ok(())
 }
 
@@ -1325,6 +1563,108 @@ fn grok_remove_external_removes_models_and_clears_default() -> Result<()> {
             .and_then(|models| models.get("default"))
             .is_none()
     );
+    Ok(())
+}
+
+// 用户手工写的官方简化式 [model.<键>]（自带 base_url、不挂 model_provider）
+// 不落在 model_providers 里，按模型键反显为外部配置；reins- 模型条目仍归入
+// 对应 Provider 条目，不重复列出。
+#[test]
+fn grok_standalone_model_entry_shows_as_external() -> Result<()> {
+    let isolated = Isolated::new()?;
+    isolated.seed_provider(
+        "acme",
+        ProviderProtocol::OpenaiResponses,
+        "https://gw.test/v1",
+    )?;
+    let path = grok_path();
+    fs::create_dir_all(path.parent().unwrap())?;
+    fs::write(
+        &path,
+        "[model.\"my-model\"]\n\
+         api_backend = \"responses\"\napi_key = \"sk-test-secret\"\n\
+         base_url = \"https://gw.test/v1\"\nmodel = \"chat-a\"\nname = \"My Model\"\n\
+         [model.\"reins-acme--chat-b\"]\n\
+         model = \"chat-b\"\nmodel_provider = \"reins-acme\"\n\
+         [model_providers.reins-acme]\nbase_url = \"https://gw.test/v1\"\napi_backend = \"responses\"\n\
+         [models]\ndefault = \"reins-acme--chat-b\"\n",
+    )?;
+
+    let state = isolated.state()?;
+    let grok = state
+        .apps
+        .iter()
+        .find(|app| app.app == ProviderAppId::Grokbuild)
+        .expect("grok state");
+    assert_eq!(grok.entries.len(), 2, "{:?}", grok.entries);
+    let applied = grok
+        .entries
+        .iter()
+        .find(|entry| entry.key == "reins-acme")
+        .expect("reins 条目");
+    assert_eq!(applied.status, ProviderAppEntryStatus::Applied);
+    assert_eq!(applied.model_ids, vec!["chat-b"]);
+    assert_eq!(applied.default_model_id.as_deref(), Some("chat-b"));
+    let standalone = grok
+        .entries
+        .iter()
+        .find(|entry| entry.key == "my-model")
+        .expect("独立模型条目");
+    assert_eq!(standalone.status, ProviderAppEntryStatus::External);
+    assert_eq!(standalone.base_url.as_deref(), Some("https://gw.test/v1"));
+    assert_eq!(standalone.protocol, Some(ProviderProtocol::OpenaiResponses));
+    Ok(())
+}
+
+// 挂在外部 Provider 条目下的模型条目由该 Provider 条目代表，不单独列为外部条目。
+#[test]
+fn grok_model_mounted_on_provider_is_not_listed_separately() -> Result<()> {
+    let isolated = Isolated::new()?;
+    let path = grok_path();
+    fs::create_dir_all(path.parent().unwrap())?;
+    fs::write(
+        &path,
+        "[model_providers.my-gateway]\nbase_url = \"https://gw.test/v1\"\n\
+         [model.my-gateway--m1]\nmodel_provider = \"my-gateway\"\nmodel = \"m1\"\n",
+    )?;
+
+    let state = isolated.state()?;
+    let grok = state
+        .apps
+        .iter()
+        .find(|app| app.app == ProviderAppId::Grokbuild)
+        .expect("grok state");
+    assert_eq!(grok.entries.len(), 1, "{:?}", grok.entries);
+    assert_eq!(grok.entries[0].key, "my-gateway");
+    assert_eq!(grok.entries[0].status, ProviderAppEntryStatus::External);
+    Ok(())
+}
+
+// 独立模型条目按模型键结构化删除；被 [models].default 引用时一并清默认值，
+// 其余模型键与 Provider 条目不受影响。
+#[test]
+fn grok_remove_external_removes_standalone_model_and_clears_default() -> Result<()> {
+    let isolated = Isolated::new()?;
+    let path = grok_path();
+    fs::create_dir_all(path.parent().unwrap())?;
+    fs::write(
+        &path,
+        "models.default = \"standalone-a\"\nmodels.default_reasoning_effort = \"high\"\n\
+         [model.\"standalone-a\"]\nbase_url = \"https://gw.test/v1\"\nmodel = \"chat-a\"\n\
+         [model.\"standalone-b\"]\napi_key = \"sk-test-secret\"\n\
+         [model_providers.my-gateway]\nbase_url = \"https://gw.test/v1\"\n",
+    )?;
+
+    isolated.remove_external(ProviderAppId::Grokbuild, "standalone-a")?;
+
+    let content = read_text(&path);
+    assert!(!content.contains("standalone-a"));
+    assert!(content.contains("standalone-b"));
+    assert!(content.contains("my-gateway"));
+    let root: TomlValue = toml::from_str(&content)?;
+    let models = root.get("models").and_then(TomlValue::as_table);
+    assert!(models.is_some_and(|models| !models.contains_key("default")));
+    assert!(models.is_some_and(|models| !models.contains_key("default_reasoning_effort")));
     Ok(())
 }
 

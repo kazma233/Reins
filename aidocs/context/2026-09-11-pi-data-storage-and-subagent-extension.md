@@ -1,7 +1,7 @@
 # Pi 数据存储与 subagent 扩展机制
 
 - 日期：2026-09-11
-- 范围：Pi 官方文档（pi.dev/docs/latest：sessions / session-format / extensions）+ 本机实测（Pi session 01a08b37、01a08e29，扩展源码 `/Users/fanggeek/projects/.pi/extensions/subagent/`）
+- 范围：Pi 官方文档（pi.dev/docs/latest：sessions / session-format / extensions）+ 本机实测（Pi session 01a08b37、01a08e29，扩展源码 `$HOME/projects/.pi/extensions/subagent/`）
 - 结论用途：指导 Reins 对 Pi subagent 数据的解析与展示；修正 2026-09-05 review 时"子代理过程未持久化"的误判
 
 ## 会话存储格式（官方契约 + 本机验证）
@@ -22,7 +22,7 @@
 
 ## 本机 subagent 扩展的数据流（读源码确认）
 
-扩展位置：`/Users/fanggeek/projects/.pi/extensions/subagent/`（项目级），agent 定义在 `/Users/fanggeek/projects/.pi/agents/*.md`（planner/reviewer/scout/worker）。
+扩展位置：`$HOME/projects/.pi/extensions/subagent/`（项目级），agent 定义在 `$HOME/projects/.pi/agents/*.md`（planner/reviewer/scout/worker）。
 
 1. 扩展注册名为 `subagent` 的工具，参数 `{agent, agentScope, task, cwd, mode(single/parallel/chain), ...}`。
 2. 子代理通过 `pi --mode json -p --no-session` 运行：`--no-session` **故意不写子会话文件**，扩展解析 JSON 事件流，把子代理全部消息累积进内存。

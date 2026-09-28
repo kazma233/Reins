@@ -1,5 +1,6 @@
 import { extractErrorMessage } from "@shared/lib/errors";
 import type { AppToastNotice } from "@shared/ui/AppToast.vue";
+import type { ProviderAppId } from "../generated";
 import { useProvidersStore } from "../stores/providers";
 import { useProvidersNotice } from "./useProvidersNotice";
 import { useProvidersState } from "./useProvidersState";
@@ -16,12 +17,15 @@ export type RunProvidersActionOptions<T> = {
   success?: string | ((result: T) => ProvidersActionSuccessNotice);
   error?: string;
   after?: (result: T) => void;
+  // 写操作只影响单个工具时指定它：只重读该工具卡片，其余卡片与整页
+  // 保持挂载，不做全量重读。
+  refreshApp?: ProviderAppId;
 };
 
 export function useProvidersAction() {
   const store = useProvidersStore();
   const { showNotice, clearNotice } = useProvidersNotice();
-  const { reloadProvidersState } = useProvidersState();
+  const { reloadProvidersState, reloadProviderAppState } = useProvidersState();
 
   async function runProvidersAction<T>(options: RunProvidersActionOptions<T>): Promise<void> {
     store.setRunningAction(true);
@@ -31,7 +35,11 @@ export function useProvidersAction() {
       const result = await options.action();
 
       if (options.success !== undefined) {
-        await reloadProvidersState({ preserveNotice: true });
+        if (options.refreshApp) {
+          await reloadProviderAppState(options.refreshApp);
+        } else {
+          await reloadProvidersState({ preserveNotice: true });
+        }
       }
 
       options.after?.(result);

@@ -487,6 +487,7 @@ pub(crate) fn empty_state(app: ProviderAppId, config_paths: Vec<PathBuf>) -> Pro
             .iter()
             .map(|field| field.label().to_string())
             .collect(),
+        default_reasoning_level: None,
         entries: Vec::new(),
         load_error: None,
     }

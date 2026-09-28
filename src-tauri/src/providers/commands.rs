@@ -13,7 +13,7 @@ use super::catalog::{fetch_provider_models_inner, match_modelsdev};
 use super::config::ProviderConfigStore;
 use super::keychain::ProviderKeyStore;
 use super::types::{
-    ApplyProviderInput, FetchedModelsResult, ModelsDevMatchResult, ProviderAppId,
+    ApplyProviderInput, FetchedModelsResult, ModelsDevMatchResult, ProviderAppId, ProviderAppState,
     ProviderApplyPreview, ProviderFilePreview, ProviderModelView, ProviderMutationResult,
     ProviderProtocol, ProviderUpsertInput, ProviderView, ProvidersState, ResolvedProvider,
 };
@@ -35,6 +35,15 @@ pub(crate) async fn get_providers_state(
         providers_state_inner(&store, &keys, &env)
     })
     .await
+}
+
+#[tauri::command]
+pub(crate) async fn get_provider_app_state(
+    store: tauri::State<'_, ProviderConfigStore>,
+    app: ProviderAppId,
+) -> std::result::Result<ProviderAppState, String> {
+    let store = store.inner().clone();
+    run_blocking(move || app_state_inner(&store, &ToolEnv::from_env(), app)).await
 }
 
 #[tauri::command]
@@ -221,20 +230,10 @@ pub(crate) fn providers_state_inner(
     env: &ToolEnv,
 ) -> Result<ProvidersState> {
     let providers = store.load()?;
-    let mut apps = Vec::new();
-    for app in super::types::PROVIDER_APPS {
-        let adapter = adapter_for(app);
-        let state = match adapter.inspect(&env, &providers) {
-            Ok(state) => state,
-            Err(error) => {
-                // 单个工具配置损坏不拖垮整页；错误挂到对应卡片上。
-                let mut state = super::apps::empty_state(app, app_config_paths(&env, app));
-                state.load_error = Some(error.to_string());
-                state
-            }
-        };
-        apps.push(state);
-    }
+    let apps = super::types::PROVIDER_APPS
+        .iter()
+        .map(|app| inspect_app(&providers, env, *app))
+        .collect();
 
     Ok(ProvidersState {
         config_path: display_path(store.config_path()),
@@ -244,6 +243,33 @@ pub(crate) fn providers_state_inner(
             .collect::<Result<Vec<_>>>()?,
         apps,
     })
+}
+
+// 单个工具的定点反显：写操作只影响一个工具的配置文件，据此只重读该工具，
+// 不重读其余工具，也不查密钥（providers.yaml 与密钥都不是写操作的对象）。
+pub(crate) fn app_state_inner(
+    store: &ProviderConfigStore,
+    env: &ToolEnv,
+    app: ProviderAppId,
+) -> Result<ProviderAppState> {
+    Ok(inspect_app(&store.load()?, env, app))
+}
+
+fn inspect_app(
+    providers: &BTreeMap<String, ResolvedProvider>,
+    env: &ToolEnv,
+    app: ProviderAppId,
+) -> ProviderAppState {
+    let adapter = adapter_for(app);
+    match adapter.inspect(env, providers) {
+        Ok(state) => state,
+        Err(error) => {
+            // 单个工具配置损坏不拖垮整页；错误挂到对应卡片上。
+            let mut state = super::apps::empty_state(app, app_config_paths(env, app));
+            state.load_error = Some(error.to_string());
+            state
+        }
+    }
 }
 
 fn app_config_paths(env: &ToolEnv, app: ProviderAppId) -> Vec<PathBuf> {

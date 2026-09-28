@@ -1,5 +1,6 @@
 import { storeToRefs } from "pinia";
-import { getProvidersState } from "../api";
+import { getProviderAppState, getProvidersState } from "../api";
+import type { ProviderAppId } from "../generated";
 import { useProvidersStore } from "../stores/providers";
 import { extractErrorMessage } from "@shared/lib/errors";
 import { useProvidersNotice } from "./useProvidersNotice";
@@ -28,10 +29,21 @@ export function useProvidersState() {
     }
   }
 
+  // 写操作后的定点刷新：只重读发生变化的工具，不进入整页 loading，
+  // 其余卡片保持挂载。
+  async function reloadProviderAppState(app: ProviderAppId) {
+    try {
+      store.patchAppState(await getProviderAppState(app));
+    } catch (error) {
+      showNotice(extractErrorMessage(error, "读取模型配置失败。"), "error");
+    }
+  }
+
   return {
     state,
     loadingState,
     runningAction,
     reloadProvidersState,
+    reloadProviderAppState,
   };
 }

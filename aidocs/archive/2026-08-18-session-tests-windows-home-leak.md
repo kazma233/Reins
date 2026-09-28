@@ -21,9 +21,9 @@
 
 ## 根因
 
-`src/tests/support.rs` 的 `TestEnvGuard` 只设置 `HOME` 环境变量。Windows 上 `dirs::home_dir()` / `dirs::config_dir()` 优先走 `USERPROFILE` / known folders / `APPDATA`，`HOME` 被忽略，测试读到真实用户目录（`C:\Users\ly`）。seed 侧与查找侧对 home 的解析路径不一致，进一步造成"写到 temp、找到真实目录"或反之的错位。
+`src/tests/support.rs` 的 `TestEnvGuard` 只设置 `HOME` 环境变量。Windows 上 `dirs::home_dir()` / `dirs::config_dir()` 优先走 `USERPROFILE` / known folders / `APPDATA`，`HOME` 被忽略，测试读到真实用户目录（`C:\Users\<user>`）。seed 侧与查找侧对 home 的解析路径不一致，进一步造成"写到 temp、找到真实目录"或反之的错位。
 
-证据：`effective_cwd_prefers_explicit_value_and_falls_back_to_home` 断言失败输出 `left: "C:\Users\ly"`（真实 home），期望 temp 目录。
+证据：`effective_cwd_prefers_explicit_value_and_falls_back_to_home` 断言失败输出 `left: "C:\Users\<user>"`（真实 home），期望 temp 目录。
 
 ## 影响范围
 

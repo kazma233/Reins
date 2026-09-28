@@ -159,6 +159,41 @@ fn remove_provider_tree(
     Ok(removed)
 }
 
+// 独立模型条目（[model.<键>] 自带 base_url，不挂 model_provider）的删除路径：
+// 删掉该模型键，并在它被 [models].default 引用时一并清默认值，避免留下指向
+// 缺失模型的引用。返回是否删除了内容。
+fn remove_standalone_model(root_table: &mut toml::map::Map<String, TomlValue>, key: &str) -> bool {
+    let mut removed = false;
+    if let Some(model_table) = root_table
+        .get_mut("model")
+        .and_then(TomlValue::as_table_mut)
+    {
+        removed = model_table.remove(key).is_some();
+        if model_table.is_empty() {
+            root_table.remove("model");
+        }
+    }
+    if !removed {
+        return false;
+    }
+
+    let is_default = root_table
+        .get("models")
+        .and_then(|value| value.get("default"))
+        .and_then(TomlValue::as_str)
+        .is_some_and(|default| default == key);
+    if is_default {
+        if let Some(models_table) = root_table
+            .get_mut("models")
+            .and_then(TomlValue::as_table_mut)
+        {
+            models_table.remove("default");
+            models_table.remove("default_reasoning_effort");
+        }
+    }
+    true
+}
+
 impl AppAdapter for GrokbuildAdapter {
     fn id(&self) -> ProviderAppId {
         ProviderAppId::Grokbuild
@@ -193,13 +228,21 @@ impl AppAdapter for GrokbuildAdapter {
         }
         state.config_exists = true;
         let root = read_toml(&path)?;
+        // 应用弹窗据此预选；反读值只用于回显，不参与漂移判定。写入时 max
+        // 已折算成 xhigh，反读同样是 xhigh，两边写入值等价。
+        state.default_reasoning_level = root
+            .get("models")
+            .and_then(|value| value.get("default_reasoning_effort"))
+            .and_then(TomlValue::as_str)
+            .and_then(ReasoningLevel::parse);
         let default_model = root
             .get("models")
             .and_then(|value| value.get("default"))
             .and_then(TomlValue::as_str)
             .map(str::to_string);
 
-        if let Some(table) = root.get("model_providers").and_then(TomlValue::as_table) {
+        let provider_table = root.get("model_providers").and_then(TomlValue::as_table);
+        if let Some(table) = provider_table {
             let grok_providers = grok_providers_view(providers);
             for (key, value) in table {
                 let base_url = value.get("base_url").and_then(TomlValue::as_str);
@@ -244,6 +287,38 @@ impl AppAdapter for GrokbuildAdapter {
                     )
                 };
                 state.entries.push(entry);
+            }
+        }
+
+        // 独立 [model.<键>] 条目（官方简化式：模型自带 base_url/api_backend，
+        // 不挂 model_provider）不落在 model_providers 里，按模型键展示为外部
+        // 配置；挂到某个 Provider 条目下的模型已由该条目代表，不重复列出。
+        if let Some(models) = root.get("model").and_then(TomlValue::as_table) {
+            for (model_key, value) in models {
+                let mounted = value
+                    .get("model_provider")
+                    .and_then(TomlValue::as_str)
+                    .is_some_and(|provider_key| {
+                        provider_table.is_some_and(|table| table.contains_key(provider_key))
+                    });
+                // 键与某个 Provider 条目同名时无法在界面区分，留给该条目。
+                let shadowed =
+                    provider_table.is_some_and(|table| table.contains_key(model_key.as_str()));
+                if model_key.starts_with(super::REINS_PREFIX) || mounted || shadowed {
+                    continue;
+                }
+                let label = value.get("name").and_then(TomlValue::as_str);
+                state.entries.push(external_entry(
+                    model_key.clone(),
+                    value
+                        .get("base_url")
+                        .and_then(TomlValue::as_str)
+                        .map(str::to_string),
+                    label
+                        .map(|label| vec![format!("外部模型：{label}")])
+                        .unwrap_or_default(),
+                    protocol_from_backend(value.get("api_backend").and_then(TomlValue::as_str)),
+                ));
             }
         }
 
@@ -418,7 +493,18 @@ impl AppAdapter for GrokbuildAdapter {
             bail!("Grok 配置顶层必须是表：{}", path.display());
         }
         let root_table = root.as_table_mut().expect("checked above");
-        if !remove_provider_tree(root_table, entry_key, false)? {
+        // 外部条目键来自两处：model_providers 的 Provider 条目，或 model 表的
+        // 独立模型键；前者按 Provider 树删除，后者只删模型键。
+        let is_provider_entry = root_table
+            .get("model_providers")
+            .and_then(TomlValue::as_table)
+            .is_some_and(|table| table.contains_key(entry_key));
+        let removed = if is_provider_entry {
+            remove_provider_tree(root_table, entry_key, false)?
+        } else {
+            remove_standalone_model(root_table, entry_key)
+        };
+        if !removed {
             bail!("Grok 中没有外部条目 {entry_key}。");
         }
         Ok(vec![(path, serialize_toml(&root)?)])

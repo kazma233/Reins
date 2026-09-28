@@ -48,6 +48,14 @@ fn thinking_level(level: ReasoningLevel) -> &'static str {
     }
 }
 
+// 反读 settings.json 里的 defaultThinkingLevel：首档同样是 "off"。
+fn thinking_level_from_str(value: &str) -> Option<ReasoningLevel> {
+    if value.trim().eq_ignore_ascii_case("off") {
+        return Some(ReasoningLevel::Off);
+    }
+    ReasoningLevel::parse(value)
+}
+
 impl AppAdapter for PiAdapter {
     fn id(&self) -> ProviderAppId {
         ProviderAppId::Pi
@@ -84,6 +92,11 @@ impl AppAdapter for PiAdapter {
         }
         state.config_exists = true;
         let settings = read_json_object(&settings_path)?;
+        // 应用弹窗据此预选；反读值只用于回显，不参与漂移判定。
+        state.default_reasoning_level = settings
+            .get("defaultThinkingLevel")
+            .and_then(JsonValue::as_str)
+            .and_then(thinking_level_from_str);
         let default_provider = settings
             .get("defaultProvider")
             .and_then(JsonValue::as_str)

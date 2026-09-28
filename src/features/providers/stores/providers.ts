@@ -1,5 +1,5 @@
 import { defineStore } from "pinia";
-import type { ProvidersState } from "../generated";
+import type { ProviderAppState, ProvidersState } from "../generated";
 import type { ProvidersTab } from "../model";
 
 type ProvidersStoreState = {
@@ -22,6 +22,17 @@ export const useProvidersStore = defineStore("providers", {
     },
     setState(state: ProvidersState | null) {
       this.state = state;
+    },
+    // 定点替换单个工具的卡片：写操作只改一个工具的配置文件，其余卡片
+    // 不需要重新挂载。
+    patchAppState(appState: ProviderAppState) {
+      if (!this.state) {
+        return;
+      }
+      this.state = {
+        ...this.state,
+        apps: this.state.apps.map((item) => (item.app === appState.app ? appState : item)),
+      };
     },
     setLoadingState(loading: boolean) {
       this.loadingState = loading;

@@ -263,6 +263,11 @@ pub(crate) struct ProviderAppState {
     // 该工具不会写入的模型元数据字段标签（能力表同源下发）；应用弹窗
     // 据此明示用户填写的这些值不影响该工具。
     pub(crate) unwritten_model_fields: Vec<String>,
+    // 工具配置里当前写入的默认思考等级（反读）；应用弹窗据此预选，重新
+    // 应用时不会因为弹窗默认值而悄悄改掉它。识别不出或未设置时为空。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional = nullable)]
+    pub(crate) default_reasoning_level: Option<ReasoningLevel>,
     pub(crate) entries: Vec<ProviderAppEntry>,
     // 单个工具配置损坏时不拖垮整个页面，把错误放进对应卡片。
     #[serde(skip_serializing_if = "Option::is_none")]

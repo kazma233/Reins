@@ -912,8 +912,8 @@ fn git_cache_refresh_respects_24_hour_interval() {
 #[test]
 fn display_path_strips_windows_extended_length_prefix() {
     assert_eq!(
-        display_path(Path::new(r"\\?\C:\Users\ly\skills\agent-model-config")),
-        r"C:\Users\ly\skills\agent-model-config",
+        display_path(Path::new(r"\\?\C:\Users\<user>\skills\agent-model-config")),
+        r"C:\Users\<user>\skills\agent-model-config",
     );
     assert_eq!(
         display_path(Path::new(r"\\?\UNC\server\share\skills")),

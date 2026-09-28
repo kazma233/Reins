@@ -1041,7 +1041,7 @@ fn codex_title_strips_markdown_link_syntax() -> Result<()> {
                     "role": "user",
                     "content": [{
                         "type": "input_text",
-                        "text": "[$mongo-slow-log-report](/Users/fang/Desktop/skills/mongo-slow-log-report/SKILL.md) 帮我看下这份skill有没有问题"
+                        "text": "[$mongo-slow-log-report]($HOME/Desktop/skills/mongo-slow-log-report/SKILL.md) 帮我看下这份skill有没有问题"
                     }]
                 }
             }),

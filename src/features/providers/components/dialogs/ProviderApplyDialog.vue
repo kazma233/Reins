@@ -16,10 +16,10 @@ import type {
 import {
   APP_LABELS,
   applyBlockers,
-  entriesForProvider,
   findAppState,
+  initialApplySelection,
   reasoningEffortWrite,
-  reasoningLevelOptions,
+  reasoningLevelChoices,
   REASONING_LEVEL_LABELS,
   unwrittenModelFieldsText,
 } from "../../model";
@@ -64,18 +64,13 @@ watch(
       return;
     }
     preview.value = null;
-    defaultReasoningLevel.value = null;
-    const appState = findAppState(props.state, props.app);
-    const previouslyApplied = appState
-      ? entriesForProvider(appState, props.provider.id).flatMap(
-          (entry) => entry.modelIds
-        )
-      : [];
-    const known = previouslyApplied.filter((modelId) =>
-      props.provider.models.some((model) => model.id === modelId)
+    const selection = initialApplySelection(
+      findAppState(props.state, props.app),
+      props.provider
     );
-    selectedModelIds.value = known.length > 0 ? known : props.provider.models.map((model) => model.id);
-    defaultModelId.value = selectedModelIds.value[0] ?? "";
+    selectedModelIds.value = selection.modelIds;
+    defaultModelId.value = selection.defaultModelId;
+    defaultReasoningLevel.value = selection.defaultReasoningLevel;
   },
   { immediate: true }
 );
@@ -95,16 +90,12 @@ const levelOptions = computed<ReasoningLevel[]>(() => {
   if (!appState.value) {
     return [];
   }
-  const selected = props.provider.models.filter((model) =>
-    selectedModelIds.value.includes(model.id)
+  return reasoningLevelChoices(
+    appState.value,
+    props.provider,
+    selectedModelIds.value,
+    defaultReasoningLevel.value
   );
-  // 取所有选中模型可用等级的交集；任一模型未约束则不收紧。
-  let options: ReasoningLevel[] | null = null;
-  for (const model of selected) {
-    const modelOptions = reasoningLevelOptions(appState.value, model);
-    options = options === null ? modelOptions : options.filter((level) => modelOptions.includes(level));
-  }
-  return options ?? [];
 });
 
 // 档位展示跟随当前提供商：写入值与档位同名时只显示档位，存在映射

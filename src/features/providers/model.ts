@@ -185,6 +185,69 @@ export function applyCandidates(
   return providers.filter((provider) => !managedIds.has(provider.id));
 }
 
+// 条目行上重新打开应用弹窗的目标：已应用与配置有偏差的条目都指向某个
+// 平台，可以据此改默认模型（多提供商并存时也用它切换默认）；外部配置
+// 不属于任何平台、平台已删除的偏差条目查不到元数据，都返回 null。
+export function reapplyProvider(
+  entry: ProviderAppEntry,
+  providers: ProviderView[]
+): ProviderView | null {
+  if (!entry.providerId) {
+    return null;
+  }
+  return providers.find((provider) => provider.id === entry.providerId) ?? null;
+}
+
+// 应用弹窗的思考等级可选项：选中模型在该工具下可用等级的交集，外加当前
+// 已写入的等级——当前值即使不在交集里（模型目录后来收窄）也要能显示与
+// 保留，否则重新应用会把它写没。
+export function reasoningLevelChoices(
+  appState: ProviderAppState,
+  provider: ProviderView,
+  selectedModelIds: string[],
+  current: ReasoningLevel | null
+): ReasoningLevel[] {
+  const selected = provider.models.filter((model) =>
+    selectedModelIds.includes(model.id)
+  );
+  // 取所有选中模型可用等级的交集；任一模型未约束等级则不收紧。
+  let options: ReasoningLevel[] | null = null;
+  for (const model of selected) {
+    const modelOptions = reasoningLevelOptions(appState, model);
+    options = options === null ? modelOptions : options.filter((level) => modelOptions.includes(level));
+  }
+  const levels = options ?? [];
+  return current && !levels.includes(current) ? [...levels, current] : levels;
+}
+
+// 应用弹窗的初始选择：优先沿用该平台已写入的模型，并以当前默认模型为
+// 默认项，避免重新应用时顺带换掉默认模型；没有可复用的写入记录（首次
+// 应用）时预选平台目录里的全部模型。默认思考等级取该工具配置里的当前
+// 值（工具支持的前提下），重新应用不会因为弹窗默认值把它改掉。
+export function initialApplySelection(
+  appState: ProviderAppState | undefined,
+  provider: ProviderView
+): {
+  modelIds: string[];
+  defaultModelId: string;
+  defaultReasoningLevel: ReasoningLevel | null;
+} {
+  const applied = appState ? entriesForProvider(appState, provider.id) : [];
+  const known = applied
+    .flatMap((entry) => entry.modelIds)
+    .filter((modelId) => provider.models.some((model) => model.id === modelId));
+  const modelIds = known.length > 0 ? known : provider.models.map((model) => model.id);
+  const currentDefault = applied.find((entry) => entry.defaultModelId)?.defaultModelId;
+  const defaultModelId =
+    currentDefault && modelIds.includes(currentDefault) ? currentDefault : (modelIds[0] ?? "");
+  const currentLevel = appState?.defaultReasoningLevel ?? null;
+  const defaultReasoningLevel =
+    currentLevel && appState && appState.supportedReasoningLevels.includes(currentLevel)
+      ? currentLevel
+      : null;
+  return { modelIds, defaultModelId, defaultReasoningLevel };
+}
+
 // ---------------------------------------------------------------------------
 // 编辑弹窗表单状态
 // ---------------------------------------------------------------------------

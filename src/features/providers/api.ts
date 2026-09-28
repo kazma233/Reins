@@ -4,6 +4,7 @@ import type {
   FetchedModelsResult,
   ModelsDevMatchResult,
   ProviderAppId,
+  ProviderAppState,
   ProviderApplyPreview,
   ProviderMutationResult,
   ProviderProtocol,
@@ -16,6 +17,12 @@ import type {
 
 export function getProvidersState(): Promise<ProvidersState> {
   return invoke("get_providers_state");
+}
+
+// 单个工具的反显状态：写操作只改一个工具的配置文件，用它做定点刷新，
+// 不必重读全部工具。
+export function getProviderAppState(app: ProviderAppId): Promise<ProviderAppState> {
+  return invoke("get_provider_app_state", { app });
 }
 
 // 返回落库后的归一化提供商 ID（小写、`_`→`-`），写密钥等后续调用以它为准。

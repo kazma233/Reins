@@ -16,6 +16,7 @@ import {
   protocolCompatible,
   protocolLabel,
   reasoningEffortMappingText,
+  reapplyProvider,
 } from "../../model";
 import { useProvidersAction } from "../../composables/useProvidersAction";
 import { useProvidersState } from "../../composables/useProvidersState";
@@ -66,21 +67,19 @@ function openApply(app: ProviderAppId, providerId: string) {
   applyDialog.open = true;
 }
 
-// 漂移条目的重新应用目标：平台仍存在才可重新应用；平台已删除的漂移
-// 条目没有平台元数据，返回 null 不出按钮。
-function reapplyProvider(entry: ProviderAppEntry): ProviderView | null {
-  if (entry.status !== "drifted" || !entry.providerId) {
-    return null;
-  }
-  return (
-    state.value?.providers.find((provider) => provider.id === entry.providerId) ?? null
-  );
+// 条目行「重新应用」的目标：已应用与配置有偏差的条目都能重开应用弹窗
+// （多提供商并存时用它切换默认模型）；平台已删除的偏差条目与外部条目
+// 没有平台元数据，返回 null 不出按钮。
+function reapplyTarget(entry: ProviderAppEntry): ProviderView | null {
+  return reapplyProvider(entry, state.value?.providers ?? []);
 }
 
 function confirmApply(input: ApplyProviderInput) {
   runProvidersAction({
     action: () => applyProviderToApp(input),
     success: (result) => ({ message: result.detail || "已应用。" }),
+    // 应用只改这一个工具的配置，刷新这一张卡片即可。
+    refreshApp: input.app,
     after: () => {
       applyDialog.open = false;
     },
@@ -106,6 +105,8 @@ function confirmRemove() {
         ? removeExternalEntry(target.app, target.entryKey)
         : removeProviderFromApp(target.providerId, target.app),
     success: (result) => ({ message: result.detail || "已删除。" }),
+    // 删除只改这一个工具的配置，刷新这一张卡片即可。
+    refreshApp: target.app,
     after: () => {
       removeTarget.value = null;
     },
@@ -119,7 +120,7 @@ function confirmRemove() {
       <div>
         <h3 class="providers-section-title">Agent</h3>
         <p class="providers-section-hint">
-          反读五个工具的全局配置文件；`reins-` 前缀条目按 providers.yaml 归类为「已应用 / 配置有偏差」，其余按外部配置展示，可按条目删除。
+          反读五个工具的全局配置文件；`reins-` 前缀条目按 providers.yaml 归类为「已应用 / 配置有偏差」，其余按外部配置展示，可按条目删除。已应用的条目可重新打开应用弹窗，用于切换默认模型。
         </p>
       </div>
     </div>
@@ -172,11 +173,11 @@ function confirmRemove() {
               </span>
               <span class="providers-entry-row__spacer" />
               <button
-                v-if="reapplyProvider(entry)"
+                v-if="reapplyTarget(entry)"
                 class="providers-mini-button"
                 :disabled="runningAction"
                 type="button"
-                @click="openApply(appState.app, reapplyProvider(entry)!.id)"
+                @click="openApply(appState.app, reapplyTarget(entry)!.id)"
               >
                 重新应用
               </button>

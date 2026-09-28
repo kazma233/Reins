@@ -128,6 +128,41 @@ fn json_thinking(kind: &str, budget_tokens: Option<i64>) -> JsonValue {
     JsonValue::Object(thinking)
 }
 
+// 反向查表，与 thinking_budget_tokens 同源，避免两条阶梯分叉。
+fn level_from_thinking_budget(budget_tokens: i64) -> Option<ReasoningLevel> {
+    SUPPORTED_LEVELS
+        .iter()
+        .copied()
+        .find(|level| thinking_budget_tokens(*level) == budget_tokens)
+}
+
+// 反读默认模型条目里的思考设置（openai 系 settings.reasoningEffort、
+// anthropic 包 settings.thinking）；默认模型不是 Reins 条目或没有该字段
+// 时留空，不猜等级。
+fn current_reasoning_level(root: &JsonMap<String, JsonValue>) -> Option<ReasoningLevel> {
+    let (provider_key, model_key) = root
+        .get("model")
+        .and_then(JsonValue::as_str)?
+        .split_once('/')?;
+    let settings = root
+        .get("providers")
+        .and_then(|providers| providers.get(provider_key))
+        .and_then(|provider| provider.get("models"))
+        .and_then(|models| models.get(model_key))
+        .and_then(|model| model.get("settings"))?;
+    if let Some(value) = settings.get("reasoningEffort").and_then(JsonValue::as_str) {
+        return ReasoningLevel::parse(value);
+    }
+    let thinking = settings.get("thinking")?;
+    if thinking.get("type").and_then(JsonValue::as_str) == Some("disabled") {
+        return Some(ReasoningLevel::Off);
+    }
+    thinking
+        .get("budgetTokens")
+        .and_then(JsonValue::as_i64)
+        .and_then(level_from_thinking_budget)
+}
+
 fn entry_from_provider_value(
     key: &str,
     base_url: Option<&str>,
@@ -191,6 +226,8 @@ impl AppAdapter for OpencodeAdapter {
         }
         state.config_exists = true;
         let root = read_json_object(&path)?;
+        // 应用弹窗据此预选；反读值只用于回显，不参与漂移判定。
+        state.default_reasoning_level = current_reasoning_level(&root);
         let default_model = root.get("model").and_then(JsonValue::as_str);
 
         // v2 规范节点 providers；v1 遗留节点 provider。两个节点都读。
@@ -245,6 +282,14 @@ impl AppAdapter for OpencodeAdapter {
         let path = opencode_config_path(env)?;
         let mut root = read_json_object(&path)?;
         let registration = registration_key(&provider.id);
+        // 该平台上一次写入的模型条目：本次没选思考等级时沿用其中的
+        // settings，重新应用不会把上次选的等级写没。
+        let previous_models = root
+            .get("providers")
+            .and_then(|providers| providers.get(registration.as_str()))
+            .and_then(|provider| provider.get("models"))
+            .and_then(JsonValue::as_object)
+            .cloned();
 
         let mut models = JsonMap::new();
         for model_id in &plan.model_ids {
@@ -286,6 +331,12 @@ impl AppAdapter for OpencodeAdapter {
                         "settings".to_string(),
                         reasoning_settings(provider.protocol, level),
                     );
+                } else if let Some(settings) = previous_models
+                    .as_ref()
+                    .and_then(|models| models.get(model_id))
+                    .and_then(|model| model.get("settings"))
+                {
+                    model_entry.insert("settings".to_string(), settings.clone());
                 }
             }
             models.insert(model_id.clone(), JsonValue::Object(model_entry));

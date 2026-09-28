@@ -66,6 +66,11 @@ impl AppAdapter for ClaudeAdapter {
         }
         state.config_exists = true;
         let root = read_json_object(&path)?;
+        // 应用弹窗据此预选；反读值只用于回显，不参与漂移判定。
+        state.default_reasoning_level = root
+            .get("effortLevel")
+            .and_then(JsonValue::as_str)
+            .and_then(ReasoningLevel::parse);
         let Some(env_table) = root.get("env").and_then(JsonValue::as_object) else {
             return Ok(state);
         };

@@ -86,6 +86,11 @@ impl AppAdapter for CodexAdapter {
         }
         state.config_exists = true;
         let root = read_toml(&path)?;
+        // 应用弹窗据此预选；反读值只用于回显，不参与漂移判定。
+        state.default_reasoning_level = root
+            .get("model_reasoning_effort")
+            .and_then(TomlValue::as_str)
+            .and_then(ReasoningLevel::parse);
         let model_provider = root
             .get("model_provider")
             .and_then(TomlValue::as_str)
@@ -147,13 +152,15 @@ impl AppAdapter for CodexAdapter {
         let path = codex_config_path(env)?;
         let mut root = read_toml(&path)?;
 
-        // 替换语义：写入前记录旧的活动 Provider 是否为 Reins 条目，
-        // 换平台时把属于旧 Reins 应用的思考等级一并清掉。
-        let replacing_reins = root
+        // 替换语义：写入前记录旧的活动 Provider，换到另一个平台时把属于
+        // 旧 Reins 应用的思考等级一并清掉。
+        let previous_provider = root
             .get("model_provider")
             .and_then(TomlValue::as_str)
-            .map(|value| value.starts_with(super::REINS_PREFIX))
-            .unwrap_or(false);
+            .map(str::to_string);
+        let replacing_reins = previous_provider
+            .as_deref()
+            .is_some_and(|value| value.starts_with(super::REINS_PREFIX));
 
         let registration = registration_key(&provider.id);
 
@@ -246,7 +253,9 @@ impl AppAdapter for CodexAdapter {
                 );
             }
             None => {
-                if replacing_reins {
+                // 同一个平台重新应用时保留旧值：本次没选等级不代表要撤销
+                // 上次的选择；换到另一个平台才清掉。
+                if replacing_reins && previous_provider.as_deref() != Some(registration.as_str()) {
                     root_table.remove("model_reasoning_effort");
                 }
             }
