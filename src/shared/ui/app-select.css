@@ -74,6 +74,8 @@
   color: var(--color-body);
   font-size: var(--font-size-md);
   font-weight: 400;
+  /* 覆盖基础规则的 line-height: 1：stacked 的 label 是普通字段标签，行盒高度须与并排字段的标签一致 */
+  line-height: inherit;
   letter-spacing: 0;
   text-transform: none;
 }
