@@ -88,7 +88,7 @@ function confirm() {
 <template>
   <DialogShell
     :open="open"
-    dialog-class-name="providers-candidates-dialog"
+    dialog-class-name="providers-modelsdev-dialog"
     eyebrow="从 models.dev 补全"
     :title="dialogTitle"
     title-id="modelsdev-complete-dialog-title"

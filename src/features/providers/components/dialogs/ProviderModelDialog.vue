@@ -3,9 +3,7 @@ import { computed, reactive, ref, watch } from "vue";
 import DialogShell from "@shared/ui/DialogShell.vue";
 import AppInput from "@shared/ui/AppInput.vue";
 import AppSelect from "@shared/ui/AppSelect.vue";
-import { extractErrorMessage } from "@shared/lib/errors";
-import { fetchModelsdevCatalog } from "../../api";
-import type { ModelsDevMatchResult, ProviderModelInput } from "../../generated";
+import type { ModelsDevMeta, ProviderModelInput } from "../../generated";
 import {
   applyModelsDevMeta,
   parseReasoningLevels,
@@ -13,6 +11,7 @@ import {
   toggleReasoning,
 } from "../../model";
 import { useProvidersNotice } from "../../composables/useProvidersNotice";
+import ModelsDevCompleteDialog from "./ModelsDevCompleteDialog.vue";
 
 type ProviderModelDialogProps = {
   open: boolean;
@@ -42,6 +41,8 @@ function emptyDraft() {
 }
 
 const draft = reactive(emptyDraft());
+// models.dev 补全查询由弹窗自持，这里只保留开关。
+const modelsDevOpen = ref(false);
 
 // 可空布尔三态在 AppSelect 的 string 契约下用 '' 表示未设置。
 const TRI_STATE_OPTIONS = [
@@ -73,52 +74,16 @@ watch(
   (open) => {
     if (open) {
       Object.assign(draft, emptyDraft());
-      completion.value = null;
-      completionChoice.value = 0;
+      modelsDevOpen.value = false;
     }
   }
 );
 
-const completion = ref<ModelsDevMatchResult | null>(null);
-const completionChoice = ref(0);
-
-const candidates = computed(() =>
-  completion.value?.status === "candidates" ? completion.value.candidates : []
-);
-
-async function completeFromModelsDev() {
-  const providerId = props.providerId.trim();
-  const modelId = draft.id.trim();
-  if (!providerId || !modelId) {
-    showNotice("请先填写提供商 ID 与模型 ID。", "error");
-    return;
-  }
-  try {
-    const result = await fetchModelsdevCatalog(providerId, modelId);
-    if (result.status === "exact" && result.meta) {
-      applyModelsDevMeta(draft, result.meta);
-      showNotice("已从 models.dev 预填空缺字段。", "success");
-      return;
-    }
-    if (result.status === "candidates" && result.candidates.length > 0) {
-      completion.value = result;
-      completionChoice.value = 0;
-      showNotice("models.dev 返回多个候选，请选择一个来源。", "error");
-      return;
-    }
-    showNotice("models.dev 未找到该模型。", "error");
-  } catch (error) {
-    showNotice(extractErrorMessage(error, "models.dev 查询失败。"), "error");
-  }
-}
-
-function applyChosenCandidate() {
-  const candidate = candidates.value[completionChoice.value];
-  if (candidate?.meta) {
-    applyModelsDevMeta(draft, candidate.meta);
-  }
-  completion.value = null;
-  completionChoice.value = 0;
+// 弹窗命中的元数据回填当前草稿的空缺字段；请求失败/未命中的重试也在弹窗内。
+function applyModelsDevCompletion(meta: ModelsDevMeta) {
+  modelsDevOpen.value = false;
+  applyModelsDevMeta(draft, meta);
+  showNotice("已从 models.dev 预填空缺字段。", "success");
 }
 
 function confirm() {
@@ -168,7 +133,7 @@ function confirm() {
         class="secondary-button"
         :disabled="!providerId.trim() || !draft.id.trim()"
         type="button"
-        @click="completeFromModelsDev"
+        @click="modelsDevOpen = true"
       >
         从 models.dev 补全
       </button>
@@ -176,20 +141,6 @@ function confirm() {
     <p class="providers-section-hint">
       元数据（上下文窗口、最大输出、图像、思考等级）会随应用写入目标工具；缺失时对应工具可能展示能力警告。
     </p>
-
-    <div v-if="candidates.length > 0" class="providers-candidates">
-      <label
-        v-for="(candidate, candidateIndex) in candidates"
-        :key="candidate.provider"
-        class="providers-fetched-item"
-      >
-        <input v-model="completionChoice" type="radio" :value="candidateIndex" />
-        <span>{{ candidate.provider }} · {{ candidate.modelId }}</span>
-      </label>
-      <button class="secondary-button" type="button" @click="applyChosenCandidate">
-        使用选中候选补全
-      </button>
-    </div>
 
     <div class="providers-model-row__grid" style="margin-top: 12px">
       <label class="providers-field">
@@ -228,5 +179,13 @@ function confirm() {
         />
       </label>
     </div>
+
+    <ModelsDevCompleteDialog
+      :open="modelsDevOpen"
+      :provider-id="providerId.trim()"
+      :model-id="draft.id.trim()"
+      @close="modelsDevOpen = false"
+      @apply="applyModelsDevCompletion"
+    />
   </DialogShell>
 </template>
