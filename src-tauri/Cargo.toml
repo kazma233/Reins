@@ -27,8 +27,9 @@ rusqlite = { version = "0.40.2", features = ["bundled"] }
 ts-rs = "12"
 uuid = { version = "1.26.0", features = ["v4", "serde"] }
 walkdir = "2.5.0"
-# providers 域：模型目录拉取；rustls 避免 Windows 上引入 openssl
-reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
+# providers 域：模型目录拉取；rustls 避免 Windows 上引入 openssl；
+# system-proxy 跟随系统代理，但不读 macOS 例外列表，局域网地址也会经代理
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls", "system-proxy"] }
 
 [target.'cfg(windows)'.dependencies]
 junction = "2.0.0"
