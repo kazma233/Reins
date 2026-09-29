@@ -56,6 +56,24 @@ fn thinking_level_from_str(value: &str) -> Option<ReasoningLevel> {
     ReasoningLevel::parse(value)
 }
 
+// Pi 的思考等级选择器只对 thinkingLevelMap 里显式声明的模型开放
+// xhigh/max 档（pi getSupportedThinkingLevels：值 null 禁用该档，
+// xhigh/max 缺键即不可选），因此模型的 reasoning_levels 必须逐档下发，
+// 否则 Reins 应用的推理模型在 Pi 里最高只能选到 high。键是 Pi 档位名，
+// 值是该档实际发给 API 的 effort（off 档为 none，Pi 各协议的缺省值）。
+fn thinking_level_map(levels: &[ReasoningLevel]) -> JsonValue {
+    let mut map = JsonMap::new();
+    for level in ReasoningLevel::all() {
+        let value = if levels.contains(level) {
+            JsonValue::String(level.as_str().to_string())
+        } else {
+            JsonValue::Null
+        };
+        map.insert(thinking_level(*level).to_string(), value);
+    }
+    JsonValue::Object(map)
+}
+
 impl AppAdapter for PiAdapter {
     fn id(&self) -> ProviderAppId {
         ProviderAppId::Pi
@@ -166,6 +184,18 @@ impl AppAdapter for PiAdapter {
             model_entry.insert("name".to_string(), JsonValue::String(model.label.clone()));
             if let Some(reasoning) = model.reasoning {
                 model_entry.insert("reasoning".to_string(), JsonValue::Bool(reasoning));
+            }
+            // 未填等级时不写 map：Pi 对无 map 的模型默认开放 off～high，
+            // 与空档位集的语义一致；写全 null 反而连 off 档都会消失。
+            if let Some(levels) = model
+                .reasoning_levels
+                .as_deref()
+                .filter(|levels| !levels.is_empty())
+            {
+                model_entry.insert(
+                    "thinkingLevelMap".to_string(),
+                    thinking_level_map(levels),
+                );
             }
             if let Some(context_window) = model.context_window {
                 model_entry.insert("contextWindow".to_string(), JsonValue::from(context_window));

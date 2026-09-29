@@ -1184,6 +1184,82 @@ fn pi_off_level_writes_off() -> Result<()> {
     Ok(())
 }
 
+// Pi 只对 thinkingLevelMap 显式声明的模型开放 xhigh/max 档，apply 要把
+// reasoning_levels 逐档下发；未填等级的模型不写 map（Pi 默认开放 off～high）。
+#[test]
+fn pi_apply_writes_thinking_level_map_from_model_levels() -> Result<()> {
+    let isolated = Isolated::new()?;
+    isolated.store.upsert(ProviderUpsertInput {
+        provider_id: "p1".to_string(),
+        label: "Label p1".to_string(),
+        protocol: ProviderProtocol::OpenaiResponses,
+        base_url: "https://p1.test/v1".to_string(),
+        api_key: "sk-test-secret".to_string(),
+        models: vec![
+            ProviderModelInput {
+                id: "model-levels".to_string(),
+                label: "Model Levels".to_string(),
+                context_window: None,
+                max_output_tokens: None,
+                supports_images: None,
+                reasoning: Some(true),
+                reasoning_levels: Some(vec![
+                    ReasoningLevel::Off,
+                    ReasoningLevel::Low,
+                    ReasoningLevel::High,
+                    ReasoningLevel::Xhigh,
+                    ReasoningLevel::Max,
+                ]),
+            },
+            ProviderModelInput {
+                id: "model-unconstrained".to_string(),
+                label: "Model Unconstrained".to_string(),
+                context_window: None,
+                max_output_tokens: None,
+                supports_images: None,
+                reasoning: Some(true),
+                reasoning_levels: None,
+            },
+        ],
+    })?;
+
+    isolated.apply(
+        "p1",
+        ProviderAppId::Pi,
+        &["model-levels", "model-unconstrained"],
+        "model-levels",
+        None,
+    )?;
+    let models: JsonValue = serde_json::from_str(&read_text(&pi_models_path()))?;
+    let entries = models["providers"]["reins-p1"]["models"]
+        .as_array()
+        .expect("models array");
+    let levels_entry = entries
+        .iter()
+        .find(|model| model["id"] == "model-levels")
+        .expect("model-levels");
+    // 键是 Pi 档位名，值是该档发往 API 的 effort（off 档为 none）；
+    // 不在档位集里的 minimal/medium 写 null，Pi 选择器据此隐藏该档。
+    assert_eq!(
+        levels_entry["thinkingLevelMap"],
+        json!({
+            "off": "none",
+            "minimal": null,
+            "low": "low",
+            "medium": null,
+            "high": "high",
+            "xhigh": "xhigh",
+            "max": "max",
+        })
+    );
+    let unconstrained = entries
+        .iter()
+        .find(|model| model["id"] == "model-unconstrained")
+        .expect("model-unconstrained");
+    assert!(unconstrained.get("thinkingLevelMap").is_none());
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // Grok Build
 // ---------------------------------------------------------------------------
