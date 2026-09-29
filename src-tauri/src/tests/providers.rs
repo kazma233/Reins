@@ -401,10 +401,9 @@ fn codex_remove_clears_model_context_window() -> Result<()> {
     Ok(())
 }
 
-// model_catalog_json + reins-models.json：条目带齐 codex 0.145.0 必填字段
-// （缺 supports_parallel_tool_calls 等无默认字段会让配置加载整体失败，
-// 隔离环境实测过），base_instructions 用内置兜底提示词，visibility=list
-// 让模型进选择器。
+// model_catalog_json + reins-models.json：条目字段对齐 codex 0.158.0 的
+// ModelInfo（不再写 0.145 时代的 supports_parallel_tool_calls），系统提示用
+// model_messages.instructions_template，visibility=list 让模型进选择器。
 #[test]
 fn codex_apply_writes_model_catalog_and_remove_clears_pointer() -> Result<()> {
     let isolated = Isolated::new()?;
@@ -431,13 +430,20 @@ fn codex_apply_writes_model_catalog_and_remove_clears_pointer() -> Result<()> {
     assert_eq!(entry["visibility"], "list");
     assert_eq!(entry["supported_in_api"], true);
     assert_eq!(entry["shell_type"], "default");
-    assert_eq!(entry["supports_parallel_tool_calls"], false);
+    // supports_parallel_tool_calls 在 codex 0.158.0 已删除，不再写。
+    assert!(entry.get("supports_parallel_tool_calls").is_none());
     assert_eq!(entry["truncation_policy"]["mode"], "bytes");
     assert_eq!(entry["context_window"], 200_000);
     assert_eq!(entry["input_modalities"][1], "image");
     assert_eq!(entry["default_reasoning_level"], "high");
-    // base_instructions 非空：空提示词会让会话直接失焦。
-    assert!(entry["base_instructions"].as_str().unwrap().len() > 100);
+    // instructions_template 非空：空提示词会让会话直接失焦。
+    assert!(
+        entry["model_messages"]["instructions_template"]
+            .as_str()
+            .unwrap()
+            .len()
+            > 100
+    );
 
     // 移除平台：指针随条目清掉；目录文件不再被引用，留在原地无害。
     isolated.remove_from("p1", ProviderAppId::Codex)?;

@@ -182,7 +182,7 @@
 
 ## 2026-09-28 补充（三）：magpie 对照偏差修复
 
-起因：对照 yetone/magpie README（模型/Provider 切换工具，本地网关路线）逐项核对 Reins 五工具写入口径，发现 5 处偏差。处置：修 4 项，1 项（无损编辑）记入 `TODO.md` 暂缓。本节为修复项的契约依据与证据分级。
+起因：对照 yetone/magpie README（模型/Provider 切换工具，本地网关路线）逐项核对 Reins 五工具写入口径，发现 5 处偏差。处置：修 4 项，1 项（无损编辑）经评估放弃立项（见后续动作第 7 条）。本节为修复项的契约依据与证据分级。
 
 ### Codex `model_catalog_json`（新增写入口径）
 
@@ -205,7 +205,7 @@
 
 - 加载语义（v2.0.18 源码级，`packages/core/src/config/discovery.ts` + `config.ts`）：两个候选文件**都被加载**，顶层键按「最后定义者整键生效」（findLast）合并，即 `.jsonc` 覆盖 `.json` 的同名顶层键，非深合并；OpenCode 自身更新器（config.update）也选已存在的最高优先级文件、无文件时默认创建 `.jsonc`。
 - 运行时证据：项目级 `opencode.jsonc`（带注释）被 v2.0.18 `opencode models` 正常解析并列出探针模型。全局目录下 json/jsonc 并存优先级**未做运行时验证**（重定向 USERPROFILE/APPDATA 的隔离环境里 opencode 后台服务起不来，`Timed out waiting for background service`），按源码级证据实现。
-- 实现：读取两个文件（`.jsonc` 走 json5 解析），被覆盖文件里的条目照常展示并注明不生效；写入目标选已存在的最高优先级文件（`.jsonc` 优先），apply 顺带清理留在低优先级文件里的旧注册键；remove/remove_external 跨两个文件清理。写入 `.jsonc` 时按严格 JSON 序列化（注释丢失属已暂缓的无损编辑问题，见 `TODO.md`，diff 预览可见）。
+- 实现：读取两个文件（`.jsonc` 走 json5 解析），被覆盖文件里的条目照常展示并注明不生效；写入目标选已存在的最高优先级文件（`.jsonc` 优先），apply 顺带清理留在低优先级文件里的旧注册键；remove/remove_external 跨两个文件清理。写入 `.jsonc` 时按严格 JSON 序列化（注释丢失属无损编辑问题，已评估放弃立项，见后续动作第 7 条，diff 预览可见）。
 
 ### 证据分级汇总
 
@@ -232,6 +232,19 @@
 - **仍未复验**：选择器里内置模型消失/恢复的实际表现（`disable_response_storage` 的替代机制已查明并于同日处理完毕，见后续动作第 8 条）。
 
 
+## 2026-09-29 补充（五）：目录条目迁移到 0.158.0 口径（用户决策）
+
+补充（四）记录的字段漂移按用户决策落地：目录条目不再写 `supports_parallel_tool_calls`（0.158.0 已删除该字段），系统提示从 legacy 顶层 `base_instructions` 改写 `model_messages.instructions_template`（0.158.0 起的规范形式；源码注释明确 "instructions_template is literal text"，与旧形式语义等价，不再依赖 legacy 提升路径）。`model_instructions_file` 仍不采用（config 级键、对内置模型的覆盖范围未确认，见补充（四））。
+
+验证（本机隔离 `CODEX_HOME`，npm 包 @openai/codex@0.158.0，`codex --version` 自报 0.155.1 但行为与 rust-v0.158.0 源码一致）：
+
+- 新格式条目 `codex doctor` config loaded；本地假端点捕获请求体，`instructions` 字段等于条目 `instructions_template`（标记串命中），「条目 → 线上系统提示」整链路成立。
+- 追加 Reins 会写的变体字段（`context_window`、`default_reasoning_level`、`input_modalities` 含 image）后仍加载通过。
+- 单测 `codex_apply_writes_model_catalog_and_remove_clears_pointer` 同步改为断言新字段、且不写 `supports_parallel_tool_calls`。
+
+取舍：`base_instructions` 在 0.145.0 是必填字段（无 serde default），因此新格式在旧版 codex 上会让配置加载**整体失败**（非静默降级）——迁移后要求用户侧 codex 已支持 `model_messages`（0.155 / 0.158 实测支持，引入版本未逐版考证）；codex 更新节奏快（0.145 → 0.158 约一个月），不再兼顾旧版。
+
+
 ## 处置结果
 
 1. ✅ Pi `off` 档：单独映射为 `"off"`（pi.rs `thinking_level`），新增测试 `pi_off_level_writes_off`。
@@ -246,7 +259,7 @@
 10. ✅ Claude Code 写 `env.CLAUDE_CODE_MAX_CONTEXT_TOKENS` / `env.CLAUDE_CODE_MAX_OUTPUT_TOKENS`，移除时随 `env` 清掉，新增测试 `claude_apply_writes_context_and_output_env_and_remove_clears_them`。
 11. ✅ OpenCode 逐模型写 `limit{context,output}` 与 `capabilities{tools,input,output}`（limit 两项齐全才写、模态跟随 `supports_images`），新增测试 `opencode_apply_writes_model_limit_and_capabilities`、`opencode_apply_omits_incomplete_limit_and_narrows_modalities`。
 12. ✅ OpenCode 思考等级落地：能力表放行 none/minimal/low/medium/high/xhigh，openai 系写 `settings.reasoningEffort`、anthropic 包写 `settings.thinking`（档位→预算固定阶梯，`off` 写 disabled），新增测试 `opencode_apply_writes_reasoning_effort_or_thinking_budget`；能力表清单同步收窄（依据见 2026-09-28 补充（二））。
-13. ✅ Codex 写 `model_catalog_json` + `$CODEX_HOME/reins-models.json`（条目字段对齐 0.145.0 兜底元数据、visibility=list、base_instructions 用内置兜底提示词），移除时键随条目清、用户自有指向不动，新增测试 `codex_apply_writes_model_catalog_and_remove_clears_pointer`、`codex_remove_keeps_user_model_catalog_json`（2026-09-28，依据见补充（三））。
+13. ✅ Codex 写 `model_catalog_json` + `$CODEX_HOME/reins-models.json`（条目字段对齐 0.145.0 兜底元数据、visibility=list、base_instructions 用内置兜底提示词），移除时键随条目清、用户自有指向不动，新增测试 `codex_apply_writes_model_catalog_and_remove_clears_pointer`、`codex_remove_keeps_user_model_catalog_json`（2026-09-28，依据见补充（三）；2026-09-29 条目字段口径迁移至 0.158.0，见补充（五））。
 14. ✅ Claude Code 认证键改写 `ANTHROPIC_AUTH_TOKEN`，apply 清理旧版 `ANTHROPIC_API_KEY`，反读对遗留键给提示，新增测试 `claude_apply_cleans_legacy_api_key_and_notes_it`（2026-09-28，用户决策方案 c）。
 15. ✅ Claude Code 支持 `CLAUDE_CONFIG_DIR` 重定位（`ToolEnv` 统一模式），新增测试 `claude_honors_claude_config_dir`（2026-09-28）。
 16. ✅ OpenCode v2 支持 `opencode.jsonc`：双文件读取（json5 解析）、覆盖标注、写入目标选最高优先级已存在文件、apply 迁移低优先级文件里的旧注册键，新增测试 `opencode_reads_and_writes_jsonc_when_only_jsonc_exists`、`opencode_jsonc_takes_precedence_and_apply_migrates_registration`（2026-09-28）。
@@ -258,7 +271,7 @@
 3. plan 文档 unverified 项已同步更新（2026-09-25）。
 4. ~~待定：OpenCode 在 Windows 上不认 `XDG_CONFIG_HOME`~~ 已解决：路径解析去掉 XDG 优先级，统一按 `HOME/.config/opencode` 解析（2026-09-25）。
 5. ~~待决定：是否补写 Codex / Claude Code / OpenCode 的模型窗口与输出落点~~ 已采纳并实现（2026-09-28），见 2026-09-28 补充（二）与处置结果第 9–12 条；plan 文档 §6 写入口径已同步。
-6. 待定（产品取值）：OpenCode anthropic 包的档位→思考预算阶梯（minimal 1024 / low 2048 / medium 8192 / high 16384 / xhigh 32768，`off` 写 disabled）。官方与 OpenCode 都没有该映射，现值是 Reins 自定；可选改为其它阶梯、所有非 off 档统一预算（档位仅表达开关），或对 anthropic 包不写 thinking（只在 openai 系提供商提供档位）。改动范围仅 `opencode.rs` 的 `thinking_budget_tokens` 与对应测试。
+6. ~~待定（产品取值）：OpenCode anthropic 包的档位→思考预算阶梯~~ 已查证并收敛（2026-09-29，依据 models.dev API 数据）：anthropic 旧模型（haiku-4.5 / sonnet-4.5 / sonnet-4.6 等）budget_tokens 仅标 `min: 1024`、无推荐阶梯，与现阶梯 minimal=1024 一致；新模型（opus-4.7 起、opus-5 / sonnet-5 / fable-5）已转 effort 参数，值域 low/medium/high/xhigh/max。官方无预算阶梯可抄，维持 Reins 现值（minimal 1024 / low 2048 / medium 8192 / high 16384 / xhigh 32768，`off` 写 disabled）。留意：OpenCode anthropic 包若日后支持 effort 透传，可改为直接透传档位、去掉自定预算（改动范围仅 `opencode.rs` 的 `thinking_budget_tokens` 与对应测试）。
 7. 不做：工具配置的无损编辑（保留注释/键序），2026-09-28 评估后放弃立项（分三层实现，合计约一周工作量，收益集中在 codex/grok 的 config.toml 注释与全局键序；diff 预览为现行缓解）。
 8. ~~待处理：codex 启动警告 `disable_response_storage is ignored`~~ 已处理（2026-09-29）：该键在用户自己的 `~/.codex/config.toml` 第 1 行，不在 Reins 写入面内。0.158.0 源码（core/src/client.rs）构造 Responses API 请求时 `store: false` 为硬编码、无任何配置开关——即「不存储服务端响应」已是无条件默认，删除该键无隐私行为变化。已从用户配置中删除该行（字节级只动这一行），`codex doctor` 修前报 `startup warning ... is ignored`、修后警告消失且 config loaded。
-9. 待观察：目录条目字段集随 codex 版本漂移（0.158.0 已移除 `supports_parallel_tool_calls`、`base_instructions` 转 legacy，见 2026-09-29 补充（四））。当前写法在 0.158.0 实测可用，可等下次升级或需要更小目录文件时再迁移到 `model_instructions_file`。
+9. ~~待观察：目录条目字段集随 codex 版本漂移~~ 已迁移（2026-09-29）：条目按 0.158.0 口径改写（删 `supports_parallel_tool_calls`、`base_instructions` → `model_messages.instructions_template`），见 2026-09-29 补充（五）。`model_instructions_file` 因覆盖范围未确认继续不采用。

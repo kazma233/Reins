@@ -28,10 +28,10 @@ pub(crate) struct CodexAdapter;
 const WIRE_API: &str = "responses";
 const CATALOG_FILE_NAME: &str = "reins-models.json";
 
-// codex 0.145.0 内置兜底提示词（codex-rs/models-manager/prompt.md，
-// Apache-2.0，openai/codex rust-v0.145.0）。目录条目的 base_instructions
-// 是每个模型的系统提示，留空会让 Codex 发出空提示词，因此对齐兜底值：
-// 从「未知模型走 fallback」切到「目录条目」行为零变化。
+// codex 内置兜底提示词（codex-rs/models-manager/prompt.md，Apache-2.0，
+// 取自 openai/codex rust-v0.145.0）。目录条目的 instructions_template 是
+// 逐模型系统提示，留空会让 Codex 发出空提示词，因此对齐兜底值：从
+// 「未知模型走 fallback」切到「目录条目」行为零变化。
 const CODEX_PROMPT: &str = include_str!("codex_prompt.md");
 
 // 目录条目中该模型支持的思考档位：优先用模型元数据 reasoning_levels；
@@ -55,10 +55,10 @@ fn catalog_efforts(
     Vec::new()
 }
 
-// 生成 reins-models.json 内容：条目字段对齐 codex 0.145.0 未知模型兜底
-// 元数据（shell_type/truncation/并行工具调用），仅 visibility 改为 list
-// 让模型进选择器。supports_parallel_tool_calls 等无 serde default 的字段
-// 必须显式写出，缺字段会让 Codex 配置加载整体失败（0.145.0 实测）。
+// 生成 reins-models.json 内容：字段对齐 codex 0.158.0 的 ModelInfo——
+// supports_parallel_tool_calls 已在 0.158.0 删除、不再写；系统提示用
+// model_messages.instructions_template（0.158.0 起的规范形式，旧顶层
+// base_instructions 只是保留的 legacy 提升路径），visibility=list 让模型进选择器。
 fn build_catalog(
     provider: &ResolvedProvider,
     plan: &ApplyProviderInput,
@@ -75,7 +75,6 @@ fn build_catalog(
             "slug": model.id,
             "display_name": model.label,
             "description": format!("{}（{}）", model.label, provider.label),
-            "base_instructions": CODEX_PROMPT,
             "supported_reasoning_levels": efforts
                 .iter()
                 .map(|level| json!({ "effort": level.as_str(), "description": "" }))
@@ -95,7 +94,7 @@ fn build_catalog(
                 json!(["text"])
             },
             "service_tiers": [],
-            "supports_parallel_tool_calls": false,
+            "model_messages": { "instructions_template": CODEX_PROMPT },
         });
         if let Some(context_window) = model.context_window {
             entry["context_window"] = json!(context_window);

@@ -77,7 +77,7 @@ providers:
 
 | 工具 | 写入内容 |
 | --- | --- |
-| Codex | `model_provider="reins-x"`、`model=<id>`、`model_reasoning_effort`、`model_context_window`（模型有 `context_window` 元数据时写默认模型的窗口，否则清空 Reins 自己写入的值）、`model_catalog_json` 指向 `$CODEX_HOME/reins-models.json`（已选模型逐个生成目录条目，字段对齐 codex 0.145.0 兜底元数据、visibility=list 进选择器、base_instructions 用内置兜底提示词；该键为整体替换语义，见验证文档 2026-09-28 补充（三））、`[model_providers.reins-x]`（name、base_url、wire_api="responses"、静态 Bearer Token 字段） |
+| Codex | `model_provider="reins-x"`、`model=<id>`、`model_reasoning_effort`、`model_context_window`（模型有 `context_window` 元数据时写默认模型的窗口，否则清空 Reins 自己写入的值）、`model_catalog_json` 指向 `$CODEX_HOME/reins-models.json`（已选模型逐个生成目录条目，字段对齐 codex 0.158.0 的 ModelInfo、visibility=list 进选择器、`model_messages.instructions_template` 用内置兜底提示词；该键为整体替换语义，见验证文档 2026-09-28 补充（三）与 2026-09-29 补充（五））、`[model_providers.reins-x]`（name、base_url、wire_api="responses"、静态 Bearer Token 字段） |
 | Claude Code | `env.ANTHROPIC_BASE_URL`（聚合平台必写；不写官方端点）、`env.ANTHROPIC_AUTH_TOKEN`（2026-09-28 起由 `ANTHROPIC_API_KEY` 改写此键，旧键随重新应用清理）、`env.CLAUDE_CODE_MAX_CONTEXT_TOKENS` / `env.CLAUDE_CODE_MAX_OUTPUT_TOKENS`（取自默认模型元数据，缺失时清空）、`model`、`effortLevel`；保留文件中其他键 |
 | OpenCode v2 | `providers["reins-x"]`（v2 规范 schema：`name`、`package` 按协议选 `@opencode/ai/providers/openai-compatible` / `@opencode/ai/providers/responses` / `@opencode/ai/providers/anthropic`、`settings.baseURL`、`settings.apiKey` 明文、`models`）+ 顶层 `model="reins-x/<id>"`；`models.<id>` 逐模型写 `limit{context,output}`（两项都齐全才写）、`capabilities{tools,input,output}`（`supports_images` 决定输入模态）、`settings` 思考设置（openai 系写 `reasoningEffort`，anthropic 包写 `thinking` 预算，见下条）；写入只用 v2 规范格式，v1 遗留格式（`provider`/`npm`/`options`）只读展示、可删除，不写入 |
 | Pi | `models.json` 的 `providers["reins-x"]`（baseUrl、api、apiKey、models 含 reasoning 等元数据）+ `settings.json` 的 `defaultProvider`、`defaultModel`、`defaultThinkingLevel` |
@@ -89,7 +89,7 @@ providers:
 - Pi：逐模型写 `reasoning`、`contextWindow`、`maxTokens`、`input`（text/image），四类元数据全覆盖。
 - Codex：写默认模型的 `model_context_window`（官方 schema 顶层键，聚合模型不在内置目录时会走兜底元数据 272000 并告警 `Unknown model`）；最大输出与图像输入没有模型级字段，推理能力只有全局默认档、无 per-model 开关。
 - Claude Code：写 `env.CLAUDE_CODE_MAX_CONTEXT_TOKENS` 与 `env.CLAUDE_CODE_MAX_OUTPUT_TOKENS`（官方为网关模型提供的纠正入口：不写时输出按 32000、窗口按内置同名 ID 推断）；图像输入与 per-model 推理能力无对应键。
-- OpenCode v2：`limit.context`/`limit.output`、`capabilities.input`（由 `supports_images` 决定是否含 image）、思考设置三者都写。思考等级按协议分写：openai 系包写 `settings.reasoningEffort`（档位 none/minimal/low/medium/high/xhigh，实测请求体带 `reasoning_effort`），anthropic 包写 `settings.thinking`（`{type:"enabled",budgetTokens}`，`off` 写 `{type:"disabled"}`；实测该包不消费 `reasoningEffort`，且 `enabled` 必须带预算）。档位到预算取固定阶梯（minimal 1024 / low 2048 / medium 8192 / high 16384 / xhigh 与 max 32768），官方与 OpenCode 都没有该映射，属 Reins 的产品取值；**待定**：这组数值待确认（见验证文档后续动作第 6 条），可改为其它阶梯、统一预算，或不写 thinking。`max` 不放行（openai 侧无此档）。
+- OpenCode v2：`limit.context`/`limit.output`、`capabilities.input`（由 `supports_images` 决定是否含 image）、思考设置三者都写。思考等级按协议分写：openai 系包写 `settings.reasoningEffort`（档位 none/minimal/low/medium/high/xhigh，实测请求体带 `reasoning_effort`），anthropic 包写 `settings.thinking`（`{type:"enabled",budgetTokens}`，`off` 写 `{type:"disabled"}`；实测该包不消费 `reasoningEffort`，且 `enabled` 必须带预算）。档位到预算取固定阶梯（minimal 1024 / low 2048 / medium 8192 / high 16384 / xhigh 与 max 32768），官方与 OpenCode 都没有该映射，属 Reins 的产品取值；models.dev 亦只给 anthropic budget_tokens `min: 1024`、无推荐阶梯（2026-09-29 查证，见验证文档后续动作第 6 条），维持现值。`max` 不放行（openai 侧无此档）。
 - Grok 的最大输出（`max_completion_tokens` 属采样上限，非元数据落点）与图像输入（配置无对应字段，1.0.41 实测 `supports_images`/`input`/`supports_vision` 均被静默忽略）不写。
 - 应用弹窗展示 `ProviderAppState.unwritten_model_fields`，明示本次应用不写入哪些模型元数据，避免用户误以为填写值已生效。
 
@@ -158,12 +158,12 @@ src-tauri/src/providers/
 
 ## 11. unverified 项（2026-09-25 二次核对后更新，详见 context/2026-09-25-providers-contract-verification.md）
 
-- Codex `model_reasoning_effort`：官方值域 `low/medium/high/xhigh/max/ultra`（非穷举）；我们写出的 `none/minimal` 在 codex-cli 0.145.0 客户端可加载（doctor + debug prompt-input），请求时行为需真实端点未验证。
+- Codex `model_reasoning_effort`：官方值域 `low/medium/high/xhigh/max/ultra`（非穷举）；我们写出的 `none/minimal` 在 codex-cli 0.145.0 客户端可加载（doctor + debug prompt-input），请求时行为需真实端点未验证。models.dev 数据源级佐证（2026-09-29）：`none`（gpt-5.3-codex 等）与 `minimal`（gpt-5-mini / gpt-5-nano）均为真实 effort 值，`max` 仅最新模型（gpt-5.6）提供。
 - Claude Code：`effortLevel` 键名与值域已按官方确认（low/medium/high/xhigh/max），能力表已收窄；本机未装 CLI，端到端仍未验证。
 - OpenCode：v2 规范 schema 运行时接受性已真机验证（v2.0.16 全局条目 + `opencode models`）；`openai_responses` 曾因 v2.0.16 对照实验静默加载失败关闭放行，2026-09-27 v2.0.18 复测 `openai/responses` 端到端可用恢复放行（`openai-compatible/responses` 同版初始化报 `Cannot find package '@opencode/ai'`，不采用）；思考等级已从能力表移除（apply 本就不消费）。
-- Grok：`default_reasoning_effort` / `reasoning_efforts` 合法取值未验证；`[model_providers]` 表 + `model_provider` 字段官方文档未记载（官方简化式为 `[model.<id>]` 直接带 base_url），我们的写法来自 1.0.40 实测且同版复测通过，存在未来版本变更风险。
+- Grok：`default_reasoning_effort` / `reasoning_efforts` 合法取值未验证；`[model_providers]` 表 + `model_provider` 字段官方文档未记载（官方简化式为 `[model.<id>]` 直接带 base_url），我们的写法来自 1.0.40 实测且同版复测通过，存在未来版本变更风险。models.dev 数据源级佐证（2026-09-29）：xai 模型 effort 值域为 low/medium/high/xhigh（grok-4.3 另含 none），无 max——与「Max 档映射写 xhigh」的既有处置一致。
 - 各聚合平台模型列表接口差异（`/v1/models` 形态、鉴权头）。
-- models.dev `reasoning_options` 取值与各工具等级的映射表。
+- ~~models.dev `reasoning_options` 取值与各工具等级的映射表~~ 已查证（2026-09-29）：models.dev 不提供跨工具映射，只按 `{type: effort|budget_tokens|toggle}` 三形态记录各模型原始值域——anthropic 新模型 effort 为 low/medium/high/xhigh/max（opus-4.5/4.6 等 early 款是 low/medium/high 或 +max）、xai 为 low/medium/high/xhigh、openai 各模型不一（none/minimal 起步、max 仅最新款）；budget_tokens 仅 `min: 1024`（anthropic 旧模型）；`toggle` 即开/关（sonnet-5）。与 Reins 归一化档位的对应：effort 各档同名对应，`toggle`≈off；`minimal` 仅 openai 系部分模型（gpt-5-mini / gpt-5-nano）有同名值，anthropic 无。
 
 ## 12. 背景与取舍记录
 
