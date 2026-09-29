@@ -320,6 +320,12 @@
   padding-right: 14px;
 }
 
+/* 滚动容器的直接子元素不允许被 flex 压缩：高度不足时必须触发滚动，
+   否则子项先被压扁、再被 app-card 自身的 overflow: hidden 裁掉内容 */
+.manager-scroll-region > * {
+  flex-shrink: 0;
+}
+
 .manager-card-actions--start {
   justify-content: flex-start;
 }
