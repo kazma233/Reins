@@ -113,10 +113,12 @@ fn protocol_from_package(package: Option<&str>) -> Option<ProviderProtocol> {
     }
 }
 
-// 思考等级：openai 系包写 settings.reasoningEffort，官方 OpenAI 变体档为
-// none/minimal/low/medium/high/xhigh（opencode.ai/v2/docs/models）；anthropic
-// 包的 reasoningEffort 实测不上线，改用显式 thinking 预算，故同档位都能表达。
-// max 不在此列：openai 侧无该档，anthropic 侧落到 xhigh 的预算。
+// 思考等级：openai 系包写 settings.reasoningEffort，anthropic 包的
+// reasoningEffort 实测不上线，改用显式 thinking 预算，故同档位都能表达。
+// OpenCode v2 对 reasoningEffort 只做字符串校验并按原值透传
+// （asOpenAIReasoningEffort 恒等，二进制实证），OpenAI 官方 ReasoningEffort
+// 枚举含 max（gpt-5.6/gpt-6-astra 同时支持 xhigh 与 max，两档强度不同），
+// 因此 max 直写；anthropic 侧落到与 xhigh 相同的预算。
 const SUPPORTED_LEVELS: &[ReasoningLevel] = &[
     ReasoningLevel::Off,
     ReasoningLevel::Minimal,
@@ -124,6 +126,7 @@ const SUPPORTED_LEVELS: &[ReasoningLevel] = &[
     ReasoningLevel::Medium,
     ReasoningLevel::High,
     ReasoningLevel::Xhigh,
+    ReasoningLevel::Max,
 ];
 
 // anthropic 包的 thinking 必须带预算（实测：{type:"enabled"} 无 budgetTokens
