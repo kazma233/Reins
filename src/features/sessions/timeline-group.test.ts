@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
   buildTimelineItems,
+  groupSubagentStrips,
   itemSearchText,
-  type TimelineItem
+  type TimelineItem,
+  type TimelineRenderItem
 } from "./timeline-group";
 import type { ContentBlock, SessionMessage } from "./types";
 
@@ -352,5 +354,57 @@ describe("buildTimelineItems", () => {
     ]);
     const tool = findItems(items, "tool")[0] as Extract<TimelineItem, { kind: "tool" }>;
     expect(itemSearchText(tool)).toContain("all tests passed");
+  });
+});
+
+describe("groupSubagentStrips", () => {
+  function entry(key: string): Extract<TimelineItem, { kind: "subagent" }> {
+    return {
+      kind: "subagent",
+      key,
+      label: "research",
+      status: "ok",
+      title: null,
+      run: { nestedMessages: [] }
+    };
+  }
+
+  function group(key: string): Extract<TimelineItem, { kind: "subagent-group" }> {
+    return { kind: "subagent-group", key, label: "g", sessionId: key, items: [] };
+  }
+
+  function text(key: string): TimelineItem {
+    return {
+      kind: "text",
+      key,
+      role: "assistant",
+      message: message(key, "assistant", []),
+      blocks: []
+    };
+  }
+
+  it("merges a consecutive run of subagent items into one ordered strip", () => {
+    const merged = groupSubagentStrips([text("t1"), entry("s1"), entry("s2"), entry("s3")]);
+    expect(merged.map((item) => item.kind)).toEqual(["text", "subagent-strip"]);
+    const strip = merged[1] as Extract<TimelineRenderItem, { kind: "subagent-strip" }>;
+    expect(strip.items.map((item) => item.key)).toEqual(["s1", "s2", "s3"]);
+  });
+
+  it("keeps a lone subagent item unwrapped", () => {
+    const merged = groupSubagentStrips([entry("s1")]);
+    expect(merged).toHaveLength(1);
+    expect(merged[0].kind).toBe("subagent");
+  });
+
+  it("splits strips interrupted by other item kinds", () => {
+    const merged = groupSubagentStrips([entry("s1"), text("t1"), group("g1")]);
+    expect(merged.map((item) => item.kind)).toEqual(["subagent", "text", "subagent-group"]);
+  });
+
+  it("merges mixed entry and group items into one strip", () => {
+    const merged = groupSubagentStrips([entry("s1"), group("g1")]);
+    expect(merged).toHaveLength(1);
+    const strip = merged[0] as Extract<TimelineRenderItem, { kind: "subagent-strip" }>;
+    expect(strip.items.map((item) => item.kind)).toEqual(["subagent", "subagent-group"]);
   });
 });

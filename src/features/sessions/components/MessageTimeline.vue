@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { SessionOverview } from "../types";
-import type { TimelineItem } from "../timeline-group";
+import { groupSubagentStrips, type TimelineItem } from "../timeline-group";
 import MessageBlockContent from "./MessageBlockContent.vue";
 import CollapsedBlockRow from "./CollapsedBlockRow.vue";
 import ToolRow from "./ToolRow.vue";
@@ -38,7 +38,7 @@ defineEmits<{ openSubagent: [sessionId: string, label: string] }>();
   </div>
   <p v-else-if="items.length === 0" class="muted-text">{{ emptyText }}</p>
   <div v-else class="flow">
-    <template v-for="item in items" :key="item.key">
+    <template v-for="item in groupSubagentStrips(items)" :key="item.key">
       <template v-if="item.kind === 'text'">
         <div v-if="item.role === 'user'" class="flow-user">
           <MessageBlockContent
@@ -59,14 +59,19 @@ defineEmits<{ openSubagent: [sessionId: string, label: string] }>();
       </template>
       <ToolRow v-else-if="item.kind === 'tool'" :item="item" />
       <CollapsedBlockRow v-else-if="item.kind === 'collapsed-block'" :item="item" />
-      <SubagentEntryRow v-else-if="item.kind === 'subagent'" :item="item" />
-      <SubagentGroupRow
-        v-else-if="item.kind === 'subagent-group'"
-        :item="item"
-        @open="
-          (sessionId: string, label: string) => $emit('openSubagent', sessionId, label)
-        "
-      />
+      <div v-else-if="item.kind === 'subagent-strip'" class="flow-subagent-strip">
+        <template v-for="entry in item.items" :key="entry.key">
+          <SubagentEntryRow v-if="entry.kind === 'subagent'" :item="entry" />
+          <SubagentGroupRow
+            v-else
+            :item="entry"
+            @open="
+              (sessionId: string, label: string) =>
+                $emit('openSubagent', sessionId, label)
+            "
+          />
+        </template>
+      </div>
     </template>
   </div>
   <div class="detail-pagination">

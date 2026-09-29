@@ -83,6 +83,15 @@ export type TimelineItem =
   | SubagentGroupItem
   | CollapsedBlockItem;
 
+// 纯展示层分组：把连续的子代理入口合成一条横向滚动条带，不参与检索
+export type SubagentStripItem = {
+  kind: "subagent-strip";
+  key: string;
+  items: Array<SubagentEntryItem | SubagentGroupItem>;
+};
+
+export type TimelineRenderItem = TimelineItem | SubagentStripItem;
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
@@ -306,6 +315,33 @@ export function buildTimelineItems(messages: SessionMessage[]): TimelineItem[] {
   }
 
   return items;
+}
+
+// 连续的子代理入口合并成一个条带；孤立的入口保持原行渲染，避免单条也套容器。
+// 被 text/tool 等其他单元打断的入口分属不同条带（各自对应一次派发批次）
+export function groupSubagentStrips(items: TimelineItem[]): TimelineRenderItem[] {
+  const out: TimelineRenderItem[] = [];
+  let strip: SubagentStripItem | null = null;
+  const flush = () => {
+    if (!strip) {
+      return;
+    }
+    out.push(strip.items.length === 1 ? strip.items[0] : strip);
+    strip = null;
+  };
+  for (const item of items) {
+    if (item.kind === "subagent" || item.kind === "subagent-group") {
+      if (!strip) {
+        strip = { kind: "subagent-strip", key: `${item.key}:strip`, items: [] };
+      }
+      strip.items.push(item);
+    } else {
+      flush();
+      out.push(item);
+    }
+  }
+  flush();
+  return out;
 }
 
 // 单条消息 → 渲染单元；调用-结果配对依赖调用方传入的 pendingCalls（跨消息共享）

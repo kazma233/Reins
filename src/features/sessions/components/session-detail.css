@@ -754,6 +754,23 @@
   word-break: break-word;
 }
 
+/* 连续多个子代理入口合并成一条横向条带：一批可能派出十几个 agent，
+   逐行铺开会把正文挤出几屏；卡片定宽横向扫读，纵向只占一行 */
+.flow-subagent-strip {
+  display: flex;
+  align-items: stretch;
+  gap: 8px;
+  overflow-x: auto;
+  /* 底部留出横向滚动条的空间，避免盖住卡片圆角 */
+  padding-bottom: 2px;
+}
+
+.flow-subagent-strip .flow-subagent {
+  flex: 0 0 auto;
+  width: 340px;
+  max-width: 100%;
+}
+
 .flow-subagent-row {
   display: flex;
   align-items: center;
