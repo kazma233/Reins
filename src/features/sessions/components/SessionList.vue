@@ -196,7 +196,7 @@ function handleReverseClick() {
               v-if="session.tokenUsage"
               class="session-token-usage"
             >
-              <span>¤ {{ formatTokenCount(totalConsumedTokens(session.tokenUsage)) }}</span>
+              <span>⛁ {{ formatTokenCount(totalConsumedTokens(session.tokenUsage)) }}</span>
             </small>
           </div>
         </button>
