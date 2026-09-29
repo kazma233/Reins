@@ -219,6 +219,19 @@
 | OpenCode jsonc 解析 | 运行时实测（项目级）；全局并存优先级为源码级 |
 
 
+## 2026-09-29 补充（四）：codex 0.158.0 复验
+
+本机 codex 已由 0.145.0 升至 **0.158.0**（`codex --version`）。上面各节涉及 codex 的结论都基于 0.145.0，故按 0.158.0 复验目录文件这条新增链路。
+
+- **目录文件仍可加载**：隔离 `CODEX_HOME` + 我们 apply 生成的条目字段集（含 `supports_parallel_tool_calls`）+ `codex doctor`，无配置加载错误。
+- **提示词确实生效**：本地假端点（HttpListener）捕获 0.158.0 发出的请求，请求体 `instructions` 字段等于目录条目的 `base_instructions`（标记串命中）。即「目录条目 → 线上系统提示」整链路在 0.158.0 成立。
+- **字段漂移**：0.158.0 的 `ModelInfo` 已无 `supports_parallel_tool_calls`（0.145.0 是必填）；该类型无 `deny_unknown_fields`，未知字段被忽略，文件照常解析——我们继续写该字段无害，但属 0.145 时代的遗留。
+- **`base_instructions` 降级为 legacy**：0.158.0 源码含 `promotes_legacy_base_instructions` 迁移，以及「`base_instructions` 与 `model_messages` 都缺」的报错分支；我们写的 legacy 形式被提升后生效。
+- **`model_catalog_json` 语义未变**：0.158.0 源码注释仍为 "When set, this replaces the bundled catalog for the current process"（整体替换）。
+- **新键 `model_instructions_file`**（"Optional path to a file containing model instructions"）：未来可替代「把提示词内嵌进每个目录条目」，目录文件更小、提示词单点维护；但它是配置级指令文件，对内置模型的覆盖范围需先确认，暂不改用。
+- **仍未复验**：选择器里内置模型消失/恢复的实际表现；`disable_response_storage` 被忽略后的替代机制（该键在 0.158.0 配置 schema 中同样不存在，警告属预期，见后续动作第 8 条）。
+
+
 ## 处置结果
 
 1. ✅ Pi `off` 档：单独映射为 `"off"`（pi.rs `thinking_level`），新增测试 `pi_off_level_writes_off`。
@@ -246,4 +259,6 @@
 4. ~~待定：OpenCode 在 Windows 上不认 `XDG_CONFIG_HOME`~~ 已解决：路径解析去掉 XDG 优先级，统一按 `HOME/.config/opencode` 解析（2026-09-25）。
 5. ~~待决定：是否补写 Codex / Claude Code / OpenCode 的模型窗口与输出落点~~ 已采纳并实现（2026-09-28），见 2026-09-28 补充（二）与处置结果第 9–12 条；plan 文档 §6 写入口径已同步。
 6. 待定（产品取值）：OpenCode anthropic 包的档位→思考预算阶梯（minimal 1024 / low 2048 / medium 8192 / high 16384 / xhigh 32768，`off` 写 disabled）。官方与 OpenCode 都没有该映射，现值是 Reins 自定；可选改为其它阶梯、所有非 off 档统一预算（档位仅表达开关），或对 anthropic 包不写 thinking（只在 openai 系提供商提供档位）。改动范围仅 `opencode.rs` 的 `thinking_budget_tokens` 与对应测试。
-7. 暂缓：工具配置的无损编辑（保留注释/键序），记入仓库 `TODO.md`（2026-09-28，对标 magpie 的外科手术式编辑；diff 预览为现行缓解）。
+7. 不做：工具配置的无损编辑（保留注释/键序），2026-09-28 评估后放弃立项（分三层实现，合计约一周工作量，收益集中在 codex/grok 的 config.toml 注释与全局键序；diff 预览为现行缓解）。
+8. ~~待处理：codex 启动警告 `disable_response_storage is ignored`~~ 已处理（2026-09-29）：该键在用户自己的 `~/.codex/config.toml` 第 1 行，不在 Reins 写入面内。0.158.0 源码（core/src/client.rs）构造 Responses API 请求时 `store: false` 为硬编码、无任何配置开关——即「不存储服务端响应」已是无条件默认，删除该键无隐私行为变化。已从用户配置中删除该行（字节级只动这一行），`codex doctor` 修前报 `startup warning ... is ignored`、修后警告消失且 config loaded。
+9. 待观察：目录条目字段集随 codex 版本漂移（0.158.0 已移除 `supports_parallel_tool_calls`、`base_instructions` 转 legacy，见 2026-09-29 补充（四））。当前写法在 0.158.0 实测可用，可等下次升级或需要更小目录文件时再迁移到 `model_instructions_file`。
