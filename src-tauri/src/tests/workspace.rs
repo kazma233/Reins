@@ -620,7 +620,7 @@ fn default_config_template_parses_with_builtin_targets() -> Result<()> {
             .map(|home| home.join(".config/opencode/opencode.json"))
             .as_deref()
     );
-    assert_eq!(opencode.mcp_config_prefix, "mcp");
+    assert_eq!(opencode.mcp_config_prefix, "mcp.servers");
     assert_eq!(opencode.mcp_config_type, McpConfigType::OpenCode);
 
     let zcode = config
@@ -696,7 +696,7 @@ fn project_opencode_agent_uses_opencode_project_layout() -> Result<()> {
 
     assert_eq!(target.skill_dir, project_path.join(".opencode/skills"));
     assert_eq!(target.config_path.as_ref(), Some(&mcp_config_path));
-    assert_eq!(target.mcp_config_prefix, "mcp");
+    assert_eq!(target.mcp_config_prefix, "mcp.servers");
     assert_eq!(target.mcp_config_type, McpConfigType::OpenCode);
 
     Ok(())

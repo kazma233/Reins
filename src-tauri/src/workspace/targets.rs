@@ -412,7 +412,8 @@ fn builtin_target_defaults() -> Vec<TargetDefaults> {
                 .map(|h| h.join(".config/opencode/skills"))
                 .unwrap_or_default(),
             config_path: home_dir().map(|h| h.join(".config/opencode/opencode.json")),
-            config_prefix: "mcp",
+            // opencode v2 的 mcp 配置在 mcp.servers 下，顶层 mcp 不被识别
+            config_prefix: "mcp.servers",
             config_type: McpConfigType::OpenCode,
         },
         TargetDefaults {
@@ -471,7 +472,8 @@ pub(super) fn project_agent_defaults(project_path: &Path) -> Vec<TargetDefaults>
             id: AgentTargetId("opencode".to_string()),
             skill_dir: project_path.join(".opencode/skills"),
             config_path: Some(project_path.join("opencode.json")),
-            config_prefix: "mcp",
+            // opencode v2 的 mcp 配置在 mcp.servers 下，顶层 mcp 不被识别
+            config_prefix: "mcp.servers",
             config_type: McpConfigType::OpenCode,
         },
         TargetDefaults {

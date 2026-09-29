@@ -2,7 +2,7 @@
 
 本文件记录一个已知问题与后续优化方向：各 agent 的 MCP 配置字段并不一致，当前用 `configType` 写死映射，多处不一致会**静默失效**（写入成功、行为不符），后续要改为按 Reins 自己的 MCP 配置动态映射到各 agent 字段。
 
-最后核实：2026-09-15，实测版本 Grok 1.0.30、Codex 0.149.1、OpenCode 1.18.30。Claude Code、ZCode 本机没有 CLI，未实测。
+最后核实：2026-09-15，实测版本 Grok 1.0.30、Codex 0.149.1、OpenCode 1.18.30。Claude Code、ZCode 本机没有 CLI，未实测。2026-09-29 复核：OpenCode 升到 v2.0.18 后 MCP 节点从顶层 `mcp` 变为 `mcp.servers`，旧位置不被识别（`opencode mcp list` 为空），下文 OpenCode 相关行已按 v2 更新。
 
 ## 1. 问题
 
@@ -16,7 +16,7 @@ canonical 字段 → 实际写出：
 
 | canonical | `common` TOML | `common` JSON | `opencode` JSON | `grokbuild` TOML |
 | --- | --- | --- | --- | --- |
-| 节点 | `mcp_servers.x` | `mcpServers.x` | `mcp.x` | `mcp_servers.x` |
+| 节点 | `mcp_servers.x` | `mcpServers.x` | `mcp.servers.x` | `mcp_servers.x` |
 | `enabled` | `enabled` | **不写** | `enabled` | `enabled` |
 | `timeout`（ms） | `tool_timeout_sec` 浮点秒 | **不写** | `timeout` 整数毫秒 | `tool_timeout_sec` 整数秒（非整秒报错） |
 | stdio | `command`、`args`、`env` | `type: stdio`、`command`、`args`、`env` | `type: local`、`command` 数组（含参数）、`environment` | `command`、`args`、`env` |
@@ -37,7 +37,7 @@ canonical 字段 → 实际写出：
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | Grok Build 1.0.30 | `$GROK_HOME/config.toml` / `mcp_servers` | `command`、`args`、`env`（另支持 `cwd`） | `url`、`headers`（另支持 `bearer_token_env_var`） | **`headers`**，`http_headers` 被静默忽略 | `tool_timeout_sec` 必须 `u64` 整数秒，浮点会让整个 server 被丢弃 | 支持 | 本机实测 |
 | Codex 0.149.1 | `~/.codex/config.toml` / `mcp_servers` | `command`、`args`、`env`、`cwd` | `url`、`http_headers`、`env_http_headers`、`bearer_token_env_var` | **`http_headers`**，`headers` 被静默忽略 | `tool_timeout_sec` 接受浮点（1.5 可读回） | 支持（读回 `enabled: false`） | 本机实测 |
-| OpenCode 1.18.30 | `~/.config/opencode/opencode.json` / `mcp` | `type: local`、`command` 数组、`environment` | `type: remote`、`url`、`headers` | `headers` | `timeout`（毫秒整数） | 支持 | 本机实测：解析结果原样保留，未知字段被静默剥离 |
+| OpenCode 2.0.18（v1 1.18.30 为顶层 `mcp`，v2 不识别） | `~/.config/opencode/opencode.json` / `mcp.servers` | `type: local`、`command` 数组、`environment` | `type: remote`、`url`、`headers` | `headers` | `timeout`（毫秒整数） | 支持 | 本机实测：`opencode mcp add` 落盘 `mcp.servers`；v1 时的解析行为为原样保留、未知字段被静默剥离 |
 | Claude Code | `~/.claude.json` / `mcpServers`（项目 `.mcp.json`） | Reins 写 `type: stdio` + `command/args/env` | Reins 写 `type: http/sse` + `url/headers` | Reins JSON 路径写 `headers` | **Reins 不写** | **Reins 不写** | 未实测（无 CLI）：需在隔离 HOME 用其 MCP 列表/校验命令核对 |
 | ZCode | `~/.zcode/cli/config.json` / `mcp.servers` | 同 `common` JSON | 同 `common` JSON | 同 `common` JSON | **Reins 不写** | **Reins 不写** | 未实测（无 CLI） |
 | Pi | 无 | — | — | — | — | — | Reins 只分发 skill，不写 MCP |
@@ -95,9 +95,9 @@ mkdir -p "$base/codex"
 printf '[mcp_servers.remote]\nenabled=true\nurl="https://example.invalid/mcp"\nhttp_headers={Authorization="Bearer t"}\ntool_timeout_sec=1.5\n' > "$base/codex/config.toml"
 HOME="$base/home" CODEX_HOME="$base/codex" codex --cd "$base/proj" mcp list --json
 
-# OpenCode：字段是否被识别（未知字段会被剥离）
+# OpenCode：字段是否被识别（未知字段会被剥离）；v2 节点为 mcp.servers
 mkdir -p "$base/home/.config/opencode"
-printf '{"mcp":{"probe":{"type":"local","command":["node"],"enabled":false}}}' > "$base/home/.config/opencode/opencode.json"
+printf '{"mcp":{"servers":{"probe":{"type":"local","command":["node"],"enabled":false}}}}' > "$base/home/.config/opencode/opencode.json"
 HOME="$base/home" XDG_CONFIG_HOME="$base/home/.config" sh -c "cd '$base/proj' && opencode debug config"
 ```
 

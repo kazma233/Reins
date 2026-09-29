@@ -130,7 +130,7 @@ fn default_config_template() -> String {
     mcp:
       enabled: true
       config_path: ~/.config/opencode/opencode.json
-      config_prefix: mcp
+      config_prefix: mcp.servers
       config_type: opencode
 
   zcode:
