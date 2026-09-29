@@ -1,0 +1,3 @@
+# 仓库统一 LF:工具链(ts-rs、编辑器)以 LF 写盘,禁用检出时的 LF->CRLF
+# 转换,避免 autocrlf 环境下的幽灵修改与行尾告警;二进制由 text=auto 识别跳过。
+* text=auto eol=lf
