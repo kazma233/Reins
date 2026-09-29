@@ -65,7 +65,7 @@ part 与消息的挂载关系(实测 GROUP BY):`user_prompt` 消息挂 `text` + 
 
 ### turn_usage / model_usage 表(用量预聚合)
 
-`turn_usage` 按 `(session_id, turn_id)` 主键,列直接给出 `input_tokens`、`output_tokens`、`reasoning_tokens`、`cache_creation_input_tokens`、`cache_read_input_tokens`。实测 `computed_total_tokens = input + output`,即 input 列不含缓存命中,与 Reins `SessionTokenUsage` 四项口径(input / output(含 reasoning) / cache_read / cache_write)天然对齐,一条 `GROUP BY session_id` SUM 即完成归一,不需要 json_extract。`model_usage` 是更细的请求粒度,接入用不到。
+`turn_usage` 按 `(session_id, turn_id)` 主键,列直接给出 `input_tokens`、`output_tokens`、`reasoning_tokens`、`cache_creation_input_tokens`、`cache_read_input_tokens`。**`input_tokens` 是全口径(未命中输入 + 缓存读)**:Windows 本机库 `model_usage` 表保留了原始响应对照,`raw_usage_json.inputTokens`(= 两张 usage 表的 input_tokens)= `provider_metadata_json` 里 Anthropic 原始 `input_tokens` + `cache_read_input_tokens`(实测 61 + 192 = 253);`computed_total_tokens = input + output` 同为全口径。~~初版误判为 input 不含缓存命中~~,接入时需 `SUM(input) - SUM(cache_read)` 对齐 Reins `SessionTokenUsage` 的 input 口径(input 不含缓存命中),否则命中率分母 `input + cache_read` 会重复计一次缓存读,显示值约为真实值一半。`model_usage` 是更细的请求粒度,口径验证时有用,接入本身用不到。
 
 ## 自定义 home 调研(文档 + 二进制实证)
 

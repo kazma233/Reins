@@ -221,9 +221,10 @@ fn zcode_root_session_aggregates_subagent_sessions() -> Result<()> {
     assert_eq!(summary.source_session_id, seed.root_id);
     assert!(summary.title.contains("Root task (+1 subagents)"));
     assert_eq!(summary.cwd.as_deref(), Some("/tmp/root"));
-    // turn_usage 按 family 求和:input 100+30,output (20+5)+(8+2),cache 同理
+    // turn_usage 按 family 求和:input 是全口径(含 cache_read),拆掉后为
+    // (100+30)-(50+15);output (20+5)+(8+2);cache 直接求和
     let usage = summary.token_usage.expect("token usage present");
-    assert_eq!(usage.input_tokens, 130);
+    assert_eq!(usage.input_tokens, 65);
     assert_eq!(usage.output_tokens, 35);
     assert_eq!(usage.cache_read_tokens, 65);
     assert_eq!(usage.cache_write_tokens, 14);

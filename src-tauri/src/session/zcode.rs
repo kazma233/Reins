@@ -217,14 +217,16 @@ fn list_session_rows() -> Result<Vec<ZcodeSessionRow>> {
         .context("Failed to read ZCode sessions")
 }
 
-// turn_usage 表按 turn 预聚合了四类用量列,直接 SUM;其 input 列不含缓存命中
-// (computed_total = input + output),与 SessionTokenUsage 的四项口径对齐,
-// 不需要像 OpenCode 那样从消息 JSON 里提取。
+// turn_usage 表按 turn 预聚合了四类用量列,直接 SUM。其 input_tokens 是全口径
+// (未命中 + 缓存读):model_usage.raw_usage_json 实测 inputTokens = provider 的
+// input_tokens + cache_read_input_tokens,computed_total = input + output 同为全
+// 口径。这里拆掉 cache_read,对齐 SessionTokenUsage 的 input 口径(不含缓存命中)。
 fn session_token_usages(connection: &Connection) -> Result<HashMap<String, SessionTokenUsage>> {
     let mut statement = connection
         .prepare(
             "SELECT session_id,
-                    COALESCE(SUM(input_tokens), 0),
+                    COALESCE(SUM(input_tokens), 0)
+                        - COALESCE(SUM(cache_read_input_tokens), 0),
                     COALESCE(SUM(output_tokens), 0)
                         + COALESCE(SUM(reasoning_tokens), 0),
                     COALESCE(SUM(cache_read_input_tokens), 0),
