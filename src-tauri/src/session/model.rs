@@ -23,6 +23,8 @@ pub(crate) enum SourceApp {
     Pi,
     #[serde(rename = "grokbuild")]
     GrokBuild,
+    #[serde(rename = "zcode")]
+    Zcode,
 }
 
 impl FromStr for SourceApp {
@@ -35,6 +37,7 @@ impl FromStr for SourceApp {
             "opencode" => Ok(Self::OpenCode),
             "pi" => Ok(Self::Pi),
             "grokbuild" => Ok(Self::GrokBuild),
+            "zcode" => Ok(Self::Zcode),
             _ => Err(anyhow!("Unsupported source app: {value}")),
         }
     }
@@ -48,6 +51,7 @@ impl SourceApp {
             Self::OpenCode => "opencode",
             Self::Pi => "pi",
             Self::GrokBuild => "grokbuild",
+            Self::Zcode => "zcode",
         }
     }
 }

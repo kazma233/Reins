@@ -25,6 +25,7 @@ mod session_listing;
 mod session_readers;
 mod session_token_usage;
 mod workspace_skills;
+mod zcode;
 
 fn write_jsonl(path: &Path, lines: &[Value]) -> Result<()> {
     if let Some(parent) = path.parent() {

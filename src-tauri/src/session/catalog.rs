@@ -17,6 +17,7 @@ pub(crate) fn detect_sources_inner(state: &SessionIndexState) -> Result<Vec<Sour
     let opencode_root = super::opencode::root()?;
     let pi_root = super::pi::sessions_root()?;
     let grok_root = super::grokbuild::root()?;
+    let zcode_root = super::zcode::root()?;
 
     let inspections = thread::scope(|scope| {
         let codex_state = state.clone();
@@ -60,12 +61,23 @@ pub(crate) fn detect_sources_inner(state: &SessionIndexState) -> Result<Vec<Sour
         let grok_handle =
             scope.spawn(move || inspect_source(&grok_state, SourceApp::GrokBuild, grok_root, None));
 
+        let zcode_state = state.clone();
+        let zcode_handle = scope.spawn(move || {
+            inspect_source(
+                &zcode_state,
+                SourceApp::Zcode,
+                zcode_root,
+                Some("Reading sessions from ~/.zcode/cli/db/db.sqlite.".to_string()),
+            )
+        });
+
         vec![
             codex_handle.join(),
             claude_handle.join(),
             opencode_handle.join(),
             pi_handle.join(),
             grok_handle.join(),
+            zcode_handle.join(),
         ]
     });
 
@@ -132,6 +144,7 @@ fn available_sources() -> Vec<SourceApp> {
         (SourceApp::OpenCode, super::opencode::root()),
         (SourceApp::Pi, super::pi::sessions_root()),
         (SourceApp::GrokBuild, super::grokbuild::root()),
+        (SourceApp::Zcode, super::zcode::root()),
     ]
     .into_iter()
     .filter_map(|(app, root)| root.ok().filter(|root| root.exists()).map(|_| app))

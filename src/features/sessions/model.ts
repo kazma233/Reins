@@ -9,12 +9,17 @@ export type DeleteMethodCopy = {
 };
 
 export function canDeleteSession(app: SourceApp): boolean {
-  return app !== "grokbuild";
+  return app !== "grokbuild" && app !== "zcode";
 }
 
 export const DELETE_METHOD_COPY: Record<SourceApp, DeleteMethodCopy> = {
   grokbuild: {
     description: "暂不支持删除 Grok Build 会话。",
+    details: [],
+    commandLabel: "不支持删除"
+  },
+  zcode: {
+    description: "暂不支持删除 ZCode 会话。",
     details: [],
     commandLabel: "不支持删除"
   },
@@ -103,6 +108,7 @@ export function deleteCommandPreview(detail: SessionOverview): string[] {
 
   switch (detail.summary.sourceApp) {
     case "grokbuild":
+    case "zcode":
       return [];
     case "opencode":
       return sessionIds.map(

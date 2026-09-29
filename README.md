@@ -2,7 +2,7 @@
 
 本地桌面工具，提供三组能力：
 
-- 浏览 Codex、Claude Code、OpenCode、Pi、Grok Build 的历史会话
+- 浏览 Codex、Claude Code、OpenCode、Pi、Grok Build、ZCode 的历史会话
 - 通过全局配置文件 `config.yaml`，把 Skills 和 MCP 配置分发到多个 agent target
 - 管理聚合提供商（OpenRouter、自建网关等）的模型配置，一键应用到 Codex、Claude Code、OpenCode、Pi、Grok Build
 
@@ -10,16 +10,16 @@
 
 ### 历史会话
 
-- 自动发现本机的 Codex、Claude Code、OpenCode、Pi、Grok Build 会话
+- 自动发现本机的 Codex、Claude Code、OpenCode、Pi、Grok Build、ZCode 会话（ZCode 读取 `~/.zcode/cli/db/db.sqlite`）
 - 按来源浏览会话列表、消息、事件和工具调用；「全部」视图跨来源合并浏览与搜索
 - 支持搜索（标题 / Session ID）和排序
 - 会话列表滚动到底部自动加载更多
 - 会话列表与详情页展示 token 用量（输入 / 输出 / 缓存及命中率）
-- OpenCode 会话自动聚合子会话；Codex / Claude Code 会话自动聚合续跑、fork 与 subagent 线程
+- OpenCode、ZCode 会话自动聚合子会话；Codex / Claude Code 会话自动聚合续跑、fork 与 subagent 线程
 - Grok Build 会话自动折叠已确认的 subagent 子会话，用量统计含子代理汇总
 - 可单独查看 Pi subagent 每次运行的任务、用量、失败原因与完整过程
 - 消息页完整展示消息流，工具调用合并为可展开查看的摘要
-- 会话可删除（Grok Build 暂不支持），删除前有二次确认与等价命令预览
+- 会话可删除（Grok Build、ZCode 暂不支持），删除前有二次确认与等价命令预览
 
 ### 配置与分发
 

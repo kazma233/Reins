@@ -18,6 +18,7 @@ pub(crate) mod grokbuild;
 pub(crate) mod opencode;
 pub(crate) mod pi;
 pub(crate) mod summary_cache;
+pub(crate) mod zcode;
 
 use self::catalog::*;
 use self::family_timeline::*;
@@ -73,6 +74,7 @@ pub(crate) fn reader(source_app: SourceApp) -> &'static dyn SessionReader {
         SourceApp::OpenCode => &opencode::BACKEND,
         SourceApp::Pi => &pi::BACKEND,
         SourceApp::GrokBuild => &grokbuild::BACKEND,
+        SourceApp::Zcode => &zcode::BACKEND,
     }
 }
 
@@ -82,6 +84,7 @@ pub(crate) fn clear_all_caches() -> Result<()> {
     reader(SourceApp::OpenCode).clear_cache()?;
     reader(SourceApp::Pi).clear_cache()?;
     reader(SourceApp::GrokBuild).clear_cache()?;
+    reader(SourceApp::Zcode).clear_cache()?;
     // 持久缓存一并清空：用户触发的刷新是"全量重建"的逃生通道。
     summary_cache::clear_all();
     Ok(())
@@ -94,6 +97,9 @@ pub(crate) fn delete_session(source_app: SourceApp, path: &Path) -> Result<()> {
         SourceApp::OpenCode => opencode::delete_session(path),
         SourceApp::Pi => pi::delete_session(path),
         SourceApp::GrokBuild => bail!("Grok Build session deletion is unsupported"),
+        // zcode CLI 不随桌面版安装、无官方单会话删除命令,直接删库又与常驻
+        // 进程的写入冲突,所以整体不提供删除。
+        SourceApp::Zcode => bail!("ZCode session deletion is unsupported"),
     }
 }
 
