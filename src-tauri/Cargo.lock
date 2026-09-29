@@ -2639,6 +2639,7 @@ dependencies = [
  "anyhow",
  "chrono",
  "dirs 7.0.0",
+ "dunce",
  "json5",
  "junction",
  "reqwest 0.12.28",

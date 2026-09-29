@@ -45,12 +45,26 @@ pub(crate) fn user_home_dir() -> Option<PathBuf> {
     guard.clone().or_else(dirs::home_dir)
 }
 
+// Windows 的 std::fs::canonicalize 返回 \\?\ verbatim 路径,直接进展示字段会把
+// 前缀暴露给用户,还会让"规范化结果 vs join 构造路径"的相等比较恒不相等。
+// 全部调用方统一经此函数取普通拼写,相互比较才建立在同一形式上。
+pub(crate) fn canonicalize(path: &Path) -> std::io::Result<PathBuf> {
+    #[cfg(windows)]
+    {
+        dunce::canonicalize(path)
+    }
+    #[cfg(not(windows))]
+    {
+        fs::canonicalize(path)
+    }
+}
+
 // Windows accepts both path separators, so the same file can spell its path
 // differently depending on who built the string (WalkDir yields '\', callers
 // may pass '/'). Canonicalize when the file exists so path-keyed maps match
 // regardless of separator spelling.
 pub(crate) fn path_key(path: &Path) -> String {
-    fs::canonicalize(path)
+    canonicalize(path)
         .unwrap_or_else(|_| path.to_path_buf())
         .display()
         .to_string()

@@ -147,7 +147,7 @@ fn valid_id(id: &str) -> Result<()> {
 
 fn regular_path(path: &Path) -> Result<()> {
     let configured_root = root()?;
-    let root = configured_root.canonicalize()?;
+    let root = crate::support::fs::canonicalize(&configured_root)?;
     let relative = path
         .strip_prefix(&root)
         .or_else(|_| path.strip_prefix(&configured_root))
@@ -213,7 +213,7 @@ fn family_index() -> Result<FamilyIndex<Row>> {
     if !root.exists() {
         return Ok(FamilyIndex::build(Vec::new()));
     }
-    let root = root.canonicalize()?;
+    let root = crate::support::fs::canonicalize(&root)?;
     let mut rows: HashMap<String, Row> = HashMap::new();
     for entry in walkdir::WalkDir::new(&root).min_depth(3).max_depth(3) {
         let entry = entry?;
@@ -411,9 +411,9 @@ fn family_source_paths(family: &Family<Row>) -> Result<Vec<String>> {
 
 // 所有入口（包括直接传入 transcript_path）都必须留在固定会话布局内。
 fn validate_path(path: &Path) -> Result<PathBuf> {
-    let root = root()?.canonicalize()?;
+    let root = crate::support::fs::canonicalize(&root()?)?;
     regular_path(path)?;
-    let path = path.canonicalize()?;
+    let path = crate::support::fs::canonicalize(path)?;
     let relative = path
         .strip_prefix(&root)
         .context("Grok Build session is outside sessions root")?;
@@ -493,7 +493,7 @@ fn sibling(path: &Path, name: &str) -> Result<Option<PathBuf>> {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(error) => Err(error.into()),
         Ok(_) => {
-            let resolved = candidate.canonicalize()?;
+            let resolved = crate::support::fs::canonicalize(&candidate)?;
             if resolved != candidate || !resolved.is_file() {
                 bail!("Invalid Grok Build auxiliary file path");
             }

@@ -229,8 +229,8 @@ fn expand_configured_path(value: &str) -> Result<PathBuf> {
 pub(crate) fn delete_session(path: &Path) -> Result<()> {
     let sessions_root_path = sessions_root()?;
     let canonical_sessions_root =
-        fs::canonicalize(&sessions_root_path).unwrap_or(sessions_root_path);
-    let target = fs::canonicalize(path)
+        crate::support::fs::canonicalize(&sessions_root_path).unwrap_or(sessions_root_path);
+    let target = crate::support::fs::canonicalize(path)
         .with_context(|| format!("Failed to resolve Pi session {}", path.display()))?;
     if !target.starts_with(&canonical_sessions_root)
         || target.extension().and_then(|ext| ext.to_str()) != Some("jsonl")

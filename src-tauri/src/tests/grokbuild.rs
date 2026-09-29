@@ -130,7 +130,10 @@ fn grokbuild_folds_confirmed_subagents_into_parent_family() -> Result<()> {
         "{}",
         summary.title
     );
-    assert_eq!(entries[0].path, parent_path.canonicalize()?);
+    assert_eq!(
+        entries[0].path,
+        crate::support::fs::canonicalize(&parent_path)?
+    );
 
     let family_path = &entries[0].path;
     let overview = reader.parse_overview(family_path)?;
@@ -191,8 +194,9 @@ fn grokbuild_folds_confirmed_subagents_into_parent_family() -> Result<()> {
     // 折叠后的子会话仍可按 id 解析到路径，并归到同一个 family。
     assert_eq!(
         reader.resolve_path("child-a")?,
-        home.join(".grok/sessions/not-a-cwd/child-a/summary.json")
-            .canonicalize()?
+        crate::support::fs::canonicalize(
+            &home.join(".grok/sessions/not-a-cwd/child-a/summary.json")
+        )?
     );
     assert_eq!(
         reader
@@ -415,6 +419,24 @@ fn history(path: &Path) -> Result<()> {
 }
 
 #[test]
+fn grokbuild_transcript_path_has_no_verbatim_prefix() -> Result<()> {
+    let home = env::temp_dir().join(format!("reins-test-{}", Uuid::new_v4()));
+    fs::create_dir_all(&home)?;
+    let _guard = TestEnvGuard::set_home(home.as_path());
+    let path = fixture(home.as_path(), "empty")?;
+    let reader = session::reader(SourceApp::GrokBuild);
+    let summary = reader.parse_summary(&path)?;
+    // 转录文件路径直接展示给用户,Windows 上不能暴露 std canonicalize
+    // 返回的 \\?\ verbatim 前缀。
+    assert!(
+        !summary.transcript_path.starts_with(r"\\?\"),
+        "{}",
+        summary.transcript_path
+    );
+    Ok(())
+}
+
+#[test]
 fn grokbuild_summary_only_and_format_validation() -> Result<()> {
     let home = env::temp_dir().join(format!("reins-test-{}", Uuid::new_v4()));
     fs::create_dir_all(&home)?;
@@ -428,7 +450,10 @@ fn grokbuild_summary_only_and_format_validation() -> Result<()> {
         detail.summary.cwd.as_deref(),
         Some("/synthetic/project's folder")
     );
-    assert_eq!(reader.resolve_path("empty")?, path.canonicalize()?);
+    assert_eq!(
+        reader.resolve_path("empty")?,
+        crate::support::fs::canonicalize(&path)?
+    );
     assert!(reader.resolve_path("../../etc/passwd").is_err());
     let mut value: Value = serde_json::from_slice(&fs::read(&path)?)?;
     value["generated_title"] = json!("");
@@ -625,9 +650,9 @@ fn grokbuild_custom_home_is_used_for_listing_and_resolution() -> Result<()> {
     assert_eq!(reader.list_entries()?.len(), 1);
     assert_eq!(
         reader.resolve_path("custom")?,
-        custom
-            .join("sessions/not-a-cwd/custom/summary.json")
-            .canonicalize()?
+        crate::support::fs::canonicalize(
+            &custom.join("sessions/not-a-cwd/custom/summary.json")
+        )?
     );
     Ok(())
 }
