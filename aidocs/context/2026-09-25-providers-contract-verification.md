@@ -229,7 +229,7 @@
 - **`base_instructions` 降级为 legacy**：0.158.0 源码含 `promotes_legacy_base_instructions` 迁移，以及「`base_instructions` 与 `model_messages` 都缺」的报错分支；我们写的 legacy 形式被提升后生效。
 - **`model_catalog_json` 语义未变**：0.158.0 源码注释仍为 "When set, this replaces the bundled catalog for the current process"（整体替换）。
 - **新键 `model_instructions_file`**（"Optional path to a file containing model instructions"）：未来可替代「把提示词内嵌进每个目录条目」，目录文件更小、提示词单点维护；但它是配置级指令文件，对内置模型的覆盖范围需先确认，暂不改用。
-- **仍未复验**：选择器里内置模型消失/恢复的实际表现；`disable_response_storage` 被忽略后的替代机制（该键在 0.158.0 配置 schema 中同样不存在，警告属预期，见后续动作第 8 条）。
+- **仍未复验**：选择器里内置模型消失/恢复的实际表现（`disable_response_storage` 的替代机制已查明并于同日处理完毕，见后续动作第 8 条）。
 
 
 ## 处置结果
