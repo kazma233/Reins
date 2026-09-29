@@ -42,13 +42,6 @@ const {
 
 const configTargets = computed(() => configDocument.value?.config?.targets ?? []);
 const configProjects = computed(() => configDocument.value?.config?.projects ?? []);
-
-const projectsWithEnabledAgents = computed(() =>
-  configProjects.value.map((project) => ({
-    project,
-    enabledAgents: project.agents.filter((agent) => agent.enabled),
-  })),
-);
 </script>
 
 <template>
@@ -135,14 +128,14 @@ const projectsWithEnabledAgents = computed(() =>
               </div>
               <template v-if="configProjects.length">
                 <AppCard
-                  v-for="{ project, enabledAgents } in projectsWithEnabledAgents"
+                  v-for="project in configProjects"
                   :key="project.id"
                 >
                   <template #header>
                     <span class="manager-target-row__name-text">{{ project.id }}</span>
-                    <span class="manager-target-row__pill pill--on">
-                      {{ enabledAgents.length }} agents
-                    </span>
+                  </template>
+                  <template #headerMeta>
+                    <span class="manager-header-path"><strong>路径</strong>{{ project.path }}</span>
                   </template>
                   <template #ext>
                     <div class="manager-target-row__actions">
@@ -165,9 +158,6 @@ const projectsWithEnabledAgents = computed(() =>
                     </div>
                   </template>
 
-                  <div class="manager-target-row__meta">
-                    <span>{{ project.path }}</span>
-                  </div>
                   <div class="manager-project-target-paths">
                     <div
                       v-for="target in project.agents"

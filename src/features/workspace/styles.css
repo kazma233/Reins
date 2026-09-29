@@ -793,8 +793,8 @@
 }
 
 .pill--off {
-  background: #f3f4f6;
-  color: #9ca3af;
+  background: #fef3c7;
+  color: #b45309;
 }
 
 /* --- sync columns --- */
@@ -1005,11 +1005,19 @@
 /* 键名弱化、路径为主体：与 providers 卡片 meta 的键值处理一致；
    键名退出容器的等宽字体，避免短标签也显得像代码 */
 .manager-target-row__meta--paths strong,
-.manager-project-target-path__items strong {
+.manager-project-target-path__items strong,
+.manager-header-path strong {
   font-weight: 400;
   color: var(--color-muted-soft);
   margin-right: 6px;
   font-family: var(--font-base);
+}
+
+/* 卡片 header 副行的路径/主页展示：与内容区路径行同用等宽字体 */
+.manager-header-path {
+  font-family: var(--font-mono);
+  line-height: 1.45;
+  overflow-wrap: anywhere;
 }
 
 .manager-project-target-paths {
@@ -1023,7 +1031,11 @@
   display: grid;
   grid-template-columns: minmax(92px, auto) minmax(0, 1fr);
   gap: 10px;
-  align-items: start;
+  align-items: center;
+}
+
+/* 分隔线只画在行与行之间；首行上方紧邻 header 的路径副行，不再重复画线 */
+.manager-project-target-path + .manager-project-target-path {
   padding-top: 8px;
   border-top: 1px solid var(--color-hairline-soft);
 }

@@ -64,6 +64,9 @@ const targetItemById = computed(() =>
         新增于 {{ createdAtLabel }}
       </span>
     </template>
+    <template #headerMeta>
+      <span v-if="mcp.homepage" class="manager-header-path"><strong>主页</strong>{{ mcp.homepage }}</span>
+    </template>
     <template #ext>
       <button
         class="secondary-button"
@@ -84,7 +87,6 @@ const targetItemById = computed(() =>
     </template>
 
     <p class="manager-skill-description">{{ summary }}</p>
-    <p v-if="mcp.homepage" class="manager-skill-description">主页 · {{ mcp.homepage }}</p>
     <!-- 全局 target 与项目分组各占一行：项目按钮显示的是项目名，与全局的
          agent 名混排时难以区分 -->
     <div v-if="targetIds.length > 0" class="manager-target-buttons-group">
