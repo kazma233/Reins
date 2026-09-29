@@ -82,6 +82,17 @@ onMounted(() => {
   }
 });
 
+// 列表只展示消耗总量：四项之和是会话经过模型的全部 token，
+// 分项明细留在详情页。
+function totalConsumedTokens(usage: NonNullable<SessionSummary["tokenUsage"]>): number {
+  return (
+    usage.inputTokens +
+    usage.outputTokens +
+    usage.cacheReadTokens +
+    usage.cacheWriteTokens
+  );
+}
+
 function handleScroll(event: Event) {
   if (props.loading || props.loadingMore || !props.hasMore) {
     return;
@@ -185,17 +196,7 @@ function handleReverseClick() {
               v-if="session.tokenUsage"
               class="session-token-usage"
             >
-              <span>输入 {{ formatTokenCount(session.tokenUsage.inputTokens) }}</span>
-              <span>输出 {{ formatTokenCount(session.tokenUsage.outputTokens) }}</span>
-              <span>
-                缓存
-                {{
-                  formatTokenCount(
-                    session.tokenUsage.cacheReadTokens +
-                      session.tokenUsage.cacheWriteTokens
-                  )
-                }}
-              </span>
+              <span>消耗 {{ formatTokenCount(totalConsumedTokens(session.tokenUsage)) }}</span>
             </small>
           </div>
         </button>
