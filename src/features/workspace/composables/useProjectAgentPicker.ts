@@ -6,13 +6,17 @@ import {
   type ProjectAgentPickerDialogState,
 } from "../model";
 import type { AgentTargetId, TargetConfigView } from "../types";
-import { extractErrorMessage } from "@shared/lib/errors";
 import { useWorkspaceNotice } from "./useWorkspaceNotice";
 import { useWorkspaceState } from "./useWorkspaceState";
 
 export type ProjectTargetEntry = {
   id: string;
   agents: TargetConfigView[];
+};
+
+export type ProjectAgentPickerDiff = {
+  toAdd: AgentTargetId[];
+  toRemove: AgentTargetId[];
 };
 
 export function useProjectAgentPicker() {
@@ -58,6 +62,24 @@ export function useProjectAgentPicker() {
     return set;
   });
 
+  // 弹窗展示的是期望终态，这里算出终态与现状的差异；顺序跟随项目 agents
+  // 列表，确认弹窗里的展示顺序与编辑弹窗的按钮一致。
+  const pickerPendingDiff = computed<ProjectAgentPickerDiff>(() => {
+    const state = projectAgentPickerDialog;
+    const agents = projectAgentsByProjectId.value.get(state.projectId ?? "") ?? [];
+    const desired = new Set(state.desiredAgentIds);
+    const toAdd: AgentTargetId[] = [];
+    const toRemove: AgentTargetId[] = [];
+    for (const agent of agents) {
+      const compositeId = `${state.projectId}:${agent.id}` as AgentTargetId;
+      const isDesired = desired.has(compositeId);
+      const isInstalled = pickerInstalledAgentIds.value.has(compositeId);
+      if (isDesired && !isInstalled) toAdd.push(compositeId);
+      if (!isDesired && isInstalled) toRemove.push(compositeId);
+    }
+    return { toAdd, toRemove };
+  });
+
   function openProjectAgentPickerForMcp(serverName: string, projectId: string) {
     const agents = projectAgentsByProjectId.value.get(projectId) ?? [];
     if (agents.length === 0) return;
@@ -68,54 +90,81 @@ export function useProjectAgentPicker() {
     projectAgentPickerDialog.contextName = serverName;
     projectAgentPickerDialog.projectId = projectId;
     projectAgentPickerDialog.serverName = serverName;
+    projectAgentPickerDialog.desiredAgentIds = [...pickerInstalledAgentIds.value];
   }
 
   function closeProjectAgentPickerDialog() {
     projectAgentPickerDialog.open = false;
     projectAgentPickerDialog.loading = false;
-    projectAgentPickerDialog.selectedAgentId = null;
+    projectAgentPickerDialog.confirmOpen = false;
+    projectAgentPickerDialog.desiredAgentIds = [];
   }
 
-  function setProjectAgentPickerSelectedAgent(agentId: AgentTargetId) {
-    projectAgentPickerDialog.selectedAgentId = agentId;
-  }
-
-  async function handleConfirmProjectAgentPicker(agentId: AgentTargetId) {
+  function toggleProjectAgentPickerAgent(agentId: AgentTargetId) {
     const state = projectAgentPickerDialog;
-    if (state.loading || !state.projectId) return;
+    if (!state.projectId) return;
+    const compositeId = `${state.projectId}:${agentId}` as AgentTargetId;
+    state.desiredAgentIds = state.desiredAgentIds.includes(compositeId)
+      ? state.desiredAgentIds.filter((id) => id !== compositeId)
+      : [...state.desiredAgentIds, compositeId];
+  }
 
-    const compositeTargetId = `${state.projectId}:${agentId}` as AgentTargetId;
+  function openProjectAgentPickerConfirm() {
+    projectAgentPickerDialog.confirmOpen = true;
+  }
 
-    // MCP changes are reversible config writes, so confirm inline without a
-    // second dialog.
-    projectAgentPickerDialog.loading = true;
+  function closeProjectAgentPickerConfirm() {
+    projectAgentPickerDialog.confirmOpen = false;
+  }
 
+  async function handleApplyProjectAgentPicker() {
+    const state = projectAgentPickerDialog;
+    if (state.loading || !state.serverName) return;
+    const { toAdd, toRemove } = pickerPendingDiff.value;
+    if (toAdd.length === 0 && toRemove.length === 0) {
+      closeProjectAgentPickerDialog();
+      return;
+    }
+
+    state.loading = true;
+
+    // 单目标命令没有批量契约，逐个写入；单个失败不中断其余目标，
+    // 结束后以 reload 回来的实际状态为准，失败目标在 notice 中点名。
+    const failed: AgentTargetId[] = [];
     try {
-      if (state.serverName) {
-        const targetItem =
-          inspection.value?.mcps
-            .find((item) => item.name === state.serverName)
-            ?.targets.find((target) => target.targetId === compositeTargetId) ?? null;
-        const installed = targetItem?.state === "present";
-        if (installed) {
-          await removeMcpFromTarget(state.serverName, compositeTargetId);
-          showNotice(
-            `已从 ${formatTargetLabel(compositeTargetId)} 卸载 MCP ${state.contextName}。`,
-            "success",
-          );
-        } else {
-          await applyMcpToTarget(state.serverName, compositeTargetId);
-          showNotice(
-            `已应用 MCP ${state.contextName} 到 ${formatTargetLabel(compositeTargetId)}。`,
-            "success",
-          );
+      for (const targetId of toRemove) {
+        try {
+          await removeMcpFromTarget(state.serverName, targetId);
+        } catch {
+          failed.push(targetId);
         }
       }
-      closeProjectAgentPickerDialog();
-      await reloadWorkspaceState({ preserveNotice: true });
-    } catch (error) {
-      showNotice(extractErrorMessage(error, "同步项目目标失败"), "error");
-      projectAgentPickerDialog.loading = false;
+      for (const targetId of toAdd) {
+        try {
+          await applyMcpToTarget(state.serverName, targetId);
+        } catch {
+          failed.push(targetId);
+        }
+      }
+    } finally {
+      state.loading = false;
+      state.confirmOpen = false;
+      state.open = false;
+      state.desiredAgentIds = [];
+    }
+
+    await reloadWorkspaceState({ preserveNotice: true });
+
+    if (failed.length > 0) {
+      showNotice(
+        `部分目标同步失败：${failed.map((id) => formatTargetLabel(id)).join("、")}`,
+        "error",
+      );
+    } else {
+      showNotice(
+        `已同步 MCP ${state.contextName}：新增 ${toAdd.length} 个、移除 ${toRemove.length} 个。`,
+        "success",
+      );
     }
   }
 
@@ -124,9 +173,12 @@ export function useProjectAgentPicker() {
     enabledProjectEntries,
     projectAgentsByProjectId,
     pickerInstalledAgentIds,
+    pickerPendingDiff,
     openProjectAgentPickerForMcp,
     closeProjectAgentPickerDialog,
-    setProjectAgentPickerSelectedAgent,
-    handleConfirmProjectAgentPicker,
+    toggleProjectAgentPickerAgent,
+    openProjectAgentPickerConfirm,
+    closeProjectAgentPickerConfirm,
+    handleApplyProjectAgentPicker,
   };
 }

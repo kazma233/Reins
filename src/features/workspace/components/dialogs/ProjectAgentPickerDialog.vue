@@ -2,6 +2,7 @@
 import { computed } from "vue";
 import DialogShell from "@shared/ui/DialogShell.vue";
 import type { AgentTargetId, TargetConfigView } from "../../types";
+import type { ProjectAgentPickerDiff } from "../../composables/useProjectAgentPicker";
 
 type ProjectAgentPickerDialogProps = {
   open: boolean;
@@ -10,106 +11,35 @@ type ProjectAgentPickerDialogProps = {
   contextName: string;
   projectId: string;
   installedAgentIds: Set<AgentTargetId>;
-  selectedAgentId: AgentTargetId | null;
+  // 按钮展示的是期望终态而非现状：在终态集合里的按钮呈已应用样式
+  desiredAgentIds: AgentTargetId[];
+  pendingDiff: ProjectAgentPickerDiff;
 };
 
 const props = defineProps<ProjectAgentPickerDialogProps>();
 
 const emit = defineEmits<{
   close: [];
-  confirm: [agentId: AgentTargetId];
-  selectedAgentChange: [agentId: AgentTargetId];
+  toggleAgent: [agentId: AgentTargetId];
+  apply: [];
 }>();
 
-type PickerTone = "installed" | "warning" | "idle";
-
-const TONE_BUTTON_CLASS: Record<PickerTone, string> = {
-  installed: "is-installed",
-  warning: "is-warning",
-  idle: "",
-};
-
-const TONE_PILL_CLASS: Record<PickerTone, string> = {
-  installed: "success-pill",
-  warning: "danger-pill",
-  idle: "",
-};
-
-function stateLabel(state: string | undefined): { label: string; tone: PickerTone } {
-  if (!state || state === "missing") {
-    return { label: "未安装", tone: "idle" };
-  }
-  if (state === "installed" || state === "present") {
-    return { label: "已安装", tone: "installed" };
-  }
-  if (state === "conflict" || state === "broken" || state === "error") {
-    return { label: "异常", tone: "warning" };
-  }
-  return { label: "未就绪", tone: "idle" };
-}
-
-const effectiveSelected = computed<AgentTargetId | null>(
-  () => props.selectedAgentId ?? props.agents[0]?.id ?? null,
-);
-const effectiveCompositeId = computed<AgentTargetId | null>(() =>
-  effectiveSelected.value
-    ? (`${props.projectId}:${effectiveSelected.value}` as AgentTargetId)
-    : null,
-);
-const isInstalledSelected = computed(
-  () =>
-    effectiveCompositeId.value !== null &&
-    props.installedAgentIds.has(effectiveCompositeId.value),
-);
-const canConfirm = computed(
-  () => effectiveSelected.value !== null && !props.loading,
-);
-const confirmButtonClassName = computed(() =>
-  isInstalledSelected.value ? "danger-button" : "primary-button",
-);
-
-const title = computed(
-  () => `${props.contextName} · MCP 项目目标:${props.projectId}`,
-);
+const title = `${props.contextName} · MCP 项目目标:${props.projectId}`;
 const eyebrow = "MCP · Project";
-const confirmLabel = computed(() => {
-  if (!effectiveSelected.value) return "请选择 agent";
-  const compositeId = `${props.projectId}:${effectiveSelected.value}` as AgentTargetId;
-  const alreadyInstalled = props.installedAgentIds.has(compositeId);
-  return alreadyInstalled
-    ? `从 ${effectiveSelected.value} 移除 MCP`
-    : `应用 MCP 到 ${effectiveSelected.value}`;
-});
 
-function agentStateInfo(agent: TargetConfigView) {
-  const compositeId = `${props.projectId}:${agent.id}` as AgentTargetId;
-  const state = props.installedAgentIds.has(compositeId) ? "installed" : undefined;
-  return stateLabel(state);
-}
+const canApply = computed(
+  () => props.pendingDiff.toAdd.length > 0 || props.pendingDiff.toRemove.length > 0,
+);
 
 function agentButtonClass(agent: TargetConfigView): string {
-  const isSelected = effectiveSelected.value === agent.id;
-  const stateInfo = agentStateInfo(agent);
-  const stateClass = TONE_BUTTON_CLASS[stateInfo.tone];
+  const compositeId = `${props.projectId}:${agent.id}` as AgentTargetId;
   return [
     "secondary-button",
     "manager-target-button",
-    isSelected && "is-active",
-    stateClass,
+    props.desiredAgentIds.includes(compositeId) && "is-installed",
   ]
     .filter(Boolean)
     .join(" ");
-}
-
-function agentPillClass(agent: TargetConfigView): string {
-  const stateInfo = agentStateInfo(agent);
-  const pillToneClass = TONE_PILL_CLASS[stateInfo.tone];
-  return ["pill", pillToneClass].filter(Boolean).join(" ");
-}
-
-function handleConfirm() {
-  if (!effectiveSelected.value) return;
-  emit("confirm", effectiveSelected.value);
 }
 </script>
 
@@ -125,18 +55,18 @@ function handleConfirm() {
   >
     <template #actions>
       <button
-        :class="confirmButtonClassName"
-        :disabled="!canConfirm"
+        class="primary-button"
+        :disabled="!canApply || loading"
         type="button"
-        @click="handleConfirm"
+        @click="$emit('apply')"
       >
-        {{ confirmLabel }}
+        应用
       </button>
     </template>
 
     <div class="manager-stack">
       <p class="manager-field__hint">
-        同步到项目内的目标,会写入该项目目录下的 MCP 配置文件。
+        展示的是应用后的目标状态：亮起的 agent 将安装该 MCP，点击按钮可切换。应用前会先展示变更预览。
       </p>
       <div class="manager-target-buttons">
         <button
@@ -145,12 +75,9 @@ function handleConfirm() {
           :class="agentButtonClass(agent)"
           :disabled="loading"
           type="button"
-          @click="$emit('selectedAgentChange', agent.id)"
+          @click="$emit('toggleAgent', agent.id)"
         >
           <span class="manager-target-button__label">{{ agent.id }}</span>
-          <span :class="agentPillClass(agent)">
-            {{ agentStateInfo(agent).label }}
-          </span>
         </button>
       </div>
     </div>

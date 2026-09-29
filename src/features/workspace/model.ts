@@ -288,7 +288,9 @@ export type ProjectAgentPickerDialogState = {
   contextName: string;
   projectId: string | null;
   serverName: string | null;
-  selectedAgentId: AgentTargetId | null;
+  // 期望终态：应用后应安装该 mcp 的复合目标 id（projectId:agentId）
+  desiredAgentIds: AgentTargetId[];
+  confirmOpen: boolean;
 };
 
 export const DEFAULT_PROJECT_AGENT_PICKER_DIALOG: ProjectAgentPickerDialogState = {
@@ -297,7 +299,8 @@ export const DEFAULT_PROJECT_AGENT_PICKER_DIALOG: ProjectAgentPickerDialogState 
   contextName: "",
   projectId: null,
   serverName: null,
-  selectedAgentId: null,
+  desiredAgentIds: [],
+  confirmOpen: false,
 };
 
 export function createProjectAgentPickerDialogState(): ProjectAgentPickerDialogState {

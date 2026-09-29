@@ -8,7 +8,7 @@ import { useMcpMutations } from "../../composables/useMcpMutations";
 import { useProjectAgentPicker } from "../../composables/useProjectAgentPicker";
 import { useWorkspaceState } from "../../composables/useWorkspaceState";
 import { formatTargetLabel } from "../../model";
-import type { McpInspection } from "../../types";
+import type { AgentTargetId, McpInspection } from "../../types";
 
 const { configDocument, inspection, runningAction } = useWorkspaceState();
 
@@ -39,10 +39,13 @@ const {
   enabledProjectEntries,
   projectAgentsByProjectId,
   pickerInstalledAgentIds,
+  pickerPendingDiff,
   openProjectAgentPickerForMcp,
   closeProjectAgentPickerDialog,
-  setProjectAgentPickerSelectedAgent,
-  handleConfirmProjectAgentPicker,
+  toggleProjectAgentPickerAgent,
+  openProjectAgentPickerConfirm,
+  closeProjectAgentPickerConfirm,
+  handleApplyProjectAgentPicker,
 } = useProjectAgentPicker();
 
 const configMcps = computed(() => configDocument.value?.config?.mcps ?? []);
@@ -62,6 +65,18 @@ const pickerAgents = computed(() =>
     : [],
 );
 const pickerProjectId = computed(() => projectAgentPickerDialog.projectId ?? "");
+
+// 确认弹窗里与按钮一致只显示 agent 名，省掉项目前缀
+function pickerAgentLabel(targetId: AgentTargetId) {
+  const colonPos = targetId.indexOf(":");
+  return colonPos >= 0 ? targetId.substring(colonPos + 1) : targetId;
+}
+
+const pickerApplyDanger = computed(
+  () =>
+    pickerPendingDiff.value.toAdd.length === 0 &&
+    pickerPendingDiff.value.toRemove.length > 0,
+);
 </script>
 
 <template>
@@ -185,9 +200,54 @@ const pickerProjectId = computed(() => projectAgentPickerDialog.projectId ?? "")
     :context-name="projectAgentPickerDialog.contextName"
     :project-id="pickerProjectId"
     :installed-agent-ids="pickerInstalledAgentIds"
-    :selected-agent-id="projectAgentPickerDialog.selectedAgentId"
+    :desired-agent-ids="projectAgentPickerDialog.desiredAgentIds"
+    :pending-diff="pickerPendingDiff"
     @close="closeProjectAgentPickerDialog"
-    @confirm="handleConfirmProjectAgentPicker"
-    @selected-agent-change="setProjectAgentPickerSelectedAgent"
+    @toggle-agent="toggleProjectAgentPickerAgent"
+    @apply="openProjectAgentPickerConfirm"
   />
+
+  <ConfirmDialog
+    :open="projectAgentPickerDialog.confirmOpen"
+    dialog-class-name="manager-import-dialog"
+    eyebrow="MCP · Project"
+    :title="`应用 MCP ${projectAgentPickerDialog.contextName} 到 ${pickerProjectId}`"
+    title-id="project-agent-apply-dialog-title"
+    cancel-label="取消"
+    :confirm-button-class-name="pickerApplyDanger ? 'danger-button' : 'primary-button'"
+    :confirm-label="projectAgentPickerDialog.loading ? '应用中...' : '确认应用'"
+    :loading="projectAgentPickerDialog.loading || runningAction"
+    description="确认后会将变更写入各 agent 目录下的 MCP 配置文件。"
+    @close="closeProjectAgentPickerConfirm"
+    @confirm="handleApplyProjectAgentPicker"
+  >
+    <div class="manager-stack">
+      <div
+        v-if="pickerPendingDiff.toAdd.length > 0"
+        class="manager-target-buttons-group"
+      >
+        <span class="manager-target-buttons-group__label">新增</span>
+        <div class="manager-target-buttons">
+          <span
+            v-for="id in pickerPendingDiff.toAdd"
+            :key="id"
+            class="pill success-pill"
+          >{{ pickerAgentLabel(id) }}</span>
+        </div>
+      </div>
+      <div
+        v-if="pickerPendingDiff.toRemove.length > 0"
+        class="manager-target-buttons-group"
+      >
+        <span class="manager-target-buttons-group__label">移除</span>
+        <div class="manager-target-buttons">
+          <span
+            v-for="id in pickerPendingDiff.toRemove"
+            :key="id"
+            class="pill danger-pill"
+          >{{ pickerAgentLabel(id) }}</span>
+        </div>
+      </div>
+    </div>
+  </ConfirmDialog>
 </template>
