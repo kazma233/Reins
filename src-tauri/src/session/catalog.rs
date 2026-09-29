@@ -7,7 +7,8 @@ use anyhow::{Context, Result, anyhow};
 use crate::state::session_index::{SessionFileCatalog, SessionIndexState};
 
 use super::{
-    SessionPage, SessionRefreshResult, SessionSummary, SourceApp, SourceStatus, SummaryAccumulator,
+    SessionPage, SessionRefreshResult, SessionSummary, SessionTokenUsage, SourceApp, SourceStatus,
+    SummaryAccumulator,
 };
 
 pub(crate) fn detect_sources_inner(state: &SessionIndexState) -> Result<Vec<SourceStatus>> {
@@ -205,7 +206,24 @@ pub(crate) fn build_summary(
         transcript_path: path.display().to_string(),
         created_at: summary.created_at,
         updated_at: summary.updated_at,
+        token_usage: summary.token_usage,
     })
+}
+
+// 各来源读取器先把自家 usage 字段归一,再经此合并;None 表示尚未见过任何
+// usage 记录,与"字段缺失按 0 处理"区分开。
+pub(crate) fn merge_token_usage(
+    total: &mut Option<SessionTokenUsage>,
+    next: SessionTokenUsage,
+) {
+    if let Some(total) = total.as_mut() {
+        total.input_tokens += next.input_tokens;
+        total.output_tokens += next.output_tokens;
+        total.cache_read_tokens += next.cache_read_tokens;
+        total.cache_write_tokens += next.cache_write_tokens;
+    } else {
+        *total = Some(next);
+    }
 }
 
 pub(crate) fn update_summary_timestamp(

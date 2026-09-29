@@ -21,13 +21,13 @@ import {
 } from "../timeline-group";
 import { extractErrorMessage } from "@shared/lib/errors";
 import { createRequestGuard } from "@shared/lib/request-guard";
-import { formatTimestamp } from "@shared/lib/format";
+import { formatTimestamp, formatTokenCount } from "@shared/lib/format";
 import { canDeleteSession } from "../model";
 import { formatSourceAppName } from "../source-app";
 import SessionDetailDialogs from "./SessionDetailDialogs.vue";
 import MessageTimeline from "./MessageTimeline.vue";
 import EventTimeline from "./EventTimeline.vue";
-import type { SessionAgent, SessionOverview } from "../types";
+import type { SessionAgent, SessionOverview, SessionTokenUsage } from "../types";
 import SubagentGroupDialog from "./SubagentGroupDialog.vue";
 import "./session-detail.css";
 
@@ -41,6 +41,28 @@ const props = defineProps<SessionDetailProps>();
 const emit = defineEmits<{
   deleted: [];
 }>();
+
+// 详情页 token 数用缩写+千分位精确值并列,与列表缩写口径一致。
+function exactTokens(value: number): string {
+  return value.toLocaleString("zh-CN");
+}
+
+// 缓存命中率 = 缓存读 / (输入 + 缓存读),与 pi 的 CH、magpie 的 hit rate 同口径。
+// 整数百分比四舍五入会把 99.6% 显示成假 100%,故除精确命中外按一位小数向下取整。
+function cacheHitRate(usage: SessionTokenUsage): string {
+  const prompt = usage.inputTokens + usage.cacheReadTokens;
+  if (prompt === 0) {
+    return "—";
+  }
+
+  const ratio = usage.cacheReadTokens / prompt;
+  if (ratio === 1) {
+    return "100%";
+  }
+
+  const percent = Math.floor(ratio * 1000) / 10;
+  return Number.isInteger(percent) ? `${percent}%` : `${percent.toFixed(1)}%`;
+}
 
 // The scroll container ref is provided by SessionWorkspace so we can attach
 // passive scroll listeners for infinite-load behaviour.
@@ -437,6 +459,32 @@ watch(
         <div class="summary-grid__wide">
           <dt>工作目录</dt>
           <dd>{{ overview.summary.cwd ?? "未知" }}</dd>
+        </div>
+        <div v-if="overview.summary.tokenUsage" class="summary-grid__wide">
+          <dt>Token 用量</dt>
+          <dd class="token-usage-detail">
+            <span>命中率 {{ cacheHitRate(overview.summary.tokenUsage) }}</span>
+            <span>
+              输入
+              {{ formatTokenCount(overview.summary.tokenUsage.inputTokens) }}
+              ({{ exactTokens(overview.summary.tokenUsage.inputTokens) }})
+            </span>
+            <span>
+              输出
+              {{ formatTokenCount(overview.summary.tokenUsage.outputTokens) }}
+              ({{ exactTokens(overview.summary.tokenUsage.outputTokens) }})
+            </span>
+            <span>
+              缓存读
+              {{ formatTokenCount(overview.summary.tokenUsage.cacheReadTokens) }}
+              ({{ exactTokens(overview.summary.tokenUsage.cacheReadTokens) }})
+            </span>
+            <span>
+              缓存写
+              {{ formatTokenCount(overview.summary.tokenUsage.cacheWriteTokens) }}
+              ({{ exactTokens(overview.summary.tokenUsage.cacheWriteTokens) }})
+            </span>
+          </dd>
         </div>
         <div class="summary-grid__wide">
           <dt>转录文件</dt>

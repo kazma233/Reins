@@ -11,8 +11,8 @@ use serde_json::{Value, json};
 
 use super::{
     ContentBlock, SessionAgent, SessionEvent, SessionEventPage, SessionFileEntry, SessionMessage,
-    SessionMessagePage, SessionOverview, SessionReader, SessionSummary, SourceApp,
-    SummaryAccumulator, TimelineCacheEntry, TimelineRecord,
+    SessionMessagePage, SessionOverview, SessionReader, SessionSummary, SessionTokenUsage,
+    SourceApp, SummaryAccumulator, TimelineCacheEntry, TimelineRecord,
     family_index::{Family, FamilyIndexCacheEntry, FamilyRow},
     family_timeline::{FamilyAgentLabel, cached_family_events, cached_family_messages},
 };
@@ -314,6 +314,10 @@ fn parse_session_index_row(path: &Path) -> Result<ClaudeSessionRow> {
         let value = super::parse_json_line(&line?)?;
         super::update_summary_timestamp(&mut summary, &value);
 
+        if super::json_type(&value) == Some("assistant") {
+            accumulate_claude_usage(&mut summary.token_usage, &value["message"]);
+        }
+
         if summary.session_id.is_none() {
             summary.session_id = super::json_string(&value, &["sessionId"]);
         }
@@ -347,6 +351,10 @@ fn parse_full_session_summary(path: &Path) -> Result<SessionSummary> {
         let value = super::parse_json_line(&line?)?;
         super::update_summary_timestamp(&mut summary, &value);
 
+        if super::json_type(&value) == Some("assistant") {
+            accumulate_claude_usage(&mut summary.token_usage, &value["message"]);
+        }
+
         if summary.session_id.is_none() {
             summary.session_id = super::json_string(&value, &["sessionId"]);
         }
@@ -363,6 +371,26 @@ fn parse_full_session_summary(path: &Path) -> Result<SessionSummary> {
     }
 
     super::build_summary(SourceApp::ClaudeCode, path, summary)
+}
+
+// 每条 assistant 行携带该次 API 调用的增量 usage,逐条相加;同文件内嵌的
+// sidechain 消息与 subagents/ 目录下的子代理文件都是 assistant 行,按
+// "会话总消耗"口径一并计入。
+fn accumulate_claude_usage(total: &mut Option<SessionTokenUsage>, message: &Value) {
+    let Some(usage) = message.get("usage") else {
+        return;
+    };
+
+    super::merge_token_usage(
+        total,
+        SessionTokenUsage {
+            input_tokens: super::json_u64(usage, "input_tokens").unwrap_or_default(),
+            output_tokens: super::json_u64(usage, "output_tokens").unwrap_or_default(),
+            cache_read_tokens: super::json_u64(usage, "cache_read_input_tokens").unwrap_or_default(),
+            cache_write_tokens: super::json_u64(usage, "cache_creation_input_tokens")
+                .unwrap_or_default(),
+        },
+    );
 }
 
 fn is_root_transcript(path: &Path) -> bool {
@@ -622,6 +650,9 @@ fn cached_path_summary(path: &Path) -> Result<SessionSummary> {
 fn cached_family_summary(family: &ClaudeSessionFamily) -> Result<SessionSummary> {
     let mut summary = cached_path_summary(&family.root.path)?;
     family.apply_summary_aggregates(&mut summary);
+    // 覆盖为 family 全体成员之和:路径级缓存只含 root 文件,子代理文件的
+    // 消耗在各自索引行里。
+    summary.token_usage = family.sum_token_usage(|row| row.summary.token_usage);
     Ok(summary)
 }
 

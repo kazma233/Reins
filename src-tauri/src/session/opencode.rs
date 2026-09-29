@@ -9,8 +9,8 @@ use serde_json::{Value, json};
 
 use super::{
     ContentBlock, SessionEvent, SessionEventPage, SessionFileEntry, SessionMessage,
-    SessionMessagePage, SessionOverview, SessionReader, SessionSummary, SourceApp,
-    TimelineCacheEntry,
+    SessionMessagePage, SessionOverview, SessionReader, SessionSummary, SessionTokenUsage,
+    SourceApp, TimelineCacheEntry,
     family_index::{Family, FamilyIndexCacheEntry, FamilyRow},
     family_timeline::{
         FamilyAgentLabel, cached_family_events, cached_family_messages, family_agents,
@@ -25,6 +25,8 @@ struct OpenCodeSessionRow {
     title: String,
     time_created: i64,
     time_updated: i64,
+    // 一次 GROUP BY 查询按 session_id 预聚合,避免列表逐会话全表扫。
+    token_usage: Option<SessionTokenUsage>,
 }
 
 type OpenCodeSessionFamily = Family<OpenCodeSessionRow>;
@@ -238,6 +240,7 @@ fn open_connection() -> Result<Connection> {
 
 fn list_session_rows() -> Result<Vec<OpenCodeSessionRow>> {
     let connection = open_connection()?;
+    let token_usages = session_token_usages(&connection)?;
     let mut statement = connection.prepare(
         "SELECT id, parent_id, directory, title, time_created, time_updated FROM session_v2 ORDER BY time_updated DESC",
     )?;
@@ -246,6 +249,7 @@ fn list_session_rows() -> Result<Vec<OpenCodeSessionRow>> {
     let rows = statement.query_map([], |row| {
         let id: String = row.get(0)?;
         let title: Option<String> = row.get(3)?;
+        let token_usage = token_usages.get(&id).copied();
         Ok(OpenCodeSessionRow {
             title: title
                 .filter(|title| !title.is_empty())
@@ -255,11 +259,54 @@ fn list_session_rows() -> Result<Vec<OpenCodeSessionRow>> {
             directory: row.get(2)?,
             time_created: row.get(4)?,
             time_updated: row.get(5)?,
+            token_usage,
         })
     })?;
 
     rows.collect::<std::result::Result<Vec<_>, _>>()
         .context("Failed to read OpenCode sessions")
+}
+
+// assistant 消息的 data.tokens 是每次调用的增量,按会话求和;reasoning 与
+// output 在 OpenCode 里分列存储,输出侧相加才与其他来源口径一致。SQLite 的
+// NULL 会传染加法,reasoning 缺失的行经 COALESCE 按 0 计。
+fn session_token_usages(connection: &Connection) -> Result<HashMap<String, SessionTokenUsage>> {
+    let mut statement = connection
+        .prepare(
+            "SELECT session_id,
+                    COALESCE(SUM(json_extract(data, '$.tokens.input')), 0),
+                    COALESCE(SUM(json_extract(data, '$.tokens.output')), 0)
+                        + COALESCE(SUM(json_extract(data, '$.tokens.reasoning')), 0),
+                    COALESCE(SUM(json_extract(data, '$.tokens.cache.read')), 0),
+                    COALESCE(SUM(json_extract(data, '$.tokens.cache.write')), 0)
+             FROM session_message
+             WHERE type = 'assistant'
+             GROUP BY session_id",
+        )
+        .context("Failed to prepare OpenCode token usage query")?;
+
+    let rows = statement
+        .query_map([], |row| {
+            let session_id: String = row.get(0)?;
+            // SUM 对无匹配行为返回 NULL,按 0 处理;负值理论上不出现,钳到 0。
+            let usage_column =
+                |index: usize| -> rusqlite::Result<u64> {
+                    Ok(row.get::<_, Option<i64>>(index)?.unwrap_or_default().max(0) as u64)
+                };
+            Ok((
+                session_id,
+                SessionTokenUsage {
+                    input_tokens: usage_column(1)?,
+                    output_tokens: usage_column(2)?,
+                    cache_read_tokens: usage_column(3)?,
+                    cache_write_tokens: usage_column(4)?,
+                },
+            ))
+        })
+        .context("Failed to read OpenCode token usages")?;
+
+    rows.collect::<std::result::Result<HashMap<_, _>, _>>()
+        .context("Failed to read OpenCode token usages")
 }
 
 fn list_session_families() -> Result<Vec<OpenCodeSessionFamily>> {
@@ -440,6 +487,7 @@ fn family_summary(family: &OpenCodeSessionFamily) -> SessionSummary {
         transcript_path: session_path(&family.root.id).display().to_string(),
         created_at: Some(family_created_at(family)),
         updated_at: Some(family_updated_at(family)),
+        token_usage: family.sum_token_usage(|row| row.token_usage),
     }
 }
 

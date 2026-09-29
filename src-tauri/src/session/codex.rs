@@ -10,8 +10,8 @@ use serde_json::{Value, json};
 
 use super::{
     ContentBlock, SessionAgent, SessionEvent, SessionEventPage, SessionFileEntry, SessionMessage,
-    SessionMessagePage, SessionOverview, SessionReader, SessionSummary, SourceApp,
-    SummaryAccumulator, TimelineCacheEntry, TimelineRecord,
+    SessionMessagePage, SessionOverview, SessionReader, SessionSummary, SessionTokenUsage,
+    SourceApp, SummaryAccumulator, TimelineCacheEntry, TimelineRecord,
     family_index::{Family, FamilyIndexCacheEntry, FamilyRow},
     family_timeline::{FamilyAgentLabel, cached_family_events, cached_family_messages},
 };
@@ -359,11 +359,40 @@ fn parse_full_session_summary(path: &Path) -> Result<SessionSummary> {
                     .cwd
                     .or_else(|| super::json_string(payload, &["cwd"]));
             }
+            Some("event_msg") => {
+                let payload = &value["payload"];
+
+                if super::json_string(payload, &["type"]).as_deref() == Some("token_count") {
+                    // total_token_usage 是本文件开跑以来的累计值而非增量,
+                    // 只认最后一条,按增量求和会把同一消耗重复计入。
+                    if let Some(usage) = payload
+                        .get("info")
+                        .and_then(|info| info.get("total_token_usage"))
+                        .and_then(codex_cumulative_usage)
+                    {
+                        summary.token_usage = Some(usage);
+                    }
+                }
+            }
             _ => {}
         }
     }
 
     super::build_summary(SourceApp::Codex, path, summary)
+}
+
+// Codex 的 input_tokens 含缓存命中部分,扣除后与其他来源的"新输入"口径
+// 对齐;output_tokens 本身已含 reasoning。
+fn codex_cumulative_usage(usage: &Value) -> Option<SessionTokenUsage> {
+    let input = super::json_u64(usage, "input_tokens")?;
+    let cached = super::json_u64(usage, "cached_input_tokens").unwrap_or_default();
+
+    Some(SessionTokenUsage {
+        input_tokens: input.saturating_sub(cached),
+        output_tokens: super::json_u64(usage, "output_tokens").unwrap_or_default(),
+        cache_read_tokens: cached,
+        cache_write_tokens: super::json_u64(usage, "cache_write_input_tokens").unwrap_or_default(),
+    })
 }
 
 fn list_session_rows() -> Result<Vec<CodexSessionRow>> {
@@ -538,6 +567,17 @@ fn cached_path_summary(path: &Path) -> Result<SessionSummary> {
 fn cached_family_summary(family: &CodexSessionFamily) -> Result<SessionSummary> {
     let mut summary = cached_path_summary(&family.root.path)?;
     family.apply_summary_aggregates(&mut summary);
+
+    // 索引行只读到首行 session_meta 即停,成员 usage 只能经路径级缓存取
+    // 整文件解析结果;resume 段与子代理线程的消耗并入 family 统计。
+    let mut total = None;
+    for row in &family.members {
+        if let Some(usage) = cached_path_summary(&row.path)?.token_usage {
+            super::merge_token_usage(&mut total, usage);
+        }
+    }
+    summary.token_usage = total;
+
     Ok(summary)
 }
 

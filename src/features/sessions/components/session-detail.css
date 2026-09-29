@@ -103,6 +103,14 @@
   display: none;
 }
 
+/* token 用量四项并排,窄面板下按项换行(覆盖 dd 的 nowrap 防溢出) */
+.summary-grid dd.token-usage-detail {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 14px;
+  font-variant-numeric: tabular-nums;
+}
+
 .skeleton-card .summary-grid > div {
   flex: 0 1 180px;
   flex-direction: column;

@@ -10,7 +10,8 @@ use serde_json::{Value, json};
 
 use super::{
     ContentBlock, SessionEvent, SessionEventPage, SessionFileEntry, SessionMessage,
-    SessionMessagePage, SessionOverview, SessionReader, SessionSummary, SourceApp,
+    SessionMessagePage, SessionOverview, SessionReader, SessionSummary, SessionTokenUsage,
+    SourceApp,
 };
 
 use super::family_index::{Family, FamilyIndex, FamilyRow};
@@ -43,6 +44,27 @@ struct Summary {
     updated_at: String,
     attempt_id: Option<String>,
     session_kind: Option<String>,
+}
+
+// Grok CLI 落盘的会话目录 usage.json:session 是全轮 turn_completed 的累计
+// 汇总,turns/modelUsage 只是切片。旧版本会话没有该文件。
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct UsageFile {
+    session: Option<UsageTotals>,
+}
+
+#[derive(Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct UsageTotals {
+    #[serde(default)]
+    input_tokens: u64,
+    #[serde(default)]
+    output_tokens: u64,
+    #[serde(default)]
+    cached_read_tokens: u64,
+    #[serde(default)]
+    cache_creation_tokens: u64,
 }
 
 #[derive(Clone, Deserialize)]
@@ -272,6 +294,8 @@ fn family_index() -> Result<FamilyIndex<Row>> {
                     transcript_path: meta.child_summary_path.display().to_string(),
                     created_at,
                     updated_at,
+                    // 子会话文件缺失,无法读 usage.json。
+                    token_usage: None,
                 },
                 meta: None,
                 readable: false,
@@ -324,6 +348,8 @@ fn family(path: &Path) -> Result<Family<Row>> {
 fn family_summary(family: &Family<Row>) -> SessionSummary {
     let mut summary = family.root.summary.clone();
     family.apply_summary_aggregates(&mut summary);
+    // 子代理子会话是完整会话目录、各有自己的 usage.json,按成员求和。
+    summary.token_usage = family.sum_token_usage(|row| row.summary.token_usage);
     summary
 }
 
@@ -438,7 +464,25 @@ fn summary(path: &Path) -> Result<SessionSummary> {
             crate::support::time::parse_timestamp(&value.updated_at)
                 .context("Invalid Grok Build updated_at")?,
         ),
+        token_usage: session_usage(&path)?,
     })
+}
+
+fn session_usage(path: &Path) -> Result<Option<SessionTokenUsage>> {
+    let Some(usage_path) = sibling(path, "usage.json")? else {
+        return Ok(None);
+    };
+    let file: UsageFile = serde_json::from_reader(File::open(&usage_path)?)
+        .with_context(|| format!("Invalid Grok Build usage file {}", usage_path.display()))?;
+
+    // inputTokens 含缓存命中部分(实测 input+output==totalTokens),扣除后与
+    // 其他来源的"新输入"口径一致;outputTokens 已含 reasoning。
+    Ok(file.session.map(|totals| SessionTokenUsage {
+        input_tokens: totals.input_tokens.saturating_sub(totals.cached_read_tokens),
+        output_tokens: totals.output_tokens,
+        cache_read_tokens: totals.cached_read_tokens,
+        cache_write_tokens: totals.cache_creation_tokens,
+    }))
 }
 
 fn sibling(path: &Path, name: &str) -> Result<Option<PathBuf>> {

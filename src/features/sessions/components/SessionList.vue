@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, ref, watch } from "vue";
 import { joinClasses } from "@shared/lib/join-classes";
-import { formatTimestamp } from "@shared/lib/format";
+import { formatTimestamp, formatTokenCount } from "@shared/lib/format";
 import type { SessionSummary } from "../types";
 import "./session-list.css";
 
@@ -176,9 +176,27 @@ function handleReverseClick() {
           type="button"
           @click="emit('select', session.transcriptPath)"
         >
-          <span class="session-card-title">{{ session.title }}</span>
+          <span class="session-card-title" :title="session.title">{{
+            session.title
+          }}</span>
           <div class="session-meta-row">
             <small>{{ formatTimestamp(session.updatedAt) }}</small>
+            <small
+              v-if="session.tokenUsage"
+              class="session-token-usage"
+            >
+              <span>输入 {{ formatTokenCount(session.tokenUsage.inputTokens) }}</span>
+              <span>输出 {{ formatTokenCount(session.tokenUsage.outputTokens) }}</span>
+              <span>
+                缓存
+                {{
+                  formatTokenCount(
+                    session.tokenUsage.cacheReadTokens +
+                      session.tokenUsage.cacheWriteTokens
+                  )
+                }}
+              </span>
+            </small>
           </div>
         </button>
       </template>

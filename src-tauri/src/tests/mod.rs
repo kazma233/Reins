@@ -23,6 +23,7 @@ mod session_delete;
 mod session_index;
 mod session_listing;
 mod session_readers;
+mod session_token_usage;
 mod workspace_skills;
 
 fn write_jsonl(path: &Path, lines: &[Value]) -> Result<()> {

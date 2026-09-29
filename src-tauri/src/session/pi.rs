@@ -11,8 +11,8 @@ use uuid::Uuid;
 
 use super::{
     ContentBlock, SessionAgent, SessionEvent, SessionEventPage, SessionFileEntry, SessionMessage,
-    SessionMessagePage, SessionOverview, SessionReader, SessionSummary, SourceApp,
-    SummaryAccumulator, TimelineCacheEntry,
+    SessionMessagePage, SessionOverview, SessionReader, SessionSummary, SessionTokenUsage,
+    SourceApp, SummaryAccumulator, TimelineCacheEntry,
 };
 
 pub(crate) struct PiBackend;
@@ -415,11 +415,58 @@ fn parse_full_summary(path: &Path) -> Result<SessionSummary> {
         git_branch: None,
         created_at,
         updated_at: Some(updated_at),
+        token_usage: None,
     };
+    for entry in &document.entries {
+        accumulate_pi_usage(&mut summary.token_usage, &entry.value);
+    }
 
     // header 决定创建时间，文件 mtime 只负责失效判断，避免旧 entry 时间变化导致列表漂移。
     summary.created_at = created_at;
     super::build_summary(SourceApp::Pi, path, summary)
+}
+
+// 主线程 assistant 消息带每次调用的增量 usage;子代理 run 的消耗记录在
+// toolResult 的扩展元数据里,按"会话总消耗"口径一并计入。官方 usage 的
+// output 已含 reasoning(totalTokens = input+output+cacheRead+cacheWrite)。
+fn accumulate_pi_usage(total: &mut Option<SessionTokenUsage>, entry: &Value) {
+    let Some(message) = entry.get("message") else {
+        return;
+    };
+
+    match message.get("role").and_then(Value::as_str) {
+        Some("assistant") => {
+            if let Some(usage) = message.get("usage") {
+                super::merge_token_usage(total, pi_usage(usage));
+            }
+        }
+        Some("toolResult")
+            if super::json_string(message, &["toolName"]).as_deref() == Some("subagent") =>
+        {
+            let Some(runs) = message
+                .get("details")
+                .and_then(|details| details.get("results"))
+                .and_then(Value::as_array)
+            else {
+                return;
+            };
+            for run in runs {
+                if let Some(usage) = run.get("usage") {
+                    super::merge_token_usage(total, pi_usage(usage));
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+fn pi_usage(usage: &Value) -> SessionTokenUsage {
+    SessionTokenUsage {
+        input_tokens: super::json_u64(usage, "input").unwrap_or_default(),
+        output_tokens: super::json_u64(usage, "output").unwrap_or_default(),
+        cache_read_tokens: super::json_u64(usage, "cacheRead").unwrap_or_default(),
+        cache_write_tokens: super::json_u64(usage, "cacheWrite").unwrap_or_default(),
+    }
 }
 
 fn first_user_title(messages: &[SessionMessage]) -> Option<String> {

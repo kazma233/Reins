@@ -14,7 +14,7 @@ use std::sync::Mutex;
 use anyhow::{Result, anyhow};
 
 use super::family_index::{Family, FamilyRow};
-use super::{SessionAgent, SessionEvent, SessionMessage, SessionSummary};
+use super::{SessionAgent, SessionEvent, SessionMessage, SessionSummary, SessionTokenUsage};
 
 /// One family's cached timeline halves. Messages and events share an entry so
 /// a family load of either kind invalidates both on freshness mismatch.
@@ -118,6 +118,21 @@ fn cached_family_items<T: Clone>(
 }
 
 impl<Row: FamilyRow> Family<Row> {
+    /// 会话条目的 token 统计口径:family 全部成员(root、resume 段、子代理
+    /// 线程)的消耗相加才是整个会话的用量;成员没有 usage 数据时跳过。
+    pub(crate) fn sum_token_usage(
+        &self,
+        usage_of: impl Fn(&Row) -> Option<SessionTokenUsage>,
+    ) -> Option<SessionTokenUsage> {
+        let mut total = None;
+        for row in &self.members {
+            if let Some(usage) = usage_of(row) {
+                super::merge_token_usage(&mut total, usage);
+            }
+        }
+        total
+    }
+
     /// Fold a root-member summary into the family-level shape shared by the
     /// file-backed backends: the "(+N subagents)" title, the root transcript
     /// path, and family-wide timestamps. OpenCode builds its summary straight
@@ -416,6 +431,7 @@ mod tests {
             transcript_path: String::new(),
             created_at: None,
             updated_at: Some(1),
+            token_usage: None,
         }
     }
 

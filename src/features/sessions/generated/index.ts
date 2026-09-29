@@ -12,5 +12,6 @@ export * from "./SessionOverview";
 export * from "./SessionPage";
 export * from "./SessionRefreshResult";
 export * from "./SessionSummary";
+export * from "./SessionTokenUsage";
 export * from "./SourceApp";
 export * from "./SourceStatus";

@@ -18,3 +18,7 @@ pub(crate) fn json_string(value: &Value, keys: &[&str]) -> Option<String> {
 
     current.as_str().map(ToString::to_string)
 }
+
+pub(crate) fn json_u64(value: &Value, key: &str) -> Option<u64> {
+    value.get(key).and_then(Value::as_u64)
+}

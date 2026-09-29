@@ -63,6 +63,23 @@ pub(crate) struct SourceStatus {
     pub(crate) note: Option<String>,
 }
 
+// 各来源转录的 usage 字段口径不一(Codex 的 input 含缓存命中、OpenCode 把
+// reasoning 与 output 分开),读取器负责归一到这四项后再进入统计。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../src/features/sessions/generated/")]
+pub(crate) struct SessionTokenUsage {
+    #[ts(type = "number")]
+    pub(crate) input_tokens: u64,
+    // 输出统一含 reasoning tokens,否则跨来源不可比。
+    #[ts(type = "number")]
+    pub(crate) output_tokens: u64,
+    #[ts(type = "number")]
+    pub(crate) cache_read_tokens: u64,
+    #[ts(type = "number")]
+    pub(crate) cache_write_tokens: u64,
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export, export_to = "../../src/features/sessions/generated/")]
@@ -79,6 +96,10 @@ pub(crate) struct SessionSummary {
     pub(crate) created_at: Option<i64>,
     #[ts(type = "number | null")]
     pub(crate) updated_at: Option<i64>,
+    // 列表扫描时聚合;无 usage 数据的来源(GrokBuild)与旧缓存行为 None。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub(crate) token_usage: Option<SessionTokenUsage>,
 }
 
 #[derive(Clone, Debug, Serialize, TS)]
@@ -228,4 +249,5 @@ pub(crate) struct SummaryAccumulator {
     pub(crate) git_branch: Option<String>,
     pub(crate) created_at: Option<i64>,
     pub(crate) updated_at: Option<i64>,
+    pub(crate) token_usage: Option<SessionTokenUsage>,
 }
