@@ -30,13 +30,13 @@ export const DELETE_METHOD_COPY: Record<SourceApp, DeleteMethodCopy> = {
   },
   codex: {
     description:
-      "Codex 目前没有确认可用的单会话官方删除命令，这里按本地 transcript 和状态库清理。",
+      "Codex 调用官方单会话删除命令（codex delete --force），会话从列表中移除。",
     details: [
-      "删除当前会话组对应的 transcript JSONL 文件。",
-      "同步清理 state_*.sqlite 里的 thread 和 subagent 关系记录。",
-      "同步清理 logs_2.sqlite 里的 thread 日志。"
+      "对当前会话组里每个仍在 state 库中的会话执行 codex delete --force。",
+      "官方命令会级联删除子代理会话文件及 threads、spawn 关系、日志等关联记录。",
+      "已不在 state 库中的会话（如已被级联删除）自动跳过。"
     ],
-    commandLabel: "等价执行动作"
+    commandLabel: "执行命令"
   },
   claude_code: {
     description:
@@ -152,17 +152,7 @@ export function deleteCommandPreview(detail: SessionOverview): string[] {
         )
       ];
     case "codex":
-      return [
-        ...detail.sourcePaths.map((path) => `rm ${dialogShellQuote(path)}`),
-        ...sessionIds.map(
-          (sessionId) =>
-            `for db in "$HOME"/.codex/state_*.sqlite; do sqlite3 "$db" "DELETE FROM thread_spawn_edges WHERE child_thread_id = '${sqlQuote(sessionId)}' OR parent_thread_id = '${sqlQuote(sessionId)}'; DELETE FROM threads WHERE id = '${sqlQuote(sessionId)}';"; done`
-        ),
-        ...sessionIds.map(
-          (sessionId) =>
-            `sqlite3 "$HOME/.codex/logs_2.sqlite" "DELETE FROM logs WHERE thread_id = '${sqlQuote(sessionId)}';"`
-        )
-      ];
+      return sessionIds.map((sessionId) => `codex delete --force ${sessionId}`);
     case "pi":
       return detail.sourcePaths.map((path) => `rm ${dialogShellQuote(path)}`);
     default:

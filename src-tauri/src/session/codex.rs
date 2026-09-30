@@ -2,10 +2,11 @@ use std::collections::{HashMap, HashSet};
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::{LazyLock, Mutex};
 
-use anyhow::{Context, Result, anyhow};
-use rusqlite::{Connection, params};
+use anyhow::{Context, Result, anyhow, bail};
+use rusqlite::Connection;
 use serde_json::{Value, json};
 
 use super::{
@@ -181,16 +182,67 @@ pub(crate) fn delete_session(path: &Path) -> Result<()> {
     let family = session_family_for_path(path)?;
 
     for member in &family.members {
-        delete_thread_state(&member.summary.source_session_id)?;
-        fs::remove_file(&member.path)
-            .with_context(|| format!("Failed to delete {}", member.path.display()))?;
+        // 官方删除 root 会级联整条 family；已被级联删除的成员（state 库
+        // threads 行已不存在）直接跳过，避免 not found 让整个删除流程报错。
+        if !thread_exists(&member.summary.source_session_id)? {
+            continue;
+        }
+
+        let output = Command::new("codex")
+            .arg("delete")
+            .arg("--force")
+            .arg(&member.summary.source_session_id)
+            .output()
+            .with_context(|| {
+                format!(
+                    "Failed to execute codex delete {}",
+                    member.summary.source_session_id
+                )
+            })?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let exit_code = output
+                .status
+                .code()
+                .map(|code| code.to_string())
+                .unwrap_or_else(|| "terminated by signal".to_string());
+            bail!(
+                "Codex delete command failed for {}. exit_code: {exit_code}\nstdout:\n{}\nstderr:\n{}",
+                member.summary.source_session_id,
+                stdout.trim(),
+                stderr.trim()
+            );
+        }
     }
 
-    prune_empty_parents(root()?.join("sessions"), path.parent());
     lock_timeline_cache()?.clear();
     lock_summary_cache()?.clear();
     *lock_family_index_cache()? = None;
     Ok(())
+}
+
+// codex delete --force 非交互执行且只认 UUID；会话存在性以 state 库 threads 行为准。
+fn thread_exists(session_id: &str) -> Result<bool> {
+    for state_db in state_dbs()? {
+        let connection = Connection::open(&state_db)
+            .with_context(|| format!("Failed to open {}", state_db.display()))?;
+        let exists: Option<i64> = connection
+            .query_row("SELECT 1 FROM threads WHERE id = ?1", [session_id], |row| {
+                row.get(0)
+            })
+            .map(Some)
+            .or_else(|error| match error {
+                rusqlite::Error::QueryReturnedNoRows => Ok(None),
+                other => Err(other),
+            })
+            .with_context(|| format!("Failed to check Codex thread {session_id}"))?;
+        if exists.is_some() {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 fn parse_summary(path: &Path) -> Result<SessionSummary> {
@@ -1044,19 +1096,6 @@ fn extract_title(content: Option<&Value>) -> Option<String> {
         .find_map(|text| super::title_candidate_from_text(&text))
 }
 
-fn delete_thread_state(session_id: &str) -> Result<()> {
-    for state_db in state_dbs()? {
-        delete_thread_rows(&state_db, session_id)?;
-    }
-
-    let logs_db = root()?.join("logs_2.sqlite");
-    if logs_db.exists() {
-        delete_log_rows(&logs_db, session_id)?;
-    }
-
-    Ok(())
-}
-
 fn state_dbs() -> Result<Vec<PathBuf>> {
     let mut candidates = fs::read_dir(root()?)?
         .filter_map(|entry| entry.ok())
@@ -1070,54 +1109,4 @@ fn state_dbs() -> Result<Vec<PathBuf>> {
 
     candidates.sort();
     Ok(candidates)
-}
-
-fn delete_thread_rows(db_path: &Path, session_id: &str) -> Result<()> {
-    let connection = Connection::open(db_path)
-        .with_context(|| format!("Failed to open {}", db_path.display()))?;
-    connection
-        .execute(
-            "DELETE FROM thread_spawn_edges WHERE child_thread_id = ?1 OR parent_thread_id = ?1",
-            params![session_id],
-        )
-        .with_context(|| format!("Failed to delete Codex thread edges for {session_id}"))?;
-    connection
-        .execute("DELETE FROM threads WHERE id = ?1", params![session_id])
-        .with_context(|| format!("Failed to delete Codex thread {session_id}"))?;
-    Ok(())
-}
-
-fn delete_log_rows(db_path: &Path, session_id: &str) -> Result<()> {
-    let connection = Connection::open(db_path)
-        .with_context(|| format!("Failed to open {}", db_path.display()))?;
-    connection
-        .execute("DELETE FROM logs WHERE thread_id = ?1", params![session_id])
-        .with_context(|| format!("Failed to delete Codex logs for {session_id}"))?;
-    Ok(())
-}
-
-fn prune_empty_parents(root: PathBuf, start: Option<&Path>) {
-    let Some(mut current) = start.map(Path::to_path_buf) else {
-        return;
-    };
-
-    while current.starts_with(&root) {
-        let is_empty = fs::read_dir(&current)
-            .ok()
-            .and_then(|mut entries| entries.next())
-            .is_none();
-
-        if !is_empty {
-            break;
-        }
-
-        if fs::remove_dir(&current).is_err() {
-            break;
-        }
-
-        let Some(parent) = current.parent() else {
-            break;
-        };
-        current = parent.to_path_buf();
-    }
 }

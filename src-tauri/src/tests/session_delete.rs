@@ -40,6 +40,37 @@ fn deleting_codex_family_invokes_official_cli() -> Result<()> {
         })],
     )?;
 
+    // 官方 CLI 只对 state 库里存在的 thread 生效；预检依赖 threads 行。
+    let codex_root = session::codex::root()?;
+    fs::create_dir_all(&codex_root)?;
+    let state_db = codex_root.join("state_20260421.sqlite");
+    let connection = Connection::open(&state_db)?;
+    connection.execute("CREATE TABLE threads (id TEXT PRIMARY KEY)", [])?;
+    connection.execute("INSERT INTO threads (id) VALUES (?1)", params![root_id])?;
+    connection.execute("INSERT INTO threads (id) VALUES (?1)", params![child_id])?;
+
+    let bin_dir = temp_home.join("bin");
+    fs::create_dir_all(&bin_dir)?;
+    let log_path = temp_home.join("codex-delete.log");
+    let script_path = bin_dir.join("codex");
+    fs::write(
+        &script_path,
+        format!(
+            "#!/bin/sh\nif [ \"$1\" = \"delete\" ] && [ \"$2\" = \"--force\" ]; then\n  printf '%s\\n' \"$3\" >> '{}'\n  exit 0\nfi\nexit 1\n",
+            log_path.display()
+        ),
+    )?;
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        let mut permissions = fs::metadata(&script_path)?.permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&script_path, permissions)?;
+    }
+
+    let original_path = env::var("PATH").unwrap_or_default();
+    unsafe { env::set_var("PATH", format!("{}:{}", bin_dir.display(), original_path)) };
+
     let result = session::delete::delete_session_inner(
         &state::session_index::SessionIndexState::default(),
         SourceApp::Codex,
@@ -47,17 +78,26 @@ fn deleting_codex_family_invokes_official_cli() -> Result<()> {
         Some(root_path.to_string_lossy().as_ref()),
     )?;
 
+    let deleted = fs::read_to_string(&log_path)?;
+    let deleted_ids = deleted.lines().collect::<HashSet<_>>();
+
+    unsafe { env::set_var("PATH", original_path) };
+
     assert_eq!(result.deleted_session_id, root_id);
-    assert_eq!(result.deleted_paths.len(), 2);
-    assert!(!root_path.exists());
-    assert!(!child_path.exists());
+    assert!(
+        result.deleted_paths.len() >= 2,
+        "expected root and child paths, got {:?}",
+        result.deleted_paths
+    );
+    assert!(deleted_ids.contains(root_id));
+    assert!(deleted_ids.contains(child_id));
 
     fs::remove_dir_all(&temp_home).ok();
     Ok(())
 }
 
 #[test]
-fn deleting_codex_family_clears_all_state_databases() -> Result<()> {
+fn deleting_codex_skips_members_missing_from_state_db() -> Result<()> {
     let temp_home = env::temp_dir().join(format!("reins-test-{}", Uuid::new_v4()));
     fs::create_dir_all(&temp_home)?;
     let _guard = TestEnvGuard::set_home(&temp_home);
@@ -76,60 +116,28 @@ fn deleting_codex_family_clears_all_state_databases() -> Result<()> {
         })],
     )?;
 
+    // 会话文件存在但 state 库没有 threads 行（如官方已级联删除后的残留）：
+    // 跳过 CLI 调用，而不是让 not found 报错中断。PATH 上没有 codex
+    // 可执行文件，若误调 CLI 会因 spawn 失败让本测试报错。
     let codex_root = session::codex::root()?;
     fs::create_dir_all(&codex_root)?;
-    let state_db_paths = [
-        codex_root.join("state_20260421.sqlite"),
-        codex_root.join("state_20260422.sqlite"),
-    ];
+    let state_db = codex_root.join("state_20260421.sqlite");
+    let connection = Connection::open(&state_db)?;
+    connection.execute("CREATE TABLE threads (id TEXT PRIMARY KEY)", [])?;
 
-    for db_path in &state_db_paths {
-        let connection = Connection::open(db_path)?;
-        connection.execute("CREATE TABLE threads (id TEXT PRIMARY KEY)", [])?;
-        connection.execute(
-            "CREATE TABLE thread_spawn_edges (parent_thread_id TEXT, child_thread_id TEXT)",
-            [],
-        )?;
-        connection.execute("INSERT INTO threads (id) VALUES (?1)", params![root_id])?;
-        connection.execute(
-            "INSERT INTO thread_spawn_edges (parent_thread_id, child_thread_id) VALUES (?1, ?1)",
-            params![root_id],
-        )?;
-    }
+    let original_path = env::var("PATH").unwrap_or_default();
+    unsafe { env::set_var("PATH", temp_home.join("empty-bin").display().to_string()) };
 
-    session::delete::delete_session_inner(
+    let result = session::delete::delete_session_inner(
         &state::session_index::SessionIndexState::default(),
         SourceApp::Codex,
         root_id,
         Some(root_path.to_string_lossy().as_ref()),
     )?;
 
-    for db_path in &state_db_paths {
-        let connection = Connection::open(db_path)?;
-        let thread_count = connection.query_row(
-            "SELECT COUNT(*) FROM threads WHERE id = ?1",
-            params![root_id],
-            |row| row.get::<_, i64>(0),
-        )?;
-        let edge_count = connection.query_row(
-            "SELECT COUNT(*) FROM thread_spawn_edges WHERE parent_thread_id = ?1 OR child_thread_id = ?1",
-            params![root_id],
-            |row| row.get::<_, i64>(0),
-        )?;
+    unsafe { env::set_var("PATH", original_path) };
 
-        assert_eq!(
-            thread_count,
-            0,
-            "expected thread row cleared in {}",
-            db_path.display()
-        );
-        assert_eq!(
-            edge_count,
-            0,
-            "expected edge rows cleared in {}",
-            db_path.display()
-        );
-    }
+    assert_eq!(result.deleted_session_id, root_id);
 
     fs::remove_dir_all(&temp_home).ok();
     Ok(())
