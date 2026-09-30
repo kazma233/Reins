@@ -105,7 +105,25 @@ fn default_true() -> bool {
 }
 
 fn default_config_template() -> String {
-    r#"targets:
+    // pi 段在生成模板时按 PI_CODING_AGENT_DIR 解析并固化具体路径；
+    // 之后以 config.yaml 里写入的路径为准，环境变量变化不再跟随。
+    // 默认场景沿用 ~ 前缀写法，与模板其他条目风格一致。
+    let (pi_skill_dir, pi_mcp_path) = match std::env::var_os("PI_CODING_AGENT_DIR") {
+        Some(dir) => {
+            let dir = PathBuf::from(dir);
+            (
+                dir.join("skills").display().to_string(),
+                dir.join("mcp.json").display().to_string(),
+            )
+        }
+        None => (
+            "~/.pi/agent/skills".to_string(),
+            "~/.pi/agent/mcp.json".to_string(),
+        ),
+    };
+
+    format!(
+        r#"targets:
   codex:
     enabled: true
     skill_dir: ~/.agents/skills
@@ -150,10 +168,13 @@ fn default_config_template() -> String {
       config_prefix: mcp_servers
       config_type: grokbuild
 
-  # pi 暂不主动支持 MCP，省略 mcp 段即可；需要时补 mcp.config_path 和 config_prefix。
   pi:
     enabled: true
-    skill_dir: ~/.pi/agent/skills
+    skill_dir: {pi_skill_dir}
+    mcp:
+      config_path: {pi_mcp_path}
+      config_prefix: mcpServers
+      config_type: common
 
 mcps: []
 
@@ -172,7 +193,7 @@ mcps: []
 #       grokbuild:
 #         enabled: true
 "#
-    .to_string()
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -413,7 +434,7 @@ fn parse_manager_config(raw_content: &str, config_path: &Path) -> Result<Resolve
             .to_string();
 
         // 与 normalize_raw_target_input 的契约一致：configPrefix 只在
-        // 真正有 MCP 配置文件可写时才必填（pi 这类 target 两者皆空）。
+        // 真正有 MCP 配置文件可写时才必填（不需要 MCP 的 target 两者皆空）。
         if config_file_path.is_some() && config_prefix.is_empty() {
             bail!("目标 {} 的 mcp.config_prefix 不能为空。", id);
         }

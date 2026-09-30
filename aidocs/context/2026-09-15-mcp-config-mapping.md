@@ -2,7 +2,7 @@
 
 本文件记录一个已知问题与后续优化方向：各 agent 的 MCP 配置字段并不一致，当前用 `configType` 写死映射，多处不一致会**静默失效**（写入成功、行为不符），后续要改为按 Reins 自己的 MCP 配置动态映射到各 agent 字段。
 
-最后核实：2026-09-15，实测版本 Grok 1.0.30、Codex 0.149.1、OpenCode 1.18.30。Claude Code、ZCode 本机没有 CLI，未实测。2026-09-29 复核：OpenCode 升到 v2.0.18 后 MCP 节点从顶层 `mcp` 变为 `mcp.servers`，旧位置不被识别（`opencode mcp list` 为空），下文 OpenCode 相关行已按 v2 更新。
+最后核实：2026-09-15，实测版本 Grok 1.0.30、Codex 0.149.1、OpenCode 1.18.30。Claude Code、ZCode 本机没有 CLI，未实测。2026-09-29 复核：OpenCode 升到 v2.0.18 后 MCP 节点从顶层 `mcp` 变为 `mcp.servers`，旧位置不被识别（`opencode mcp list` 为空），下文 OpenCode 相关行已按 v2 更新。2026-09-30 复核：Pi 0.99.1 新增 MCP 支持（`<agentDir>/mcp.json` 顶层 `mcpServers`，legacy SSE 被拒绝），下文 Pi 行已更新，Reins 的 pi preset 已默认填入该路径。
 
 ## 1. 问题
 
@@ -40,7 +40,7 @@ canonical 字段 → 实际写出：
 | OpenCode 2.0.18（v1 1.18.30 为顶层 `mcp`，v2 不识别） | `~/.config/opencode/opencode.json` / `mcp.servers` | `type: local`、`command` 数组、`environment` | `type: remote`、`url`、`headers` | `headers` | `timeout`（毫秒整数） | 支持 | 本机实测：`opencode mcp add` 落盘 `mcp.servers`；v1 时的解析行为为原样保留、未知字段被静默剥离 |
 | Claude Code | `~/.claude.json` / `mcpServers`（项目 `.mcp.json`） | Reins 写 `type: stdio` + `command/args/env` | Reins 写 `type: http/sse` + `url/headers` | Reins JSON 路径写 `headers` | **Reins 不写** | **Reins 不写** | 未实测（无 CLI）：需在隔离 HOME 用其 MCP 列表/校验命令核对 |
 | ZCode | `~/.zcode/cli/config.json` / `mcp.servers` | 同 `common` JSON | 同 `common` JSON | 同 `common` JSON | **Reins 不写** | **Reins 不写** | 未实测（无 CLI） |
-| Pi | 无 | — | — | — | — | — | Reins 只分发 skill，不写 MCP |
+| Pi | `<agentDir>/mcp.json`（默认 `~/.pi/agent`，项目 `.pi/mcp.json` 需 trust）/ `mcpServers` | `command`、`args`、`env`、`cwd` | `url`、`headers`、`oauth`；**legacy SSE 被拒绝**（校验报错，server 不连接） | `headers` | `timeout`（正数秒），Reins `common` JSON 不写 | 可选 `enabled: false` | 2026-09-30 本机实测 pi 0.99.1（`@earendil-works/pi-coding-agent`）源码 `extensions/mcp/config.js`、`core/mcp-servers.js`；文档 pi.dev/docs/latest/mcp |
 
 变量语义也不同（同一份配置在不同 agent 行为不一致）：
 

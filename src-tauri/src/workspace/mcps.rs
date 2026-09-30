@@ -552,7 +552,7 @@ fn remove_mcp_from_target_config(
     target: &ResolvedTargetConfig,
     server_name: &str,
 ) -> Result<McpTargetMutationResult> {
-    // 未配置 MCP 的 target（如 pi）无配置可清理；必须返回 noop 而非报错，
+    // 未配置 MCP 的 target 无配置可清理；必须返回 noop 而非报错，
     // 否则删除 MCP 时遍历全部 target 会被这类 target 中断。
     let Some(config_path) = target.config_path.as_ref() else {
         return Ok(McpTargetMutationResult {

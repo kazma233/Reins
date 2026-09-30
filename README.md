@@ -26,7 +26,7 @@
 - 集中管理 Skills 和 MCP 配置
 - 管理多个 target，内置 `codex` / `claude` / `opencode` / `zcode` / `pi` / `grokbuild` 六种 preset，另支持项目级 target
 - 从本地目录或 Git 仓库导入 Skills（Git 支持批量导入），并同步到选定的 target
-- 预览并写入 MCP 配置，检查其在各 target 上的安装状态
+- 预览并写入 MCP 配置，检查其在各 target 上的安装状态；Pi（≥0.99）的 MCP 写 `~/.pi/agent/mcp.json` 顶层 `mcpServers`，legacy SSE transport 不受支持（分发界面置灰）
 
 ### 模型配置
 
@@ -35,7 +35,7 @@
 - 模型支持手工新增、从提供商 `/models` 接口拉取、从 models.dev 预填元数据（本地缓存 24 小时）
 - 一键应用到 Codex、Claude Code、OpenCode（v2）、Pi、Grok Build 的全局配置文件：应用前可预览变更 diff（密钥脱敏），支持指定默认模型与思考等级
 - 应用细节对齐各工具官方契约：Codex 同步生成 `model_catalog_json` 模型目录，已选模型出现在 Codex 自己的模型选择器；Claude Code 认证写 `ANTHROPIC_AUTH_TOKEN`（Bearer 头）；OpenCode 同时读写 `opencode.json` 与 `opencode.jsonc`，被覆盖文件里的条目标注不生效
-- 支持 `CODEX_HOME`、`PI_CODING_AGENT_DIR`、`GROK_HOME`、`CLAUDE_CONFIG_DIR` 环境变量重定向各工具的配置目录（仅作用于模型配置写入；历史会话发现固定读各工具默认 home，Pi 与 Grok Build 例外，跟随各自环境变量）
+- 支持 `CODEX_HOME`、`PI_CODING_AGENT_DIR`、`GROK_HOME`、`CLAUDE_CONFIG_DIR` 环境变量重定向各工具的配置目录（作用于模型配置写入；历史会话发现固定读各工具默认 home，Pi 与 Grok Build 例外，跟随各自环境变量；Pi 的 workspace preset 路径在首次添加 target 或首次生成 `config.yaml` 时按 `PI_CODING_AGENT_DIR` 解析固化，之后以 `config.yaml` 里写入的路径为准）
 - 反读工具配置，识别「已应用 / 配置有偏差 / 外部配置」；已应用或配置有偏差的提供商不再重复出现在「应用提供商」候选里；已应用条目可重新应用切换默认模型、可移除；外部条目可按条目删除（带强警告确认，Claude Code 不支持）；Reins 写入均用 `reins-` 前缀条目，与用户手工配置隔离
 
 ### Skills 导入项管理

@@ -14,6 +14,16 @@ pub(crate) fn grok_home_path(
         .or_else(|| home.map(|path| path.join(".grok")))
 }
 
+// pi 的 agent 目录与 GROK_HOME 同一解析模式：优先环境变量重定向。
+pub(crate) fn pi_agent_dir_path(
+    pi_agent_dir: Option<std::ffi::OsString>,
+    home: Option<PathBuf>,
+) -> Option<PathBuf> {
+    pi_agent_dir
+        .map(PathBuf::from)
+        .or_else(|| home.map(|path| path.join(".pi").join("agent")))
+}
+
 // dirs::home_dir() resolves through the known-folder API on Windows and
 // ignores HOME/USERPROFILE, so environment redirection cannot isolate tests.
 // They swap this override instead; production keeps the dirs behavior.

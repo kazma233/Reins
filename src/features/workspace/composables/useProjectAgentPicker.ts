@@ -90,6 +90,8 @@ export function useProjectAgentPicker() {
     projectAgentPickerDialog.contextName = serverName;
     projectAgentPickerDialog.projectId = projectId;
     projectAgentPickerDialog.serverName = serverName;
+    projectAgentPickerDialog.transport =
+      configDocument.value?.config?.mcps.find((mcp) => mcp.name === serverName)?.transport ?? null;
     projectAgentPickerDialog.desiredAgentIds = [...pickerInstalledAgentIds.value];
   }
 

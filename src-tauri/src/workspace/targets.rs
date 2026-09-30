@@ -292,7 +292,7 @@ fn normalize_raw_target_input(
     let config_prefix = input.mcp_config_prefix.trim().to_string();
 
     // MCP 配置文件和 configPrefix 必须成对出现：只有前缀没有路径无处可写，
-    // 只有路径没有前缀无法定位写入节点。pi 这类不主动支持 MCP 的 target
+    // 只有路径没有前缀无法定位写入节点。不需要 MCP 分发的 target
     // 允许两者都为空，此时只做 skill 分发。
     match normalized_config_path.as_deref() {
         Some(_) if config_prefix.is_empty() => {
@@ -343,7 +343,7 @@ pub(super) struct TargetDefaults {
     pub(super) config_type: McpConfigType,
 }
 
-use crate::support::fs::grok_home_path;
+use crate::support::fs::{grok_home_path, pi_agent_dir_path};
 
 #[cfg(test)]
 #[test]
@@ -377,6 +377,7 @@ pub(crate) fn builtin_target_preset_inner(target_id: &str) -> Result<TargetConfi
 
 fn builtin_target_defaults() -> Vec<TargetDefaults> {
     let grok_home = grok_home_path(std::env::var_os("GROK_HOME"), home_dir());
+    let pi_agent_dir = pi_agent_dir_path(std::env::var_os("PI_CODING_AGENT_DIR"), home_dir());
     vec![
         TargetDefaults {
             id: AgentTargetId("grokbuild".to_string()),
@@ -425,14 +426,16 @@ fn builtin_target_defaults() -> Vec<TargetDefaults> {
             config_prefix: "mcp.servers",
             config_type: McpConfigType::Common,
         },
-        // pi 不主动支持 MCP：默认只分发 skill，不写任何 MCP 配置文件。
+        // pi ≥0.99 支持 MCP：配置在 <agentDir>/mcp.json 顶层 mcpServers，
+        // 形状与其他 MCP client 一致；legacy SSE transport 不被接受。
         TargetDefaults {
             id: AgentTargetId("pi".to_string()),
-            skill_dir: home_dir()
-                .map(|h| h.join(".pi/agent/skills"))
+            skill_dir: pi_agent_dir
+                .as_ref()
+                .map(|dir| dir.join("skills"))
                 .unwrap_or_default(),
-            config_path: None,
-            config_prefix: "",
+            config_path: pi_agent_dir.map(|dir| dir.join("mcp.json")),
+            config_prefix: "mcpServers",
             config_type: McpConfigType::Common,
         },
     ]
@@ -483,11 +486,12 @@ pub(super) fn project_agent_defaults(project_path: &Path) -> Vec<TargetDefaults>
             config_prefix: "mcp.servers",
             config_type: McpConfigType::Common,
         },
+        // 项目级 mcp.json 仅在项目被 pi trust 后生效；写入配置本身无害。
         TargetDefaults {
             id: AgentTargetId("pi".to_string()),
             skill_dir: project_path.join(".pi/skills"),
-            config_path: None,
-            config_prefix: "",
+            config_path: Some(project_path.join(".pi/mcp.json")),
+            config_prefix: "mcpServers",
             config_type: McpConfigType::Common,
         },
     ]

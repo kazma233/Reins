@@ -2,12 +2,13 @@
 import { computed } from "vue";
 import { joinClasses } from "@shared/lib/join-classes";
 import { formatTargetLabel } from "../model";
-import type { AgentTargetId, McpTargetInspection } from "../types";
+import type { AgentTargetId, McpTransport, McpTargetInspection } from "../types";
 
 type McpTargetButtonProps = {
   serverName: string;
   targetId: AgentTargetId;
   targetItem: McpTargetInspection | null;
+  transport: McpTransport;
   loading?: boolean;
 };
 
@@ -20,8 +21,10 @@ defineEmits<{
 }>();
 
 const installed = computed(() => props.targetItem?.state === "present");
-// 未配置 MCP 的 target（如 pi）没有可写入的配置文件，禁用而不是点击后报错。
+// 未配置 MCP 的 target 没有可写入的配置文件，禁用而不是点击后报错。
 const unconfigured = computed(() => props.targetItem?.state === "unconfigured");
+// pi 的 mcp.json 不接受 legacy SSE transport，写进去 pi 会拒绝连接，直接置灰。
+const sseUnsupported = computed(() => props.transport === "sse" && props.targetId === "pi");
 const warning = computed(
   () => props.targetItem?.state === "error" || props.targetItem?.state === "unconfigured",
 );
@@ -31,15 +34,16 @@ const buttonStateClass = computed(() => {
   return "";
 });
 const label = computed(() => formatTargetLabel(props.targetId));
-const detail = computed(
-  () => props.targetItem?.detail ?? `${props.serverName} 在 ${label.value} 的状态未知`,
-);
+const detail = computed(() => {
+  if (sseUnsupported.value) return "pi 不支持 SSE transport 的 MCP。";
+  return props.targetItem?.detail ?? `${props.serverName} 在 ${label.value} 的状态未知`;
+});
 </script>
 
 <template>
   <button
     :class="joinClasses('secondary-button', 'manager-target-button', buttonStateClass)"
-    :disabled="loading || unconfigured"
+    :disabled="loading || unconfigured || sseUnsupported"
     :title="detail"
     type="button"
     @click="$emit('toggle', serverName, targetId)"

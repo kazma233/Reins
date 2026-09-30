@@ -98,6 +98,7 @@ const targetItemById = computed(() =>
           :server-name="mcp.name"
           :target-id="targetId"
           :target-item="targetItemById.get(targetId) ?? null"
+          :transport="mcp.transport"
           :loading="loading"
           @toggle="(serverName: string, tid: AgentTargetId) => $emit('toggleMcpTarget', serverName, tid)"
         />

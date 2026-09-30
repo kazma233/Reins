@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import DialogShell from "@shared/ui/DialogShell.vue";
-import type { AgentTargetId, TargetConfigView } from "../../types";
+import type { AgentTargetId, McpTransport, TargetConfigView } from "../../types";
 import type { ProjectAgentPickerDiff } from "../../composables/useProjectAgentPicker";
 
 type ProjectAgentPickerDialogProps = {
@@ -14,6 +14,7 @@ type ProjectAgentPickerDialogProps = {
   // 按钮展示的是期望终态而非现状：在终态集合里的按钮呈已应用样式
   desiredAgentIds: AgentTargetId[];
   pendingDiff: ProjectAgentPickerDiff;
+  transport: McpTransport | null;
 };
 
 const props = defineProps<ProjectAgentPickerDialogProps>();
@@ -30,6 +31,15 @@ const eyebrow = "MCP · Project";
 const canApply = computed(
   () => props.pendingDiff.toAdd.length > 0 || props.pendingDiff.toRemove.length > 0,
 );
+
+// pi 的 mcp.json 不接受 legacy SSE transport，写进去 pi 会拒绝连接，直接置灰。
+function isSseUnsupportedAgent(agent: TargetConfigView): boolean {
+  return props.transport === "sse" && agent.id === "pi";
+}
+
+function agentButtonTitle(agent: TargetConfigView): string {
+  return isSseUnsupportedAgent(agent) ? "pi 不支持 SSE transport 的 MCP。" : "";
+}
 
 function agentButtonClass(agent: TargetConfigView): string {
   const compositeId = `${props.projectId}:${agent.id}` as AgentTargetId;
@@ -73,7 +83,8 @@ function agentButtonClass(agent: TargetConfigView): string {
           v-for="agent in agents"
           :key="agent.id"
           :class="agentButtonClass(agent)"
-          :disabled="loading"
+          :disabled="loading || isSseUnsupportedAgent(agent)"
+          :title="agentButtonTitle(agent)"
           type="button"
           @click="$emit('toggleAgent', agent.id)"
         >

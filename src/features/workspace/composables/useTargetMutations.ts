@@ -153,7 +153,7 @@ export function useTargetMutations() {
       showNotice("请填写 skills 目录。", "error");
       return;
     }
-    // MCP 配置文件和 configPrefix 成对填写；pi 这类不主动支持 MCP 的
+    // MCP 配置文件和 configPrefix 成对填写；不需要 MCP 分发的
     // target 允许两者都为空，此时只做 skill 分发。
     const configPath = form.configPath.trim();
     const mcpConfigPrefix = form.mcpConfigPrefix.trim();

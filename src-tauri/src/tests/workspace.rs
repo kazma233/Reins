@@ -1,5 +1,7 @@
 use super::*;
-use crate::test_support::TestDir;
+use crate::support::fs::pi_agent_dir_path;
+use crate::test_support::{TestDir, TestEnvGuard};
+use crate::workspace::targets::builtin_target_preset_inner;
 use std::time::{Duration, UNIX_EPOCH};
 
 #[path = "workspace_grokbuild.rs"]
@@ -642,16 +644,21 @@ fn default_config_template_parses_with_builtin_targets() -> Result<()> {
         .get(&AgentTargetId("pi".to_string()))
         .expect("pi target exists");
     assert!(pi.skill_dir.ends_with(".pi/agent/skills"));
-    // pi 不主动支持 MCP：默认没有配置文件和 configPrefix。
-    assert!(pi.config_path.is_none());
-    assert_eq!(pi.mcp_config_prefix, "");
+    // pi ≥0.99 支持 MCP：模板固化 <agentDir>/mcp.json，顶层 mcpServers。
+    assert_eq!(
+        pi.config_path.as_deref(),
+        pi_agent_dir_path(std::env::var_os("PI_CODING_AGENT_DIR"), home_dir())
+            .map(|dir| dir.join("mcp.json"))
+            .as_deref()
+    );
+    assert_eq!(pi.mcp_config_prefix, "mcpServers");
     assert_eq!(pi.mcp_config_type, McpConfigType::Common);
 
     Ok(())
 }
 
 #[test]
-fn global_pi_target_parses_without_mcp_config() -> Result<()> {
+fn global_pi_target_without_mcp_section_falls_back_to_preset() -> Result<()> {
     let config_path = PathBuf::from("/tmp/reins-pi-target-parse-test.yaml");
     let raw = r#"targets:
   pi:
@@ -665,8 +672,112 @@ fn global_pi_target_parses_without_mcp_config() -> Result<()> {
         .get(&AgentTargetId("pi".to_string()))
         .expect("pi target exists");
 
-    assert!(pi.config_path.is_none());
-    assert_eq!(pi.mcp_config_prefix, "");
+    // 省略 mcp 段时回落到内置默认：<agentDir>/mcp.json + mcpServers。
+    assert_eq!(
+        pi.config_path.as_deref(),
+        pi_agent_dir_path(std::env::var_os("PI_CODING_AGENT_DIR"), home_dir())
+            .map(|dir| dir.join("mcp.json"))
+            .as_deref()
+    );
+    assert_eq!(pi.mcp_config_prefix, "mcpServers");
+
+    Ok(())
+}
+
+#[test]
+fn pi_preset_and_template_follow_pi_coding_agent_dir() -> Result<()> {
+    let _guard = TestEnvGuard::lock();
+    let redirected = PathBuf::from("/tmp/reins-pi-agent-dir-redirect");
+    unsafe { std::env::set_var("PI_CODING_AGENT_DIR", &redirected) };
+
+    let preset = builtin_target_preset_inner("pi")?;
+    assert_eq!(
+        preset.config_path.as_deref(),
+        Some(redirected.join("mcp.json").display().to_string().as_str())
+    );
+    assert_eq!(preset.mcp_config_prefix, "mcpServers");
+
+    // 模板在生成时把重定向路径固化为具体值，config.yaml 是之后的权威。
+    let path = PathBuf::from("/tmp/reins-pi-defaults.yaml");
+    let config = parse_manager_config(&default_config_template(), &path)?;
+    let pi = config
+        .targets
+        .get(&AgentTargetId("pi".to_string()))
+        .expect("pi target exists");
+    assert_eq!(pi.skill_dir, redirected.join("skills"));
+    assert_eq!(pi.config_path, Some(redirected.join("mcp.json")));
+
+    Ok(())
+}
+
+#[test]
+fn pi_mcp_apply_read_remove_roundtrip() -> Result<()> {
+    let root = TestDir::new("pi-mcp-roundtrip")?;
+    let store = WorkspaceConfigStore::at(root.path());
+    let pi_mcp = root.path().join("mcp.json");
+    let config = serde_json::json!({
+        "targets": {
+            "pi": {"skill_dir": root.path().join("pi-skills").display().to_string(),
+                "mcp": {"config_path": pi_mcp.display().to_string(),
+                    "config_prefix": "mcpServers", "config_type": "common"}}
+        },
+        "mcps": [{"name": "fs-server", "transport": "stdio", "command": "npx",
+            "args": ["-y", "server-filesystem"]}]
+    });
+    fs::write(store.config_path(), serde_yaml::to_string(&config)?)?;
+
+    let preview = preview_mcp_target_inner(&store, "fs-server", "pi")?;
+    assert_eq!(preview.format, "json");
+    let entry: serde_json::Value = serde_json::from_str(&preview.content)?;
+    assert_eq!(entry["type"], "stdio");
+    assert_eq!(entry["command"], "npx");
+    assert_eq!(entry["args"], serde_json::json!(["-y", "server-filesystem"]));
+
+    apply_mcp_to_target_inner(&store, "fs-server", "pi")?;
+    apply_mcp_to_target_inner(&store, "fs-server", "pi")?;
+    let written: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&pi_mcp)?)?;
+    assert_eq!(written["mcpServers"]["fs-server"]["command"], "npx");
+
+    remove_mcp_from_target_inner(&store, "fs-server", "pi")?;
+    assert!(!fs::read_to_string(&pi_mcp)?.contains("fs-server"));
+    assert_eq!(
+        remove_mcp_from_target_inner(&store, "fs-server", "pi")?.action,
+        "noop"
+    );
+
+    Ok(())
+}
+
+#[test]
+fn project_pi_agent_uses_pi_project_layout() -> Result<()> {
+    let project_path = PathBuf::from("/tmp/reins-pi-project-layout-test");
+    let config_path = PathBuf::from("/tmp/reins-pi-project-layout-test.yaml");
+    let raw = format!(
+        r#"projects:
+  my-app:
+    path: {}
+    agents:
+      pi:
+        enabled: true
+"#,
+        project_path.display()
+    );
+
+    let config = parse_manager_config(&raw, &config_path)?;
+    let project = config.projects.get("my-app").expect("project exists");
+    let target = project
+        .agents
+        .get(&AgentTargetId("pi".to_string()))
+        .expect("pi project agent exists");
+
+    assert_eq!(target.skill_dir, project_path.join(".pi/skills"));
+    assert_eq!(
+        target.config_path.as_ref(),
+        Some(&project_path.join(".pi/mcp.json"))
+    );
+    assert_eq!(target.mcp_config_prefix, "mcpServers");
+    assert_eq!(target.mcp_config_type, McpConfigType::Common);
 
     Ok(())
 }
@@ -742,7 +853,7 @@ fn delete_workspace_mcp_skips_targets_without_mcp_config() -> Result<()> {
         store.config_path(),
         format!(
             r#"targets:
-  pi:
+  skillonly:
     enabled: true
     skill_dir: {}
   claude:
@@ -758,7 +869,7 @@ mcps:
   transport: stdio
   command: node
 "#,
-            root.path().join("pi-skills").display(),
+            root.path().join("skillonly-skills").display(),
             root.path().join("claude-skills").display(),
             claude_config.display(),
         ),
@@ -771,7 +882,8 @@ mcps:
     let result = delete_workspace_mcp_inner(&store, "test-server")?;
 
     assert_eq!(result.server_name, "test-server");
-    // pi 没有 MCP 配置文件，删除时必须被跳过而不是中断整个删除流程。
+    // 无 MCP 配置文件的自定义 target（非内置 id，无 preset 兜底）删除时必须
+    // 被跳过而不是中断整个删除流程。
     let cleaned = fs::read_to_string(&claude_config)?;
     assert!(!cleaned.contains("test-server"));
 

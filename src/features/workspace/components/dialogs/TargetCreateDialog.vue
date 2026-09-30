@@ -95,8 +95,8 @@ const presetIds = computed(() => Object.keys(BUILTIN_TARGET_PRESETS) as BuiltinT
           <label class="manager-field manager-picker-row__field">
             <span>MCP 配置文件（可选）</span>
             <small class="manager-field__hint">
-              target 的 MCP 配置文件路径。不主动支持 MCP 的 target（如 pi）可留空，留空时不写入任何
-              MCP 配置。
+              target 的 MCP 配置文件路径。不需要 MCP 分发的 target 可留空，留空时不写入任何 MCP
+              配置。
             </small>
             <input v-model="form.configPath" type="text" />
           </label>

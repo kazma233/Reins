@@ -79,15 +79,9 @@ export const BUILTIN_TARGET_PRESETS: Record<
     mcpConfigPrefix: "mcp.servers",
     mcpConfigType: "common",
   },
-  // pi 不主动支持 MCP：默认不带 MCP 配置文件，只分发 skill。
-  pi: {
-    targetId: "pi",
-    enabled: true,
-    skillDir: "~/.pi/agent/skills",
-    configPath: "",
-    mcpConfigPrefix: "",
-    mcpConfigType: "common",
-  },
+  // pi 的 skills 与 MCP 路径由后端解析 PI_CODING_AGENT_DIR（默认 ~/.pi/agent），
+  // 不能用静态路径覆盖运行时默认值。
+  pi: null,
 };
 
 export type SkillSourceFilter = "all" | "new" | `source:${string}`;
@@ -288,6 +282,8 @@ export type ProjectAgentPickerDialogState = {
   contextName: string;
   projectId: string | null;
   serverName: string | null;
+  // 当前 mcp 的 transport；pi 不支持 sse，弹窗据此置灰 pi 按钮。
+  transport: McpTransport | null;
   // 期望终态：应用后应安装该 mcp 的复合目标 id（projectId:agentId）
   desiredAgentIds: AgentTargetId[];
   confirmOpen: boolean;
@@ -299,6 +295,7 @@ export const DEFAULT_PROJECT_AGENT_PICKER_DIALOG: ProjectAgentPickerDialogState 
   contextName: "",
   projectId: null,
   serverName: null,
+  transport: null,
   desiredAgentIds: [],
   confirmOpen: false,
 };

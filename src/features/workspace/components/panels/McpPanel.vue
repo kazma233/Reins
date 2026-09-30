@@ -202,6 +202,7 @@ const pickerApplyDanger = computed(
     :installed-agent-ids="pickerInstalledAgentIds"
     :desired-agent-ids="projectAgentPickerDialog.desiredAgentIds"
     :pending-diff="pickerPendingDiff"
+    :transport="projectAgentPickerDialog.transport"
     @close="closeProjectAgentPickerDialog"
     @toggle-agent="toggleProjectAgentPickerAgent"
     @apply="openProjectAgentPickerConfirm"
