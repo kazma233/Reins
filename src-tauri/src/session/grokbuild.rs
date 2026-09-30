@@ -3,8 +3,10 @@ use std::collections::{HashMap, HashSet};
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 use anyhow::{Context, Result, anyhow, bail};
+use rusqlite::{Connection, params};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -837,5 +839,130 @@ impl SessionReader for GrokBuildBackend {
         let mut result = vec![marker(row)];
         result.extend(messages(row.member_path().as_ref())?);
         Ok(result)
+    }
+}
+
+// root 会话交给官方 `grok sessions delete`（目录、搜索索引、活跃保护都由
+// grok 自己处理）；该命令只认顶层会话、够不到 subagent 子会话，子会话按
+// 本地清理：成员目录 + session_search.sqlite 索引行。
+pub(crate) fn delete_session(path: &Path) -> Result<()> {
+    let family = family(path)?;
+
+    run_official_delete(family.root.member_id())?;
+
+    for row in family.members.iter().skip(1) {
+        let member_path = row.member_path();
+        let dir = member_path
+            .as_ref()
+            .parent()
+            .context("Invalid Grok Build session directory")?;
+        // 子会话目录可能已缺失（family 保留了占位入口），跳过即可。
+        if dir.exists() {
+            fs::remove_dir_all(dir)
+                .with_context(|| format!("Failed to delete {}", dir.display()))?;
+        }
+    }
+    // root 的会话目录与索引行由官方命令清理，这里只清本地删除的子会话行。
+    delete_search_index_rows(&family)?;
+
+    // cwd 分组目录删空后顺手清掉；prompt_history.jsonl 等共享文件会让它保留。
+    // 成员路径来自 canonicalize 后的索引扫描，root 先规范化才能对上前缀。
+    let sessions_root = crate::support::fs::canonicalize(&root()?)?;
+    for row in &family.members {
+        if let Some(dir) = row.member_path().as_ref().parent().and_then(Path::parent) {
+            prune_empty_parents(sessions_root.clone(), Some(dir));
+        }
+    }
+    Ok(())
+}
+
+// grok 对不存在的会话输出 "No session found" 但 exit 0（幂等语义），只有
+// 真正失败才 exit 非零；失败时把命令输出原样带回给调用方。
+fn run_official_delete(session_id: &str) -> Result<()> {
+    let output = grok_binary()?
+        .arg("sessions")
+        .arg("delete")
+        .arg(session_id)
+        .output()
+        .with_context(|| format!("Failed to execute grok sessions delete {session_id}"))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let exit_code = output
+            .status
+            .code()
+            .map(|code| code.to_string())
+            .unwrap_or_else(|| "terminated by signal".to_string());
+        bail!(
+            "Grok delete command failed for {session_id}. exit_code: {exit_code}\nstdout:\n{}\nstderr:\n{}",
+            stdout.trim(),
+            stderr.trim()
+        );
+    }
+    Ok(())
+}
+
+// 会话数据由 grok home 内的 CLI 写入，删除优先用同源二进制；home 内没有
+// （如数据目录搬迁后）退回 PATH 上的 grok。
+fn grok_binary() -> Result<Command> {
+    let home = crate::support::fs::grok_home_path(
+        std::env::var_os("GROK_HOME"),
+        crate::support::fs::user_home_dir(),
+    )
+    .context("Unable to determine Grok Build home")?;
+    let home_binary = home.join("bin").join("grok");
+    if home_binary.is_file() {
+        return Ok(Command::new(home_binary));
+    }
+    Ok(Command::new("grok"))
+}
+
+// session_docs 按 session_id 主键存全文索引，删除触发的 FTS 维护由 grok
+// 建库时的触发器完成；该库是搜索索引而非会话本体，旧版本会话可能没有。
+// 只清子会话行：root 的索引行随官方删除命令一并处理。
+fn delete_search_index_rows(family: &Family<Row>) -> Result<()> {
+    let db_path = root()?.join("session_search.sqlite");
+    if !db_path.exists() {
+        return Ok(());
+    }
+    let connection = Connection::open(&db_path)
+        .with_context(|| format!("Failed to open {}", db_path.display()))?;
+    for row in family.members.iter().skip(1) {
+        connection
+            .execute("DELETE FROM session_docs WHERE session_id = ?1", params![row.member_id()])
+            .with_context(|| {
+                format!(
+                    "Failed to delete Grok Build search index for {}",
+                    row.member_id()
+                )
+            })?;
+    }
+    Ok(())
+}
+
+fn prune_empty_parents(sessions_root: PathBuf, start: Option<&Path>) {
+    let Some(mut current) = start.map(Path::to_path_buf) else {
+        return;
+    };
+
+    while current.starts_with(&sessions_root) && current != sessions_root {
+        let is_empty = fs::read_dir(&current)
+            .ok()
+            .and_then(|mut entries| entries.next())
+            .is_none();
+
+        if !is_empty {
+            break;
+        }
+
+        if fs::remove_dir(&current).is_err() {
+            break;
+        }
+
+        let Some(parent) = current.parent() else {
+            break;
+        };
+        current = parent.to_path_buf();
     }
 }

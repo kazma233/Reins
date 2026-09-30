@@ -1,7 +1,11 @@
 use super::*;
+use super::grokbuild::{fixture as grok_fixture, history as grok_history, subagent_fixture};
 
+// The fake `codex` executable is a shell script and the PATH splice uses
+// the Unix ':' separator, so the real CLI would run on Windows instead.
+#[cfg(unix)]
 #[test]
-fn deleting_codex_family_removes_all_member_files() -> Result<()> {
+fn deleting_codex_family_invokes_official_cli() -> Result<()> {
     let temp_home = env::temp_dir().join(format!("reins-test-{}", Uuid::new_v4()));
     fs::create_dir_all(&temp_home)?;
     let _guard = TestEnvGuard::set_home(&temp_home);
@@ -291,6 +295,146 @@ fn deleting_opencode_family_uses_cli() -> Result<()> {
     assert!(deleted_ids.contains(child_id));
 
     unsafe { env::set_var("PATH", original_path) };
+    fs::remove_dir_all(&temp_home).ok();
+    Ok(())
+}
+
+fn seed_grok_search_index(home: &Path, session_ids: &[&str]) -> Result<()> {
+    let db_path = home.join(".grok/sessions/session_search.sqlite");
+    let connection = Connection::open(&db_path)?;
+    connection.execute(
+        "CREATE TABLE session_docs (
+            session_id TEXT PRIMARY KEY,
+            cwd TEXT NOT NULL,
+            updated_at INTEGER NOT NULL,
+            title TEXT NOT NULL,
+            content TEXT NOT NULL,
+            content_hash TEXT NOT NULL
+        , last_indexed_offset INTEGER NOT NULL DEFAULT 0)",
+        [],
+    )?;
+    for id in session_ids {
+        connection.execute(
+            "INSERT INTO session_docs (session_id, cwd, updated_at, title, content, content_hash) VALUES (?1, '/synthetic', 0, 'title', 'content', 'hash')",
+            params![id],
+        )?;
+    }
+    Ok(())
+}
+
+fn grok_search_rows(home: &Path, session_id: &str) -> Result<i64> {
+    let db_path = home.join(".grok/sessions/session_search.sqlite");
+    let connection = Connection::open(&db_path)?;
+    Ok(connection.query_row(
+        "SELECT COUNT(*) FROM session_docs WHERE session_id = ?1",
+        params![session_id],
+        |row| row.get::<_, i64>(0),
+    )?)
+}
+
+// root 会话走官方 `grok sessions delete`，测试在 temp home 里放一个记录
+// 调用参数的假 CLI；同时把 root 目录交由它"删除"，模拟官方行为。
+fn fake_grok_cli(home: &Path) -> Result<PathBuf> {
+    let bin_dir = home.join(".grok/bin");
+    fs::create_dir_all(&bin_dir)?;
+    let script_path = bin_dir.join("grok");
+    fs::write(
+        &script_path,
+        format!(
+            "#!/bin/sh\nif [ \"$1\" = \"sessions\" ] && [ \"$2\" = \"delete\" ]; then\n  printf '%s\\n' \"$3\" >> '{}'\n  exit 0\nfi\nexit 1\n",
+            home.join("grok-delete.log").display()
+        ),
+    )?;
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        let mut permissions = fs::metadata(&script_path)?.permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&script_path, permissions)?;
+    }
+    Ok(script_path)
+}
+
+#[test]
+fn deleting_grokbuild_family_removes_member_dirs_and_search_rows() -> Result<()> {
+    let temp_home = env::temp_dir().join(format!("reins-test-{}", Uuid::new_v4()));
+    fs::create_dir_all(&temp_home)?;
+    let _guard = TestEnvGuard::set_home(&temp_home);
+
+    let parent_path = grok_fixture(&temp_home, "grok-parent")?;
+    grok_history(&parent_path)?;
+    subagent_fixture(&temp_home, "grok-parent", "grok-child", "at1.delete", "Child answer")?;
+    // prompt_history.jsonl 是 cwd 级共享文件，删除会话时必须保留。
+    let bucket = temp_home.join(".grok/sessions/not-a-cwd");
+    fs::write(bucket.join("prompt_history.jsonl"), "{}\n")?;
+    seed_grok_search_index(
+        &temp_home,
+        &["grok-parent", "grok-child", "unrelated-session"],
+    )?;
+    fake_grok_cli(&temp_home)?;
+
+    let result = session::delete::delete_session_inner(
+        &state::session_index::SessionIndexState::default(),
+        SourceApp::GrokBuild,
+        "grok-parent",
+        Some(parent_path.to_string_lossy().as_ref()),
+    )?;
+
+    // root 交给官方命令（真实环境中目录也由官方删除，测试里只验证调用参数）。
+    let official_calls = fs::read_to_string(temp_home.join("grok-delete.log"))?;
+    assert_eq!(official_calls.lines().collect::<Vec<_>>(), ["grok-parent"]);
+
+    assert_eq!(result.deleted_session_id, "grok-parent");
+    assert!(bucket.join("grok-parent").exists());
+    assert!(!bucket.join("grok-child").exists());
+    assert!(bucket.join("prompt_history.jsonl").exists());
+    assert_eq!(grok_search_rows(&temp_home, "grok-parent")?, 1);
+    assert_eq!(grok_search_rows(&temp_home, "grok-child")?, 0);
+    assert_eq!(grok_search_rows(&temp_home, "unrelated-session")?, 1);
+
+    fs::remove_dir_all(&temp_home).ok();
+    Ok(())
+}
+
+#[test]
+fn deleting_grokbuild_session_prunes_empty_cwd_bucket() -> Result<()> {
+    let temp_home = env::temp_dir().join(format!("reins-test-{}", Uuid::new_v4()));
+    fs::create_dir_all(&temp_home)?;
+    let _guard = TestEnvGuard::set_home(&temp_home);
+
+    let parent_path = grok_fixture(&temp_home, "grok-solo")?;
+    grok_history(&parent_path)?;
+    let bucket = temp_home.join(".grok/sessions/not-a-cwd");
+    // 官方命令删除 root 目录，测试用假 CLI 模拟同样的文件效果。
+    fs::create_dir_all(temp_home.join(".grok/bin"))?;
+    fs::write(
+        temp_home.join(".grok/bin/grok"),
+        format!(
+            "#!/bin/sh\nif [ \"$1\" = \"sessions\" ] && [ \"$2\" = \"delete\" ]; then\n  printf '%s\\n' \"$3\" >> '{}'\n  rm -rf '{}/grok-solo'\n  exit 0\nfi\nexit 1\n",
+            temp_home.join("grok-delete.log").display(),
+            bucket.display()
+        ),
+    )?;
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        let mut permissions =
+            fs::metadata(temp_home.join(".grok/bin/grok"))?.permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(temp_home.join(".grok/bin/grok"), permissions)?;
+    }
+
+    session::delete::delete_session_inner(
+        &state::session_index::SessionIndexState::default(),
+        SourceApp::GrokBuild,
+        "grok-solo",
+        Some(parent_path.to_string_lossy().as_ref()),
+    )?;
+
+    assert!(!bucket.join("grok-solo").exists());
+    // bucket 内已无共享文件，空目录应被清理。
+    assert!(!bucket.exists());
+
     fs::remove_dir_all(&temp_home).ok();
     Ok(())
 }

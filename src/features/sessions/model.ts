@@ -9,14 +9,19 @@ export type DeleteMethodCopy = {
 };
 
 export function canDeleteSession(app: SourceApp): boolean {
-  return app !== "grokbuild" && app !== "zcode";
+  return app !== "zcode";
 }
 
 export const DELETE_METHOD_COPY: Record<SourceApp, DeleteMethodCopy> = {
   grokbuild: {
-    description: "暂不支持删除 Grok Build 会话。",
-    details: [],
-    commandLabel: "不支持删除"
+    description:
+      "Grok Build 主会话走官方删除命令，官方够不到的子代理子会话由本地清理。",
+    details: [
+      "对主会话执行 grok sessions delete，官方一并清理其目录与搜索索引。",
+      "子代理子会话目录及对应搜索索引行由本地清理。",
+      "保留工作目录分组下的 prompt_history.jsonl 等共享文件。"
+    ],
+    commandLabel: "执行动作"
   },
   zcode: {
     description: "暂不支持删除 ZCode 会话。",
@@ -107,9 +112,31 @@ export function deleteCommandPreview(detail: SessionOverview): string[] {
   const sessionIds = deleteTargetSessionIds(detail);
 
   switch (detail.summary.sourceApp) {
-    case "grokbuild":
     case "zcode":
       return [];
+    case "grokbuild": {
+      // sourcePaths 指向各会话目录内的文件，取父目录去重即为子会话目录。
+      const sessionDirs = Array.from(
+        new Set(detail.sourcePaths.map((path) => path.slice(0, path.lastIndexOf("/"))))
+      );
+      const childDirs = sessionDirs.filter(
+        (dir) => !dir.endsWith(`/${detail.summary.sourceSessionId}`)
+      );
+      const childIds = sessionIds.filter(
+        (sessionId) => sessionId !== detail.summary.sourceSessionId
+      );
+      return [
+        `grok sessions delete ${detail.summary.sourceSessionId}`,
+        ...childDirs.map((dir) => `rm -rf ${dialogShellQuote(dir)}`),
+        ...(childIds.length > 0
+          ? [
+              `sqlite3 "$HOME/.grok/sessions/session_search.sqlite" "DELETE FROM session_docs WHERE session_id IN (${childIds
+                .map((sessionId) => `'${sqlQuote(sessionId)}'`)
+                .join(", ")});"`
+            ]
+          : [])
+      ];
+    }
     case "opencode":
       return sessionIds.map(
         (sessionId) => `opencode session delete ${sessionId}`

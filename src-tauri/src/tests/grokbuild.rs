@@ -33,7 +33,7 @@ fn bounded_home() -> PathBuf {
     env::temp_dir().join(format!("reins-test-{}", Uuid::new_v4()))
 }
 
-fn child_session_fixture(home: &Path, child: &str, attempt: &str, answer: &str) -> Result<PathBuf> {
+pub(super) fn child_session_fixture(home: &Path, child: &str, attempt: &str, answer: &str) -> Result<PathBuf> {
     let dir = home.join(".grok/sessions/not-a-cwd").join(child);
     fs::create_dir_all(&dir)?;
     let path = dir.join("summary.json");
@@ -59,7 +59,7 @@ fn child_session_fixture(home: &Path, child: &str, attempt: &str, answer: &str) 
     Ok(path)
 }
 
-fn subagent_meta_fixture(
+pub(super) fn subagent_meta_fixture(
     home: &Path,
     parent: &str,
     child: &str,
@@ -89,7 +89,7 @@ fn subagent_meta_fixture(
     Ok(())
 }
 
-fn subagent_fixture(
+pub(super) fn subagent_fixture(
     home: &Path,
     parent: &str,
     child: &str,
@@ -370,7 +370,7 @@ fn grokbuild_rejects_self_claimed_subagent() -> Result<()> {
     Ok(())
 }
 
-fn fixture(home: &Path, id: &str) -> Result<PathBuf> {
+pub(super) fn fixture(home: &Path, id: &str) -> Result<PathBuf> {
     let path = home
         .join(".grok/sessions/not-a-cwd")
         .join(id)
@@ -388,7 +388,7 @@ fn fixture(home: &Path, id: &str) -> Result<PathBuf> {
     Ok(path)
 }
 
-fn history(path: &Path) -> Result<()> {
+pub(super) fn history(path: &Path) -> Result<()> {
     write_jsonl(
         &path.with_file_name("chat_history.jsonl"),
         &[
@@ -710,8 +710,10 @@ fn grokbuild_delete_boundary() -> Result<()> {
     let home = env::temp_dir().join(format!("reins-test-{}", Uuid::new_v4()));
     fs::create_dir_all(&home)?;
     let _guard = TestEnvGuard::set_home(home.as_path());
-    let path = fixture(home.as_path(), "export")?;
-    history(&path)?;
+    // sessions root 之外的伪造入口必须被拒，且文件原样保留。
+    let path = home.join("outside/export/summary.json");
+    fs::create_dir_all(path.parent().unwrap())?;
+    fs::write(&path, "{}")?;
     assert!(
         session::delete::delete_session_inner(
             &state::session_index::SessionIndexState::default(),

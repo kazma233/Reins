@@ -96,7 +96,7 @@ pub(crate) fn delete_session(source_app: SourceApp, path: &Path) -> Result<()> {
         SourceApp::ClaudeCode => claude_code::delete_session(path),
         SourceApp::OpenCode => opencode::delete_session(path),
         SourceApp::Pi => pi::delete_session(path),
-        SourceApp::GrokBuild => bail!("Grok Build session deletion is unsupported"),
+        SourceApp::GrokBuild => grokbuild::delete_session(path),
         // zcode CLI 不随桌面版安装、无官方单会话删除命令,直接删库又与常驻
         // 进程的写入冲突,所以整体不提供删除。
         SourceApp::Zcode => bail!("ZCode session deletion is unsupported"),

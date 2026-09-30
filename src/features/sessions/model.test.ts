@@ -3,9 +3,9 @@ import { canDeleteSession } from "./model";
 import { formatSourceAppName } from "./source-app";
 
 describe("Grok Build session contract", () => {
-  it("exposes a read-only source without a delete target", () => {
+  it("exposes the Grok Build source as deletable", () => {
     expect(formatSourceAppName("grokbuild")).toBe("Grok Build");
-    expect(canDeleteSession("grokbuild")).toBe(false);
+    expect(canDeleteSession("grokbuild")).toBe(true);
   });
 });
 
