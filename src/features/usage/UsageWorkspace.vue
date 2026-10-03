@@ -15,6 +15,7 @@ import {
   sourceColor,
   sourceSeries,
   todaySources,
+  totalTokens,
   windowSourceSummaries,
   windowSources,
   type UsageWindowDays
@@ -59,8 +60,18 @@ const summaries = computed(() =>
   windowSourceSummaries(normalizedSources.value, axis.value)
 );
 
+// 窗口内是否有任何来源产生过消耗:决定空态文案与曲线是否绘制。
+const hasWindowUsage = computed(() =>
+  normalizedSources.value.some((source) =>
+    source.points.some((point) => totalTokens(point.usage) > 0)
+  )
+);
+
 const chartSeries = computed(() =>
   normalizedSources.value
+    // 窗口内无消耗的来源不画曲线:全 0 线没有信息量,tooltip 还会冒出 0 行;
+    // 手动隐藏独立生效,切回有消耗的窗口时来源自动恢复
+    .filter((source) => source.points.some((point) => totalTokens(point.usage) > 0))
     .filter((source) => !hiddenSources.value.includes(source.sourceApp))
     .map((source) => ({
       sourceApp: source.sourceApp,
@@ -74,30 +85,32 @@ const chartSeries = computed(() =>
 <template>
   <div class="usage-workspace">
     <header class="usage-header">
-      <div class="usage-header__main">
-        <h2 class="usage-header__title">用量统计</h2>
-        <p class="usage-header__meta">按会话内消耗事件的实际时间归日统计,不估算金额</p>
-      </div>
-      <div class="usage-header__actions">
-        <div class="usage-window-switcher" role="group" aria-label="时间窗口">
+      <div class="usage-header__inner">
+        <div class="usage-header__main">
+          <h2 class="usage-header__title">用量统计</h2>
+          <p class="usage-header__meta">按会话内消耗事件的实际时间归日统计</p>
+        </div>
+        <div class="usage-header__actions">
+          <div class="usage-window-switcher" role="group" aria-label="时间窗口">
+            <button
+              v-for="option in USAGE_WINDOWS"
+              :key="option.days"
+              type="button"
+              :class="`usage-window-switcher__button${option.days === windowDays ? ' is-active' : ''}`"
+              @click="setWindowDays(option.days)"
+            >
+              {{ option.label }}
+            </button>
+          </div>
           <button
-            v-for="option in USAGE_WINDOWS"
-            :key="option.days"
             type="button"
-            :class="`usage-window-switcher__button${option.days === windowDays ? ' is-active' : ''}`"
-            @click="setWindowDays(option.days)"
+            class="secondary-button usage-refresh-button"
+            :disabled="loading"
+            @click="loadUsageStats"
           >
-            {{ option.label }}
+            {{ loading ? "扫描中…" : "刷新" }}
           </button>
         </div>
-        <button
-          type="button"
-          class="secondary-button usage-refresh-button"
-          :disabled="loading"
-          @click="loadUsageStats"
-        >
-          {{ loading ? "扫描中…" : "刷新" }}
-        </button>
       </div>
     </header>
 
@@ -119,7 +132,7 @@ const chartSeries = computed(() =>
         <template #headerMeta
           >{{ isTodayMode ? "按消耗事件的实际小时归桶" : "跨天会话按消息时间拆分到天;点击来源切换曲线显示" }}</template
         >
-        <div v-if="axis.length === 0" class="usage-empty">暂无用量数据</div>
+        <div v-if="!hasWindowUsage" class="usage-empty">暂无用量数据</div>
         <div v-else-if="chartSeries.length === 0" class="usage-empty">
           已隐藏全部来源,点击下方来源恢复曲线
         </div>

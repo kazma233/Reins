@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
+import { useElementSize } from "@vueuse/core";
 import { formatTokenCount } from "@shared/lib/format";
 import { niceCeil } from "../model";
 import "./usage-trend-chart.css";
@@ -20,11 +21,14 @@ type UsageTrendChartProps = {
 
 const props = defineProps<UsageTrendChartProps>();
 
-// viewBox 固定、宽度 100%:鼠标换算按渲染宽度比例折回 viewBox 坐标。
-const VIEW_WIDTH = 720;
+// 宽度跟随容器、高度固定:SVG 用真实像素绘制(viewBox 与渲染尺寸 1:1),
+// 文字不随窗口缩放变形;容器未测出前用兑底宽,挂载后立即校正。
+const chartEl = ref<HTMLElement | null>(null);
+const { width: measuredWidth } = useElementSize(chartEl);
 const VIEW_HEIGHT = 260;
 const PAD = { top: 16, right: 16, bottom: 30, left: 60 };
-const INNER_WIDTH = VIEW_WIDTH - PAD.left - PAD.right;
+const viewWidth = computed(() => Math.max(measuredWidth.value, 320));
+const innerWidth = computed(() => viewWidth.value - PAD.left - PAD.right);
 const INNER_HEIGHT = VIEW_HEIGHT - PAD.top - PAD.bottom;
 
 const maxY = computed(() => {
@@ -45,9 +49,9 @@ const gridTicks = computed(() =>
 function xAt(index: number): number {
   const last = props.axis.length - 1;
   if (last <= 0) {
-    return PAD.left + INNER_WIDTH / 2;
+    return PAD.left + innerWidth.value / 2;
   }
-  return PAD.left + (index / last) * INNER_WIDTH;
+  return PAD.left + (index / last) * innerWidth.value;
 }
 
 function yAt(value: number): number {
@@ -63,19 +67,23 @@ const lines = computed(() =>
   }))
 );
 
-// x 轴标签稀疏化:窗口短到放得下时逐日,否则均分 6 个刻度。
+// x 轴标签密度:文字已按真实像素渲染,按 11px 字号下标签实宽估算
+// (day 标签"MM-DD"约 33px、hour"HH"约 14px,留余量取间距 40/24);
+// 轴点超过上限时按固定步长抽稀,保证相邻标签严格等距。
 const xTicks = computed(() => {
   const count = props.axis.length;
   if (count === 0) {
     return [];
   }
-  const labelCount = count <= 14 ? count : 6;
-  const step = (count - 1) / (labelCount - 1 || 1);
-  return Array.from({ length: labelCount }, (_, i) => {
-    const index = Math.round(i * step);
+  const minSpacing = props.xLabelMode === "hour" ? 24 : 40;
+  const maxLabels = Math.floor(innerWidth.value / minSpacing) + 1;
+  const step = Math.max(1, Math.ceil(count / maxLabels));
+  const ticks: Array<{ index: number; label: string }> = [];
+  for (let index = 0; index < count; index += step) {
     const bucket = props.axis[index];
-    return { index, label: props.xLabelMode === "hour" ? bucket : bucket.slice(5) };
-  });
+    ticks.push({ index, label: props.xLabelMode === "hour" ? bucket : bucket.slice(5) });
+  }
+  return ticks;
 });
 
 const hoverIndex = ref<number | null>(null);
@@ -83,13 +91,14 @@ const hoverIndex = ref<number | null>(null);
 function handleMove(event: MouseEvent) {
   const target = event.currentTarget as SVGSVGElement;
   const bounds = target.getBoundingClientRect();
-  const viewX = ((event.clientX - bounds.left) / bounds.width) * VIEW_WIDTH;
+  // viewBox 与渲染像素 1:1,无需比例折算
+  const viewX = event.clientX - bounds.left;
   const last = props.axis.length - 1;
   if (last <= 0) {
     hoverIndex.value = props.axis.length === 1 ? 0 : null;
     return;
   }
-  const ratio = (viewX - PAD.left) / INNER_WIDTH;
+  const ratio = (viewX - PAD.left) / innerWidth.value;
   hoverIndex.value = Math.min(last, Math.max(0, Math.round(ratio * last)));
 }
 
@@ -97,19 +106,16 @@ const hoverX = computed(() =>
   hoverIndex.value === null ? null : xAt(hoverIndex.value)
 );
 
-// tooltip 跟随悬停竖线,定位换算回容器百分比,避免与 SVG 缩放脱钩。
-const tooltipLeftPercent = computed(() => {
-  if (hoverX.value === null) {
-    return 0;
-  }
-  return (hoverX.value / VIEW_WIDTH) * 100;
-});
+// tooltip 跟随悬停竖线,viewBox 已是像素坐标,直接定位
+const tooltipLeft = computed(() =>
+  hoverX.value === null ? 0 : hoverX.value
+);
 </script>
 
 <template>
-  <div class="usage-chart">
+  <div ref="chartEl" class="usage-chart">
     <svg
-      :viewBox="`0 0 ${VIEW_WIDTH} ${VIEW_HEIGHT}`"
+      :viewBox="`0 0 ${viewWidth} ${VIEW_HEIGHT}`"
       class="usage-chart__svg"
       role="img"
       aria-label="各 agent 每日 token 消耗曲线"
@@ -120,7 +126,7 @@ const tooltipLeftPercent = computed(() => {
         <line
           class="usage-chart__grid"
           :x1="PAD.left"
-          :x2="VIEW_WIDTH - PAD.right"
+          :x2="viewWidth - PAD.right"
           :y1="tick.y"
           :y2="tick.y"
         />
@@ -174,7 +180,7 @@ const tooltipLeftPercent = computed(() => {
     <div
       v-if="hoverIndex !== null"
       class="usage-chart__tooltip"
-      :style="{ left: `${tooltipLeftPercent}%` }"
+      :style="{ left: `${tooltipLeft}px` }"
     >
       <div class="usage-chart__tooltip-day">{{ axis[hoverIndex] }}</div>
       <div

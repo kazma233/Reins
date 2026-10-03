@@ -6,7 +6,8 @@
 .usage-chart__svg {
   display: block;
   width: 100%;
-  height: auto;
+  /* 高度固定:宽度变化只拉开 x 轴,不再等比拉高图表 */
+  height: 260px;
 }
 
 .usage-chart__grid {
@@ -16,7 +17,8 @@
 
 .usage-chart__axis-label {
   fill: var(--color-ink-muted, var(--color-body));
-  font-size: 11px;
+  /* SVG 按真实像素绘制,字号即渲染字号 */
+  font-size: var(--font-size-xs, 11px);
 }
 
 .usage-chart__line {

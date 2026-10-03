@@ -1,16 +1,36 @@
-/* 用量统计页:沿用 shell 的页面级留白与卡片节奏,布局自上而下
-   (指标行 → 曲线卡 → 来源 chips 挂在曲线卡底部)。 */
+/* 用量统计页:布局自上而下(指标行 → 曲线卡 → 来源 chips 挂在曲线卡底部)。
+   页面全部内容跟随 app 宽度,左右 padding 即边距;
+   高度跟随 app,内容超出时页面内滚动,子项禁止 flex 收缩(否则曲线卡
+   被压瘪后,卡片 overflow hidden 会把 x 轴标签和来源 chips 裁掉)。
+   图表高度固定,不随宽度变化(见 UsageTrendChart)。 */
 
 .usage-workspace {
   display: flex;
   flex-direction: column;
   gap: 16px;
   padding: 24px 28px 48px;
-  max-width: 1080px;
-  margin: 0 auto;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+/* 滚动容器内子项保持自然高度:若允许 flex 收缩,曲线卡会被压瘪,
+   卡片的 overflow hidden 会把 SVG 底部的 x 轴标签和来源 chips 裁掉 */
+.usage-workspace > * {
+  flex-shrink: 0;
 }
 
 .usage-header {
+  /* 吸顶:滚动浏览曲线时,时间窗口切换与刷新按钮始终可点。
+     背景必须满宽:超宽的图表卡会从 header 两侧后方滚过,内容对齐由 inner 负责 */
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  padding-top: 4px;
+  background: var(--color-canvas);
+}
+
+.usage-header__inner {
   display: flex;
   align-items: flex-end;
   justify-content: space-between;

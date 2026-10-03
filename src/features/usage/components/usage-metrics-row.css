@@ -1,6 +1,9 @@
+/* 用 flex 而非 auto-fit grid:小卡数量随窗口模式变化(普通 4 张/今日 3 张),
+   flex:1 天然均分占满整行;grid 的 auto-fit 会被 primary 的跨列占用
+   阻止空轨道折叠,小卡会被锁死在固定列宽上,右侧留空 */
 .usage-metrics {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(168px, 1fr));
+  display: flex;
+  flex-wrap: wrap;
   gap: 12px;
 }
 
@@ -8,6 +11,8 @@
   display: flex;
   flex-direction: column;
   gap: 4px;
+  /* basis 168px 保证窄窗口可换行,grow 均分剩余宽度占满整行 */
+  flex: 1 1 168px;
   padding: 12px 14px;
   border: 1px solid var(--color-hairline);
   border-radius: var(--radius-md, 8px);
@@ -15,7 +20,7 @@
 }
 
 .usage-metric--primary {
-  grid-column: 1 / -1;
+  flex-basis: 100%;
 }
 
 .usage-metric__label {
