@@ -12,7 +12,7 @@ use uuid::Uuid;
 use super::{
     ContentBlock, SessionAgent, SessionEvent, SessionEventPage, SessionFileEntry, SessionMessage,
     SessionMessagePage, SessionOverview, SessionReader, SessionSummary, SessionTokenUsage,
-    SourceApp, SummaryAccumulator, TimelineCacheEntry,
+    SourceApp, SummaryAccumulator, TimelineCacheEntry, UsageHourBuckets,
 };
 
 pub(crate) struct PiBackend;
@@ -430,34 +430,54 @@ fn parse_full_summary(path: &Path) -> Result<SessionSummary> {
 // toolResult 的扩展元数据里,按"会话总消耗"口径一并计入。官方 usage 的
 // output 已含 reasoning(totalTokens = input+output+cacheRead+cacheWrite)。
 fn accumulate_pi_usage(total: &mut Option<SessionTokenUsage>, entry: &Value) {
+    for usage in pi_entry_usages(entry) {
+        super::merge_token_usage(total, usage);
+    }
+}
+
+// 单个 entry 产生的全部增量 usage(主线程回复 0 或 1 条,subagent toolResult
+// 可能带多个 run)。
+fn pi_entry_usages(entry: &Value) -> Vec<SessionTokenUsage> {
     let Some(message) = entry.get("message") else {
-        return;
+        return Vec::new();
     };
 
     match message.get("role").and_then(Value::as_str) {
-        Some("assistant") => {
-            if let Some(usage) = message.get("usage") {
-                super::merge_token_usage(total, pi_usage(usage));
-            }
-        }
+        Some("assistant") => message
+            .get("usage")
+            .map(|usage| vec![pi_usage(usage)])
+            .unwrap_or_default(),
         Some("toolResult")
             if super::json_string(message, &["toolName"]).as_deref() == Some("subagent") =>
         {
-            let Some(runs) = message
+            message
                 .get("details")
                 .and_then(|details| details.get("results"))
                 .and_then(Value::as_array)
-            else {
-                return;
-            };
-            for run in runs {
-                if let Some(usage) = run.get("usage") {
-                    super::merge_token_usage(total, pi_usage(usage));
-                }
-            }
+                .map(|runs| {
+                    runs.iter()
+                        .filter_map(|run| run.get("usage").map(pi_usage))
+                        .collect()
+                })
+                .unwrap_or_default()
         }
-        _ => {}
+        _ => Vec::new(),
     }
+}
+
+// 用量曲线的日桶:与 accumulate_pi_usage 同源,按 entry.timestamp 归到本地
+// 时区的天,跨天会话由此拆开。
+pub(crate) fn usage_hours(path: &Path) -> Result<UsageHourBuckets> {
+    let document = read_document(path)?;
+    let mut buckets = UsageHourBuckets::new();
+
+    for entry in &document.entries {
+        for usage in pi_entry_usages(&entry.value) {
+            super::merge_usage_bucket(&mut buckets, entry.timestamp.and_then(super::hour_key), usage);
+        }
+    }
+
+    Ok(buckets)
 }
 
 fn pi_usage(usage: &Value) -> SessionTokenUsage {

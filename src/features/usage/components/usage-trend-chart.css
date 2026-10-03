@@ -1,0 +1,83 @@
+.usage-chart {
+  position: relative;
+  width: 100%;
+}
+
+.usage-chart__svg {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.usage-chart__grid {
+  stroke: var(--color-hairline);
+  stroke-width: 1;
+}
+
+.usage-chart__axis-label {
+  fill: var(--color-ink-muted, var(--color-body));
+  font-size: 11px;
+}
+
+.usage-chart__line {
+  fill: none;
+  stroke-width: 2;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+
+.usage-chart__cursor {
+  stroke: var(--color-ink-muted, var(--color-body));
+  stroke-width: 1;
+  stroke-dasharray: 3 3;
+}
+
+.usage-chart__dot {
+  stroke: var(--color-canvas);
+  stroke-width: 1.5;
+}
+
+.usage-chart__tooltip {
+  position: absolute;
+  top: 8px;
+  transform: translateX(-50%);
+  min-width: 148px;
+  padding: 8px 10px;
+  border: 1px solid var(--color-hairline);
+  border-radius: var(--radius-sm);
+  background: var(--color-canvas);
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.12);
+  pointer-events: none;
+  /* 两端贴近边缘时收住溢出。 */
+  white-space: nowrap;
+}
+
+.usage-chart__tooltip-day {
+  margin-bottom: 4px;
+  font-size: var(--font-size-xs, 11px);
+  color: var(--color-ink-muted, var(--color-body));
+}
+
+.usage-chart__tooltip-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--font-size-xs, 11px);
+}
+
+.usage-chart__tooltip-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex: none;
+}
+
+.usage-chart__tooltip-label {
+  color: var(--color-body);
+}
+
+.usage-chart__tooltip-value {
+  margin-left: auto;
+  font-weight: 600;
+  color: var(--color-ink);
+}

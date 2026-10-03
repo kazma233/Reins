@@ -1,6 +1,6 @@
 import { defineStore } from "pinia";
 
-export type AppMode = "sessions" | "workspace" | "providers";
+export type AppMode = "sessions" | "workspace" | "providers" | "usage";
 
 export const useAppStore = defineStore("app", {
   state: () => ({

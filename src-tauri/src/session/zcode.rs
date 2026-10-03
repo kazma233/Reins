@@ -9,7 +9,7 @@ use serde_json::{Value, json};
 use super::{
     ContentBlock, SessionEvent, SessionEventPage, SessionFileEntry, SessionMessage,
     SessionMessagePage, SessionOverview, SessionReader, SessionSummary, SessionTokenUsage,
-    SourceApp, TimelineCacheEntry,
+    SourceApp, TimelineCacheEntry, UsageHourBuckets, usage_stats::SqlUsageHours,
     family_index::{Family, FamilyIndexCacheEntry, FamilyRow},
     family_timeline::{
         FamilyAgentLabel, cached_family_events, cached_family_messages, family_agents,
@@ -257,6 +257,67 @@ fn session_token_usages(connection: &Connection) -> Result<HashMap<String, Sessi
 
     rows.collect::<std::result::Result<HashMap<_, _>, _>>()
         .context("Failed to read ZCode token usages")
+}
+
+// 用量曲线的小时桶:turn_usage 每 turn 预聚合且自带 started_at,归一口径与
+// session_token_usages 一致(input 拆掉 cache_read,output 并入 reasoning)。
+// db 缺失表示来源不可用,返回 None。
+pub(crate) fn usage_hours() -> Result<Option<SqlUsageHours>> {
+    let connection = match open_connection() {
+        Ok(connection) => connection,
+        Err(_) => return Ok(None),
+    };
+
+    let mut statement = connection
+        .prepare(
+            "SELECT session_id, started_at, input_tokens, output_tokens, reasoning_tokens,
+                    cache_read_input_tokens, cache_creation_input_tokens
+             FROM turn_usage",
+        )
+        .context("Failed to prepare Zcode usage hours query")?;
+
+    let rows = statement
+        .query_map([], |row| {
+            let session_id: String = row.get(0)?;
+            let started_at: i64 = row.get(1)?;
+            let column = |index: usize| -> rusqlite::Result<i64> {
+                Ok(row.get::<_, Option<i64>>(index)?.unwrap_or_default().max(0))
+            };
+            Ok((
+                session_id,
+                started_at,
+                SessionTokenUsage {
+                    input_tokens: (column(2)? - column(5)?).max(0) as u64,
+                    output_tokens: (column(3)? + column(4)?) as u64,
+                    cache_read_tokens: column(5)? as u64,
+                    cache_write_tokens: column(6)? as u64,
+                },
+            ))
+        })
+        .context("Failed to read Zcode usage hours")?;
+
+    let today = super::usage_stats::today_prefix();
+    let mut buckets = UsageHourBuckets::new();
+    let mut sessions = std::collections::HashSet::new();
+    let mut today_sessions = std::collections::HashSet::new();
+
+    for row in rows {
+        let (session_id, started_at, usage) = row?;
+        let hour_key = super::hour_key(started_at);
+        if let Some(key) = &hour_key {
+            if super::usage_stats::today_hour(key, &today).is_some() {
+                today_sessions.insert(session_id.clone());
+            }
+        }
+        sessions.insert(session_id);
+        super::merge_usage_bucket(&mut buckets, hour_key, usage);
+    }
+
+    Ok(Some(SqlUsageHours {
+        buckets,
+        session_count: sessions.len(),
+        today_session_count: today_sessions.len(),
+    }))
 }
 
 fn list_session_families() -> Result<Vec<ZcodeSessionFamily>> {

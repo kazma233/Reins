@@ -1,0 +1,182 @@
+/* 用量统计页:沿用 shell 的页面级留白与卡片节奏,布局自上而下
+   (指标行 → 曲线卡 → 来源 chips 挂在曲线卡底部)。 */
+
+.usage-workspace {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 24px 28px 48px;
+  max-width: 1080px;
+  margin: 0 auto;
+}
+
+.usage-header {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.usage-header__title {
+  margin: 0;
+  font-size: var(--font-size-xl, 16px);
+  color: var(--color-ink);
+}
+
+.usage-header__meta {
+  margin: 4px 0 0;
+  font-size: var(--font-size-xs, 11px);
+  color: var(--color-ink-muted, var(--color-body));
+}
+
+.usage-header__actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.usage-window-switcher {
+  display: inline-flex;
+  border: 1px solid var(--color-hairline);
+  border-radius: var(--radius-md, 8px);
+  overflow: hidden;
+  background: var(--color-canvas);
+}
+
+.usage-window-switcher__button {
+  padding: 6px 12px;
+  border: none;
+  background: transparent;
+  font-size: var(--font-size-xs, 11px);
+  color: var(--color-body);
+  cursor: pointer;
+}
+
+.usage-window-switcher__button + .usage-window-switcher__button {
+  border-left: 1px solid var(--color-hairline);
+}
+
+.usage-window-switcher__button.is-active {
+  background: var(--color-primary);
+  color: #ffffff;
+}
+
+.usage-refresh-button {
+  min-height: 30px;
+}
+
+.usage-error {
+  margin: 0;
+  padding: 10px 14px;
+  border: 1px solid color-mix(in srgb, var(--color-danger, #dc2626) 40%, var(--color-hairline));
+  border-radius: var(--radius-md, 8px);
+  background: color-mix(in srgb, var(--color-danger, #dc2626) 6%, var(--color-canvas));
+  color: var(--color-danger, #dc2626);
+  font-size: var(--font-size-sm, 13px);
+}
+
+.usage-error__retry {
+  margin-left: 8px;
+  border: none;
+  background: none;
+  padding: 0;
+  font-size: inherit;
+  color: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.usage-loading {
+  padding: 32px 0;
+  text-align: center;
+  font-size: var(--font-size-sm, 13px);
+  color: var(--color-ink-muted, var(--color-body));
+}
+
+/* 首扫大转录时的滚动进度条。 */
+.usage-loading__bar {
+  margin: 16px auto 0;
+  width: 220px;
+  height: 4px;
+  border-radius: var(--radius-pill, 999px);
+  background: var(--color-surface-strong, #eef1f5);
+  overflow: hidden;
+  position: relative;
+}
+
+.usage-loading__bar::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  width: 40%;
+  border-radius: inherit;
+  background: var(--color-primary);
+  animation: usage-loading-slide 1.1s ease-in-out infinite;
+}
+
+@keyframes usage-loading-slide {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(250%);
+  }
+}
+
+.usage-empty {
+  padding: 32px 0;
+  text-align: center;
+  font-size: var(--font-size-sm, 13px);
+  color: var(--color-ink-muted, var(--color-body));
+}
+
+.usage-source-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding-top: 12px;
+  border-top: 1px solid var(--color-hairline);
+}
+
+.usage-source-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  border: 1px solid var(--color-hairline);
+  border-radius: var(--radius-pill, 999px);
+  background: var(--color-canvas);
+  font-size: var(--font-size-xs, 11px);
+  color: var(--color-body);
+  cursor: pointer;
+}
+
+.usage-source-chip:hover {
+  border-color: var(--color-primary);
+}
+
+.usage-source-chip.is-hidden {
+  opacity: 0.45;
+}
+
+.usage-source-chip__dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex: none;
+}
+
+.usage-source-chip__name {
+  color: var(--color-ink);
+  font-weight: 550;
+}
+
+.usage-source-chip__share {
+  color: var(--color-ink-muted, var(--color-body));
+  font-variant-numeric: tabular-nums;
+}
+
+.usage-source-chip__tokens {
+  font-variant-numeric: tabular-nums;
+}

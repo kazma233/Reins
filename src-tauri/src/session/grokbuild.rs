@@ -13,7 +13,7 @@ use serde_json::{Value, json};
 use super::{
     ContentBlock, SessionEvent, SessionEventPage, SessionFileEntry, SessionMessage,
     SessionMessagePage, SessionOverview, SessionReader, SessionSummary, SessionTokenUsage,
-    SourceApp,
+    SourceApp, UsageHourBuckets,
 };
 
 use super::family_index::{Family, FamilyIndex, FamilyRow};
@@ -49,16 +49,34 @@ struct Summary {
 }
 
 // Grok CLI 落盘的会话目录 usage.json:session 是全轮 turn_completed 的累计
-// 汇总,turns/modelUsage 只是切片。旧版本会话没有该文件。
+// 汇总,turns/modelUsage 只是切片。旧版本会话没有该文件,也没有 turns 数组。
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct UsageFile {
     session: Option<UsageTotals>,
+    #[serde(default)]
+    turns: Vec<UsageTurn>,
 }
 
 #[derive(Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 struct UsageTotals {
+    #[serde(default)]
+    input_tokens: u64,
+    #[serde(default)]
+    output_tokens: u64,
+    #[serde(default)]
+    cached_read_tokens: u64,
+    #[serde(default)]
+    cache_creation_tokens: u64,
+}
+
+// 每轮的增量切片:sum(turns) == session 汇总,endedAt 是该轮完成时间。
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct UsageTurn {
+    #[serde(default)]
+    ended_at: Option<String>,
     #[serde(default)]
     input_tokens: u64,
     #[serde(default)]
@@ -485,6 +503,58 @@ fn session_usage(path: &Path) -> Result<Option<SessionTokenUsage>> {
         cache_read_tokens: totals.cached_read_tokens,
         cache_write_tokens: totals.cache_creation_tokens,
     }))
+}
+
+// 用量曲线的小时桶:turns[] 每轮自带增量用量与 endedAt,按轮归到本地时区的
+// 小时;旧版本 usage.json 没有 turns 时返回空桶。
+pub(crate) fn usage_hours(summary_path: &Path) -> Result<UsageHourBuckets> {
+    let mut buckets = UsageHourBuckets::new();
+    let Some(usage_path) = sibling(summary_path, "usage.json")? else {
+        return Ok(buckets);
+    };
+
+    let file: UsageFile = serde_json::from_reader(File::open(&usage_path)?)
+        .with_context(|| format!("Invalid Grok Build usage file {}", usage_path.display()))?;
+
+    for turn in &file.turns {
+        let timestamp = turn
+            .ended_at
+            .as_deref()
+            .and_then(crate::support::time::parse_timestamp);
+
+        super::merge_usage_bucket(
+            &mut buckets,
+            timestamp.and_then(super::hour_key),
+            SessionTokenUsage {
+                // 口径与 session_usage 相同:input 扣掉缓存命中。
+                input_tokens: turn.input_tokens.saturating_sub(turn.cached_read_tokens),
+                output_tokens: turn.output_tokens,
+                cache_read_tokens: turn.cached_read_tokens,
+                cache_write_tokens: turn.cache_creation_tokens,
+            },
+        );
+    }
+
+    Ok(buckets)
+}
+
+// 会话目录在 bucket 目录下第三层,depth=3 的 summary.json 即全部会话入口;
+// 与 family index 构建使用同一发现规则。
+pub(crate) fn session_summary_paths() -> Result<Vec<PathBuf>> {
+    let root = root()?;
+    if !root.exists() {
+        return Ok(Vec::new());
+    }
+
+    let root = crate::support::fs::canonicalize(&root)?;
+    Ok(walkdir::WalkDir::new(&root)
+        .min_depth(3)
+        .max_depth(3)
+        .into_iter()
+        .filter_map(|entry| entry.ok())
+        .filter(|entry| entry.file_type().is_file() && entry.file_name() == "summary.json")
+        .map(|entry| entry.into_path())
+        .collect())
 }
 
 fn sibling(path: &Path, name: &str) -> Result<Option<PathBuf>> {

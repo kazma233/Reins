@@ -10,7 +10,7 @@ use serde_json::{Value, json};
 use super::{
     ContentBlock, SessionEvent, SessionEventPage, SessionFileEntry, SessionMessage,
     SessionMessagePage, SessionOverview, SessionReader, SessionSummary, SessionTokenUsage,
-    SourceApp, TimelineCacheEntry,
+    SourceApp, TimelineCacheEntry, UsageHourBuckets, usage_stats::SqlUsageHours,
     family_index::{Family, FamilyIndexCacheEntry, FamilyRow},
     family_timeline::{
         FamilyAgentLabel, cached_family_events, cached_family_messages, family_agents,
@@ -307,6 +307,73 @@ fn session_token_usages(connection: &Connection) -> Result<HashMap<String, Sessi
 
     rows.collect::<std::result::Result<HashMap<_, _>, _>>()
         .context("Failed to read OpenCode token usages")
+}
+
+// 用量曲线的小时桶:assistant 消息的增量 usage 按消息时间归小时,归一口径与
+// session_token_usages 一致(output 并入 reasoning);消息时间优先
+// data.time.created,回退 time_created 列,与消息时间线一致。db 缺失表示
+// 来源不可用,返回 None。
+pub(crate) fn usage_hours() -> Result<Option<SqlUsageHours>> {
+    let connection = match open_connection() {
+        Ok(connection) => connection,
+        Err(_) => return Ok(None),
+    };
+
+    let mut statement = connection
+        .prepare(
+            "SELECT session_id,
+                    COALESCE(json_extract(data, '$.time.created'), time_created),
+                    COALESCE(json_extract(data, '$.tokens.input'), 0),
+                    COALESCE(json_extract(data, '$.tokens.output'), 0)
+                        + COALESCE(json_extract(data, '$.tokens.reasoning'), 0),
+                    COALESCE(json_extract(data, '$.tokens.cache.read'), 0),
+                    COALESCE(json_extract(data, '$.tokens.cache.write'), 0)
+             FROM session_message
+             WHERE type = 'assistant'",
+        )
+        .context("Failed to prepare OpenCode usage hours query")?;
+
+    let rows = statement
+        .query_map([], |row| {
+            let timestamp: i64 = row.get(1)?;
+            let usage_column = |index: usize| -> rusqlite::Result<u64> {
+                Ok(row.get::<_, Option<i64>>(index)?.unwrap_or_default().max(0) as u64)
+            };
+            Ok((
+                row.get::<_, String>(0)?,
+                timestamp,
+                SessionTokenUsage {
+                    input_tokens: usage_column(2)?,
+                    output_tokens: usage_column(3)?,
+                    cache_read_tokens: usage_column(4)?,
+                    cache_write_tokens: usage_column(5)?,
+                },
+            ))
+        })
+        .context("Failed to read OpenCode usage hours")?;
+
+    let today = super::usage_stats::today_prefix();
+    let mut buckets = UsageHourBuckets::new();
+    let mut sessions = std::collections::HashSet::new();
+    let mut today_sessions = std::collections::HashSet::new();
+
+    for row in rows {
+        let (session_id, timestamp, usage) = row?;
+        let hour_key = super::hour_key(timestamp);
+        if let Some(key) = &hour_key {
+            if super::usage_stats::today_hour(key, &today).is_some() {
+                today_sessions.insert(session_id.clone());
+            }
+        }
+        sessions.insert(session_id);
+        super::merge_usage_bucket(&mut buckets, hour_key, usage);
+    }
+
+    Ok(Some(SqlUsageHours {
+        buckets,
+        session_count: sessions.len(),
+        today_session_count: today_sessions.len(),
+    }))
 }
 
 fn list_session_families() -> Result<Vec<OpenCodeSessionFamily>> {

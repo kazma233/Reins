@@ -84,6 +84,62 @@ pub(crate) struct SessionTokenUsage {
     pub(crate) cache_write_tokens: u64,
 }
 
+impl SessionTokenUsage {
+    pub(crate) fn accumulate(&mut self, next: &Self) {
+        self.input_tokens += next.input_tokens;
+        self.output_tokens += next.output_tokens;
+        self.cache_read_tokens += next.cache_read_tokens;
+        self.cache_write_tokens += next.cache_write_tokens;
+    }
+}
+
+// 用量统计的日聚合点:day 是本地时区 YYYY-MM-DD,由消耗事件(消息/turn/
+// token_count 事件)的时间戳归桶而来,跨天会话天然按天拆分。
+#[derive(Clone, Debug, PartialEq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../src/features/usage/generated/")]
+pub(crate) struct UsageDayPoint {
+    pub(crate) day: String,
+    pub(crate) usage: SessionTokenUsage,
+}
+
+#[derive(Clone, Debug, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../src/features/usage/generated/")]
+pub(crate) struct UsageSourceStats {
+    pub(crate) source_app: SourceApp,
+    pub(crate) days: Vec<UsageDayPoint>,
+    // 今日窗口的小时序列:本地时区今天有消耗的小时,前端补齐 0..23。
+    pub(crate) today_hours: Vec<UsageHourPoint>,
+    // 有消耗记录的会话数;jsonl 来源按产出日桶的转录文件计(resume 段与
+    // subagent 线程是独立文件,与列表页 family 求和口径一致)。
+    pub(crate) session_count: usize,
+    // 今日产生消耗的会话数,今日窗口的会话指标用它而不是全周期值。
+    pub(crate) today_session_count: usize,
+}
+
+// 今日窗口的小时点;hour 是本地时区 0..23。
+#[derive(Clone, Debug, PartialEq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../src/features/usage/generated/")]
+pub(crate) struct UsageHourPoint {
+    pub(crate) hour: u8,
+    pub(crate) usage: SessionTokenUsage,
+}
+
+// 全量日序列是唯一事实源:时间窗裁剪与指标推导都在前端完成。
+#[derive(Clone, Debug, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../src/features/usage/generated/")]
+pub(crate) struct UsageStats {
+    // 只含当前可用且有数据的来源。
+    pub(crate) sources: Vec<UsageSourceStats>,
+}
+
+// 单个转录文件(或 SQL 来源)的小时桶中间形态;day 序列与 today_hours 都由
+// 它聚合而来。key 形如 "YYYY-MM-DDTHH"(本地时区),BTreeMap 保证升序。
+pub(crate) type UsageHourBuckets = std::collections::BTreeMap<String, SessionTokenUsage>;
+
 #[derive(Clone, Debug, Deserialize, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export, export_to = "../../src/features/sessions/generated/")]

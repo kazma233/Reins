@@ -12,7 +12,7 @@ use serde_json::{Value, json};
 use super::{
     ContentBlock, SessionAgent, SessionEvent, SessionEventPage, SessionFileEntry, SessionMessage,
     SessionMessagePage, SessionOverview, SessionReader, SessionSummary, SessionTokenUsage,
-    SourceApp, SummaryAccumulator, TimelineCacheEntry, TimelineRecord,
+    SourceApp, SummaryAccumulator, TimelineCacheEntry, TimelineRecord, UsageHourBuckets,
     family_index::{Family, FamilyIndexCacheEntry, FamilyRow},
     family_timeline::{FamilyAgentLabel, cached_family_events, cached_family_messages},
 };
@@ -377,20 +377,46 @@ fn parse_full_session_summary(path: &Path) -> Result<SessionSummary> {
 // sidechain 消息与 subagents/ 目录下的子代理文件都是 assistant 行,按
 // "会话总消耗"口径一并计入。
 fn accumulate_claude_usage(total: &mut Option<SessionTokenUsage>, message: &Value) {
-    let Some(usage) = message.get("usage") else {
-        return;
-    };
+    if let Some(usage) = claude_usage(message) {
+        super::merge_token_usage(total, usage);
+    }
+}
 
-    super::merge_token_usage(
-        total,
-        SessionTokenUsage {
-            input_tokens: super::json_u64(usage, "input_tokens").unwrap_or_default(),
-            output_tokens: super::json_u64(usage, "output_tokens").unwrap_or_default(),
-            cache_read_tokens: super::json_u64(usage, "cache_read_input_tokens").unwrap_or_default(),
-            cache_write_tokens: super::json_u64(usage, "cache_creation_input_tokens")
-                .unwrap_or_default(),
-        },
-    );
+// Claude 的 usage 字段直映射;None 表示该消息没有 usage 记录。
+fn claude_usage(message: &Value) -> Option<SessionTokenUsage> {
+    let usage = message.get("usage")?;
+
+    Some(SessionTokenUsage {
+        input_tokens: super::json_u64(usage, "input_tokens").unwrap_or_default(),
+        output_tokens: super::json_u64(usage, "output_tokens").unwrap_or_default(),
+        cache_read_tokens: super::json_u64(usage, "cache_read_input_tokens").unwrap_or_default(),
+        cache_write_tokens: super::json_u64(usage, "cache_creation_input_tokens")
+            .unwrap_or_default(),
+    })
+}
+
+// 用量曲线的日桶:与 accumulate_claude_usage 同源,但按行级 timestamp 归到
+// 本地时区的天,跨天会话由此拆开。
+pub(crate) fn usage_hours(path: &Path) -> Result<UsageHourBuckets> {
+    let mut buckets = UsageHourBuckets::new();
+
+    for line in BufReader::new(File::open(path)?).lines() {
+        let value = super::parse_json_line(&line?)?;
+        if super::json_type(&value) != Some("assistant") {
+            continue;
+        }
+
+        let timestamp = value
+            .get("timestamp")
+            .and_then(Value::as_str)
+            .and_then(crate::support::time::parse_timestamp);
+
+        if let Some(usage) = claude_usage(&value["message"]) {
+            super::merge_usage_bucket(&mut buckets, timestamp.and_then(super::hour_key), usage);
+        }
+    }
+
+    Ok(buckets)
 }
 
 fn is_root_transcript(path: &Path) -> bool {

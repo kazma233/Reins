@@ -12,7 +12,7 @@ use serde_json::{Value, json};
 use super::{
     ContentBlock, SessionAgent, SessionEvent, SessionEventPage, SessionFileEntry, SessionMessage,
     SessionMessagePage, SessionOverview, SessionReader, SessionSummary, SessionTokenUsage,
-    SourceApp, SummaryAccumulator, TimelineCacheEntry, TimelineRecord,
+    SourceApp, SummaryAccumulator, TimelineCacheEntry, TimelineRecord, UsageHourBuckets,
     family_index::{Family, FamilyIndexCacheEntry, FamilyRow},
     family_timeline::{FamilyAgentLabel, cached_family_events, cached_family_messages},
 };
@@ -435,7 +435,7 @@ fn parse_full_session_summary(path: &Path) -> Result<SessionSummary> {
 
 // Codex 的 input_tokens 含缓存命中部分,扣除后与其他来源的"新输入"口径
 // 对齐;output_tokens 本身已含 reasoning。
-fn codex_cumulative_usage(usage: &Value) -> Option<SessionTokenUsage> {
+pub(crate) fn codex_cumulative_usage(usage: &Value) -> Option<SessionTokenUsage> {
     let input = super::json_u64(usage, "input_tokens")?;
     let cached = super::json_u64(usage, "cached_input_tokens").unwrap_or_default();
 
@@ -445,6 +445,57 @@ fn codex_cumulative_usage(usage: &Value) -> Option<SessionTokenUsage> {
         cache_read_tokens: cached,
         cache_write_tokens: super::json_u64(usage, "cache_write_input_tokens").unwrap_or_default(),
     })
+}
+
+// 用量曲线的小时桶:token_count 的 total_token_usage 是本文件开跑以来的
+// 累计值,相邻事件差分得到增量,归到事件时间戳所在小时。首事件视作从 0 起
+// 步;累计回退(compact 等重置)时差分钳 0,宁可少计也不重复计。
+pub(crate) fn usage_hours(path: &Path) -> Result<UsageHourBuckets> {
+    let mut buckets = UsageHourBuckets::new();
+    let mut previous = SessionTokenUsage::default();
+
+    for line in BufReader::new(File::open(path)?).lines() {
+        let value = super::parse_json_line(&line?)?;
+        if super::json_type(&value) != Some("event_msg") {
+            continue;
+        }
+
+        let payload = &value["payload"];
+        if super::json_string(payload, &["type"]).as_deref() != Some("token_count") {
+            continue;
+        }
+
+        let Some(current) = payload
+            .get("info")
+            .and_then(|info| info.get("total_token_usage"))
+            .and_then(codex_cumulative_usage)
+        else {
+            continue;
+        };
+
+        let timestamp = value
+            .get("timestamp")
+            .and_then(Value::as_str)
+            .and_then(crate::support::time::parse_timestamp);
+
+        super::merge_usage_bucket(
+            &mut buckets,
+            timestamp.and_then(super::hour_key),
+            SessionTokenUsage {
+                input_tokens: current.input_tokens.saturating_sub(previous.input_tokens),
+                output_tokens: current.output_tokens.saturating_sub(previous.output_tokens),
+                cache_read_tokens: current
+                    .cache_read_tokens
+                    .saturating_sub(previous.cache_read_tokens),
+                cache_write_tokens: current
+                    .cache_write_tokens
+                    .saturating_sub(previous.cache_write_tokens),
+            },
+        );
+        previous = current;
+    }
+
+    Ok(buckets)
 }
 
 fn list_session_rows() -> Result<Vec<CodexSessionRow>> {

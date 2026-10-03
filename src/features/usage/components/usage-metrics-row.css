@@ -1,0 +1,36 @@
+.usage-metrics {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(168px, 1fr));
+  gap: 12px;
+}
+
+.usage-metric {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 12px 14px;
+  border: 1px solid var(--color-hairline);
+  border-radius: var(--radius-md, 8px);
+  background: color-mix(in srgb, var(--color-canvas) 60%, var(--color-surface-soft));
+}
+
+.usage-metric--primary {
+  grid-column: 1 / -1;
+}
+
+.usage-metric__label {
+  font-size: var(--font-size-xs, 11px);
+  color: var(--color-ink-muted, var(--color-body));
+}
+
+.usage-metric__value {
+  font-size: 20px;
+  font-weight: 650;
+  color: var(--color-ink);
+  font-variant-numeric: tabular-nums;
+}
+
+.usage-metric__meta {
+  font-size: var(--font-size-xs, 11px);
+  color: var(--color-ink-muted, var(--color-body));
+}

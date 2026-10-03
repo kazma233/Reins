@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::env;
 use std::fs::{self, File};
 use std::io::Write;
@@ -24,6 +24,7 @@ mod session_index;
 mod session_listing;
 mod session_readers;
 mod session_token_usage;
+mod session_usage_stats;
 mod workspace_skills;
 mod zcode;
 

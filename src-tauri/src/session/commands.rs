@@ -4,6 +4,7 @@ use anyhow::Result;
 
 use crate::state::session_index::SessionIndexState;
 
+use super::UsageStats;
 use super::catalog::{
     SourceSelection, clear_session_caches_inner, detect_sources_inner, list_sessions_inner,
     refresh_sessions_inner,
@@ -17,6 +18,7 @@ use super::timeline::{
     get_session_agent_messages_inner, get_session_events_inner, get_session_messages_inner,
     get_session_overview_inner,
 };
+use super::usage_stats::usage_stats_inner;
 
 const DEFAULT_SESSION_PAGE_SIZE: usize = 20;
 const MAX_SESSION_PAGE_SIZE: usize = 200;
@@ -187,6 +189,11 @@ pub(crate) async fn get_session_events(
         )
     })
     .await
+}
+
+#[tauri::command]
+pub(crate) async fn get_usage_stats() -> std::result::Result<UsageStats, String> {
+    run_blocking(usage_stats_inner).await
 }
 
 #[tauri::command]

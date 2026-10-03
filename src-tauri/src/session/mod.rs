@@ -18,6 +18,8 @@ pub(crate) mod grokbuild;
 pub(crate) mod opencode;
 pub(crate) mod pi;
 pub(crate) mod summary_cache;
+pub(crate) mod usage_day_cache;
+pub(crate) mod usage_stats;
 pub(crate) mod zcode;
 
 use self::catalog::*;
@@ -25,6 +27,7 @@ use self::family_timeline::*;
 use self::jsonl::*;
 use self::model::*;
 use self::text::*;
+use self::usage_stats::{hour_key, merge_usage_bucket};
 
 pub(crate) trait SessionReader {
     fn list_entries(&self) -> Result<Vec<SessionFileEntry>>;
@@ -87,6 +90,7 @@ pub(crate) fn clear_all_caches() -> Result<()> {
     reader(SourceApp::Zcode).clear_cache()?;
     // 持久缓存一并清空：用户触发的刷新是"全量重建"的逃生通道。
     summary_cache::clear_all();
+    usage_day_cache::clear_all();
     Ok(())
 }
 
