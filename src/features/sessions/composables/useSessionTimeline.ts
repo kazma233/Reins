@@ -9,7 +9,8 @@ import type {
   SourceApp
 } from "../types";
 
-export const DETAIL_PAGE_SIZE = 40;
+// 详情时间线单页条数:滚动到底自动续拉,80 条在首屏成本与滚动频率间取衡。
+export const DETAIL_PAGE_SIZE = 80;
 
 export function sessionRequestKey(
   sourceApp: SourceApp,
@@ -19,36 +20,99 @@ export function sessionRequestKey(
   return `${sourceApp}:${sourceSessionId}:${transcriptPath}`;
 }
 
+// messages/events 的加载流程完全同构,收敛成一个 loader,避免双份状态机漂移。
+export type TimelineLoader<T> = {
+  items: Ref<T[]>;
+  loading: Ref<boolean>;
+  loadingMore: Ref<boolean>;
+  error: Ref<string | null>;
+  nextOffset: Ref<number | null>;
+  loadMore: () => Promise<void>;
+  reset: () => void;
+};
+
+type TimelinePage<T> = { items: T[]; nextOffset: number | null };
+
+function createTimelineLoader<T>(
+  overviewRef: Ref<SessionOverview | null>,
+  requestGuard: { capture: () => string | null; isCurrent: (key: string) => boolean },
+  fetchPage: (
+    overview: SessionOverview,
+    offset: number
+  ) => Promise<TimelinePage<T>>,
+  fallbackError: string
+): TimelineLoader<T> {
+  const items = ref<T[]>([]) as Ref<T[]>;
+  const loading = ref(false);
+  const loadingMore = ref(false);
+  const error = ref<string | null>(null);
+  const nextOffset = ref<number | null>(null);
+
+  async function loadMore(): Promise<void> {
+    const currentOverview = overviewRef.value;
+    if (
+      !currentOverview ||
+      loading.value ||
+      loadingMore.value ||
+      nextOffset.value === null
+    ) {
+      return;
+    }
+
+    const requestKey = requestGuard.capture();
+    if (requestKey === null) {
+      return;
+    }
+
+    // offset 0 且列表为空即首屏加载:整页替换而非追加
+    const initialLoad = nextOffset.value === 0 && items.value.length === 0;
+    if (initialLoad) {
+      loading.value = true;
+    } else {
+      loadingMore.value = true;
+    }
+    error.value = null;
+
+    try {
+      const page = await fetchPage(currentOverview, nextOffset.value);
+      if (!requestGuard.isCurrent(requestKey)) {
+        return;
+      }
+      items.value = initialLoad ? page.items : [...items.value, ...page.items];
+      nextOffset.value = page.nextOffset;
+    } catch (loadError) {
+      if (!requestGuard.isCurrent(requestKey)) {
+        return;
+      }
+      error.value = extractErrorMessage(loadError, fallbackError);
+    } finally {
+      if (requestGuard.isCurrent(requestKey)) {
+        loading.value = false;
+        loadingMore.value = false;
+      }
+    }
+  }
+
+  function reset() {
+    items.value = [];
+    loading.value = false;
+    loadingMore.value = false;
+    error.value = null;
+    nextOffset.value = null;
+  }
+
+  return { items, loading, loadingMore, error, nextOffset, loadMore, reset };
+}
+
 export type SessionTimelineState = {
   detailKey: Ref<string | null>;
-  events: Ref<SessionEvent[]>;
-  eventsLoading: Ref<boolean>;
-  eventsLoadingMore: Ref<boolean>;
-  eventError: Ref<string | null>;
-  loadMoreEvents: () => Promise<void>;
-  loadMoreMessages: () => Promise<void>;
-  messageError: Ref<string | null>;
-  messages: Ref<SessionMessage[]>;
-  messagesLoading: Ref<boolean>;
-  messagesLoadingMore: Ref<boolean>;
-  nextEventOffset: Ref<number | null>;
-  nextMessageOffset: Ref<number | null>;
+  messagesLoader: TimelineLoader<SessionMessage>;
+  eventsLoader: TimelineLoader<SessionEvent>;
 };
 
 export function useSessionTimeline(
   overview: Ref<SessionOverview | null>
 ): SessionTimelineState {
-  const messages = ref<SessionMessage[]>([]);
-  const events = ref<SessionEvent[]>([]);
-  const messagesLoading = ref(false);
-  const eventsLoading = ref(false);
-  const messagesLoadingMore = ref(false);
-  const eventsLoadingMore = ref(false);
-  const messageError = ref<string | null>(null);
-  const eventError = ref<string | null>(null);
-  const nextMessageOffset = ref<number | null>(null);
-  const nextEventOffset = ref<number | null>(null);
-
   const detailKey = computed<string | null>(() => {
     const current = overview.value;
     if (!current) {
@@ -64,208 +128,63 @@ export function useSessionTimeline(
   // 切换会话后，未完成的消息/事件请求都要作废
   const requestGuard = createKeyGuard(() => detailKey.value);
 
-  async function loadMoreMessages() {
-    const currentOverview = overview.value;
-    const requestKey = requestGuard.capture();
-    if (
-      !currentOverview ||
-      requestKey === null ||
-      messagesLoading.value ||
-      messagesLoadingMore.value ||
-      nextMessageOffset.value === null
-    ) {
-      return;
-    }
-
-    messagesLoadingMore.value = true;
-    messageError.value = null;
-
-    try {
+  const messagesLoader = createTimelineLoader<SessionMessage>(
+    overview,
+    requestGuard,
+    async (currentOverview, offset) => {
       const bundle = await getSessionMessages(
         currentOverview.summary.sourceApp,
         currentOverview.summary.sourceSessionId,
         {
           transcriptPath: currentOverview.summary.transcriptPath,
-          offset: nextMessageOffset.value,
+          offset,
           limit: DETAIL_PAGE_SIZE
         }
       );
+      return { items: bundle.messages, nextOffset: bundle.nextOffset };
+    },
+    "加载会话时间线失败。"
+  );
 
-      if (!requestGuard.isCurrent(requestKey)) {
-        return;
-      }
-
-      messages.value = [...messages.value, ...bundle.messages];
-      nextMessageOffset.value = bundle.nextOffset;
-    } catch (error) {
-      if (!requestGuard.isCurrent(requestKey)) {
-        return;
-      }
-      messageError.value = extractErrorMessage(error, "加载更多消息失败。");
-    } finally {
-      if (requestGuard.isCurrent(requestKey)) {
-        messagesLoadingMore.value = false;
-      }
-    }
-  }
-
-  async function loadMoreEvents() {
-    const currentOverview = overview.value;
-    if (
-      !currentOverview ||
-      eventsLoading.value ||
-      eventsLoadingMore.value ||
-      nextEventOffset.value === null
-    ) {
-      return;
-    }
-
-    const requestKey = requestGuard.capture();
-    if (!requestKey) {
-      return;
-    }
-
-    const initialLoad = events.value.length === 0 && nextEventOffset.value === 0;
-
-    if (initialLoad) {
-      eventsLoading.value = true;
-    } else {
-      eventsLoadingMore.value = true;
-    }
-
-    eventError.value = null;
-
-    try {
+  const eventsLoader = createTimelineLoader<SessionEvent>(
+    overview,
+    requestGuard,
+    async (currentOverview, offset) => {
       const page = await getSessionEvents(
         currentOverview.summary.sourceApp,
         currentOverview.summary.sourceSessionId,
         {
           transcriptPath: currentOverview.summary.transcriptPath,
-          offset: nextEventOffset.value,
+          offset,
           limit: DETAIL_PAGE_SIZE
         }
       );
+      return { items: page.events, nextOffset: page.nextOffset };
+    },
+    "加载更多事件失败。"
+  );
 
-      if (!requestGuard.isCurrent(requestKey)) {
-        return;
-      }
-
-      events.value = [...events.value, ...page.events];
-      nextEventOffset.value = page.nextOffset;
-    } catch (error) {
-      if (!requestGuard.isCurrent(requestKey)) {
-        return;
-      }
-      eventError.value = extractErrorMessage(error, "加载更多事件失败。");
-    } finally {
-      if (requestGuard.isCurrent(requestKey)) {
-        eventsLoading.value = false;
-        eventsLoadingMore.value = false;
-      }
-    }
-  }
-
-  // 事件在 overview 变化时清空，随后由事件 tab 打开时懒加载。
-  function resetEventState() {
-    events.value = [];
-    eventError.value = null;
-    eventsLoading.value = false;
-    eventsLoadingMore.value = false;
-    nextEventOffset.value = null;
-  }
-
-  async function loadInitialMessages(activeOverview: SessionOverview) {
-    const requestKey = requestGuard.capture();
-    if (requestKey === null) {
-      return;
-    }
-
-    messagesLoading.value = true;
-    messageError.value = null;
-
-    try {
-      const bundle = await getSessionMessages(
-        activeOverview.summary.sourceApp,
-        activeOverview.summary.sourceSessionId,
-        {
-          transcriptPath: activeOverview.summary.transcriptPath,
-          offset: 0,
-          limit: DETAIL_PAGE_SIZE
-        }
-      );
-
-      if (!requestGuard.isCurrent(requestKey)) {
-        return;
-      }
-
-      messages.value = bundle.messages;
-      nextMessageOffset.value = bundle.nextOffset;
-    } catch (error) {
-      if (!requestGuard.isCurrent(requestKey)) {
-        return;
-      }
-      const message = extractErrorMessage(error, "加载会话时间线失败。");
-      messageError.value = message;
-      eventError.value = message;
-    } finally {
-      if (requestGuard.isCurrent(requestKey)) {
-        messagesLoading.value = false;
-      }
-    }
-  }
-
-  // Reset and load the initial message batch whenever the overview changes.
-  // Events are loaded lazily via loadMoreEvents when the events tab is opened.
+  // overview 变化:两个 loader 全部重置,消息首页立即加载;
+  // 事件页懒加载,首页消息结束(成功或失败)后才置 0 允许拉取。
   watch(
     overview,
-    (currentOverview, _oldOverview, onCleanup) => {
-      const activeDetailKey = detailKey.value;
-      if (!currentOverview || !activeDetailKey) {
-        resetEventState();
-        messages.value = [];
-        messageError.value = null;
-        messagesLoading.value = false;
-        messagesLoadingMore.value = false;
-        nextMessageOffset.value = null;
+    currentOverview => {
+      messagesLoader.reset();
+      eventsLoader.reset();
+      if (!currentOverview || !detailKey.value) {
         return;
       }
 
-      let cancelled = false;
-
-      messages.value = [];
-      resetEventState();
-      messageError.value = null;
-      messagesLoading.value = true;
-      messagesLoadingMore.value = false;
-      nextMessageOffset.value = null;
-
-      void loadInitialMessages(currentOverview).then(() => {
-        if (!cancelled && requestGuard.isCurrent(activeDetailKey)) {
-          // 首页消息就绪后事件才可按需加载。
-          nextEventOffset.value = 0;
+      const activeDetailKey = detailKey.value;
+      messagesLoader.nextOffset.value = 0;
+      void messagesLoader.loadMore().then(() => {
+        if (requestGuard.isCurrent(activeDetailKey)) {
+          eventsLoader.nextOffset.value = 0;
         }
-      });
-
-      onCleanup(() => {
-        cancelled = true;
       });
     },
     { immediate: true }
   );
 
-  return {
-    detailKey,
-    events,
-    eventsLoading,
-    eventsLoadingMore,
-    eventError,
-    loadMoreEvents,
-    loadMoreMessages,
-    messageError,
-    messages,
-    messagesLoading,
-    messagesLoadingMore,
-    nextEventOffset,
-    nextMessageOffset
-  };
+  return { detailKey, messagesLoader, eventsLoader };
 }

@@ -80,21 +80,25 @@ const deferredTimelineFilter = refDebounced(timelineFilter, 300);
 // --- timeline ---
 
 const overviewRef = toRef(props, "overview");
+const { detailKey, messagesLoader, eventsLoader } = useSessionTimeline(overviewRef);
+
+// ref 解构不丢响应性,沿用原有变量名,模板与滚动加载逻辑无需改动
 const {
-  detailKey,
-  events,
-  eventsLoading,
-  eventsLoadingMore,
-  eventError,
-  loadMoreEvents,
-  loadMoreMessages,
-  messageError,
-  messages,
-  messagesLoading,
-  messagesLoadingMore,
-  nextEventOffset,
-  nextMessageOffset
-} = useSessionTimeline(overviewRef);
+  items: messages,
+  loading: messagesLoading,
+  loadingMore: messagesLoadingMore,
+  error: messageError,
+  nextOffset: nextMessageOffset,
+  loadMore: loadMoreMessages
+} = messagesLoader;
+const {
+  items: events,
+  loading: eventsLoading,
+  loadingMore: eventsLoadingMore,
+  error: eventError,
+  nextOffset: nextEventOffset,
+  loadMore: loadMoreEvents
+} = eventsLoader;
 
 // --- delete flow ---
 

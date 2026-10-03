@@ -22,8 +22,8 @@ use super::usage_stats::usage_stats_inner;
 
 const DEFAULT_SESSION_PAGE_SIZE: usize = 20;
 const MAX_SESSION_PAGE_SIZE: usize = 200;
-const DEFAULT_DETAIL_PAGE_SIZE: usize = 40;
-const MAX_DETAIL_PAGE_SIZE: usize = 100;
+const DEFAULT_DETAIL_PAGE_SIZE: usize = 80;
+const MAX_DETAIL_PAGE_SIZE: usize = 200;
 
 #[tauri::command]
 pub(crate) async fn detect_sources(
