@@ -238,8 +238,38 @@ fn open_connection() -> Result<Connection> {
     Connection::open(db_path()?).context("Failed to open OpenCode sqlite database")
 }
 
+// opencode v2 的 db 与 session_v2 表都随首次会话写入才落地,缺失只说明该
+// 来源还没有会话。读写模式打开会凭空创建空 db 文件,所以打开前先判存在。
+fn existing_db_path() -> Result<Option<PathBuf>> {
+    let path = db_path()?;
+    Ok(path.is_file().then_some(path))
+}
+
+fn table_exists(connection: &Connection, table: &str) -> Result<bool> {
+    let exists: Option<i64> = connection
+        .query_row(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1",
+            [table],
+            |row| row.get(0),
+        )
+        .map(Some)
+        .or_else(|error| match error {
+            rusqlite::Error::QueryReturnedNoRows => Ok(None),
+            other => Err(other),
+        })
+        .with_context(|| format!("Failed to inspect OpenCode table {table}"))?;
+    Ok(exists.is_some())
+}
+
 fn list_session_rows() -> Result<Vec<OpenCodeSessionRow>> {
-    let connection = open_connection()?;
+    let Some(db) = existing_db_path()? else {
+        return Ok(Vec::new());
+    };
+    let connection = Connection::open(db).context("Failed to open OpenCode sqlite database")?;
+    if !table_exists(&connection, "session_v2")? {
+        return Ok(Vec::new());
+    }
+
     let token_usages = session_token_usages(&connection)?;
     let mut statement = connection.prepare(
         "SELECT id, parent_id, directory, title, time_created, time_updated FROM session_v2 ORDER BY time_updated DESC",
@@ -314,10 +344,16 @@ fn session_token_usages(connection: &Connection) -> Result<HashMap<String, Sessi
 // data.time.created,回退 time_created 列,与消息时间线一致。db 缺失表示
 // 来源不可用,返回 None。
 pub(crate) fn usage_hours() -> Result<Option<SqlUsageHours>> {
-    let connection = match open_connection() {
+    let Some(db) = existing_db_path()? else {
+        return Ok(None);
+    };
+    let connection = match Connection::open(db) {
         Ok(connection) => connection,
         Err(_) => return Ok(None),
     };
+    if !table_exists(&connection, "session_message")? {
+        return Ok(None);
+    }
 
     let mut statement = connection
         .prepare(
@@ -409,8 +445,15 @@ fn build_session_families(rows: Vec<OpenCodeSessionRow>) -> Vec<OpenCodeSessionF
         .collect()
 }
 
+// db 缺失(来源还没有会话)时取 0,让 family_index 走到空列表分支,而不是
+// 在 metadata 读取上失败。
 fn opencode_db_timestamp() -> Result<i64> {
-    crate::support::time::file_modified_timestamp_millis(&db_path()?)
+    let path = db_path()?;
+    if !path.is_file() {
+        return Ok(0);
+    }
+
+    crate::support::time::file_modified_timestamp_millis(&path)
 }
 
 fn family_index() -> Result<OpenCodeFamilyIndexCacheEntry> {

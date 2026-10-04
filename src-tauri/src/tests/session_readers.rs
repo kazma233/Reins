@@ -1059,3 +1059,122 @@ fn codex_title_strips_markdown_link_syntax() -> Result<()> {
     fs::remove_dir_all(&temp_home).ok();
     Ok(())
 }
+
+// opencode v2 的建表随首次会话写入才发生:db 已存在但没有 session_v2 表
+// 时按"还没有会话"处理,列表与用量统计都不报错。
+#[test]
+fn opencode_db_without_session_v2_table_lists_no_sessions() -> Result<()> {
+    let temp_home = env::temp_dir().join(format!("reins-test-{}", Uuid::new_v4()));
+    fs::create_dir_all(&temp_home)?;
+    let _guard = TestEnvGuard::set_home(&temp_home);
+
+    let db_path = session::opencode::db_path()?;
+    if let Some(parent) = db_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    Connection::open(&db_path)?.execute_batch("CREATE TABLE other (id TEXT);")?;
+
+    let page = session::catalog::list_sessions_inner(
+        &state::session_index::SessionIndexState::default(),
+        session::catalog::SourceSelection::One(SourceApp::OpenCode),
+        0,
+        20,
+        "",
+        false,
+        true,
+    )?;
+    assert_eq!(page.total_count, 0);
+    assert!(page.sessions.is_empty());
+
+    assert!(session::opencode::usage_hours()?.is_none());
+
+    fs::remove_dir_all(&temp_home).ok();
+    Ok(())
+}
+
+// opencode 目录存在但 db 文件还不存在(v2 从未启动过写库):同样按没有
+// 会话处理,且不能凭空创建出 db 文件。
+#[test]
+fn opencode_missing_db_lists_no_sessions_without_creating_db() -> Result<()> {
+    let temp_home = env::temp_dir().join(format!("reins-test-{}", Uuid::new_v4()));
+    fs::create_dir_all(&temp_home)?;
+    let _guard = TestEnvGuard::set_home(&temp_home);
+
+    fs::create_dir_all(session::opencode::root()?)?;
+
+    let page = session::catalog::list_sessions_inner(
+        &state::session_index::SessionIndexState::default(),
+        session::catalog::SourceSelection::One(SourceApp::OpenCode),
+        0,
+        20,
+        "",
+        false,
+        true,
+    )?;
+    assert_eq!(page.total_count, 0);
+    assert!(page.sessions.is_empty());
+
+    assert!(session::opencode::usage_hours()?.is_none());
+    assert!(!session::opencode::db_path()?.exists());
+
+    fs::remove_dir_all(&temp_home).ok();
+    Ok(())
+}
+
+// codex 登录/配置阶段 ~/.codex 已存在但 sessions 子目录还没有:按还没有
+// 会话处理,列表不报错。
+#[test]
+fn codex_missing_sessions_dir_lists_no_sessions() -> Result<()> {
+    let temp_home = env::temp_dir().join(format!("reins-test-{}", Uuid::new_v4()));
+    fs::create_dir_all(&temp_home)?;
+    let _guard = TestEnvGuard::set_home(&temp_home);
+
+    fs::create_dir_all(temp_home.join(".codex"))?;
+
+    let page = session::catalog::list_sessions_inner(
+        &state::session_index::SessionIndexState::default(),
+        session::catalog::SourceSelection::One(SourceApp::Codex),
+        0,
+        20,
+        "",
+        false,
+        true,
+    )?;
+    assert_eq!(page.total_count, 0);
+    assert!(page.sessions.is_empty());
+
+    fs::remove_dir_all(&temp_home).ok();
+    Ok(())
+}
+
+// zcode 的 db 文件存在但 session/turn_usage 表还没有(全新安装、建表未发生):
+// 按还没有会话处理,列表与用量统计都不报错。
+#[test]
+fn zcode_db_without_session_table_lists_no_sessions() -> Result<()> {
+    let temp_home = env::temp_dir().join(format!("reins-test-{}", Uuid::new_v4()));
+    fs::create_dir_all(&temp_home)?;
+    let _guard = TestEnvGuard::set_home(&temp_home);
+
+    let db_path = session::zcode::db_path()?;
+    if let Some(parent) = db_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    Connection::open(&db_path)?.execute_batch("CREATE TABLE other (id TEXT);")?;
+
+    let page = session::catalog::list_sessions_inner(
+        &state::session_index::SessionIndexState::default(),
+        session::catalog::SourceSelection::One(SourceApp::Zcode),
+        0,
+        20,
+        "",
+        false,
+        true,
+    )?;
+    assert_eq!(page.total_count, 0);
+    assert!(page.sessions.is_empty());
+
+    assert!(session::zcode::usage_hours()?.is_none());
+
+    fs::remove_dir_all(&temp_home).ok();
+    Ok(())
+}

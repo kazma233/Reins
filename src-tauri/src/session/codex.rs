@@ -506,6 +506,13 @@ fn list_session_rows() -> Result<Vec<CodexSessionRow>> {
 }
 
 fn codex_sessions_root_timestamp(sessions_root: &Path) -> Result<i64> {
+    // sessions 目录由 codex 首次会话时创建,登录/配置阶段 ~/.codex 已存在
+    // 但它可能还没有;缺失取 0,让索引走到空列表分支而不是在 metadata
+    // 读取上失败。
+    if !sessions_root.is_dir() {
+        return Ok(0);
+    }
+
     let mut latest = crate::support::time::file_modified_timestamp_millis(sessions_root)?;
 
     for path in crate::support::fs::enumerate_jsonl_files(sessions_root)? {

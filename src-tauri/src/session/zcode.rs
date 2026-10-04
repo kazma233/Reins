@@ -190,8 +190,30 @@ fn open_connection() -> Result<Connection> {
     .context("Failed to open ZCode sqlite database")
 }
 
+// 判定表是否已建:db 文件与表都随 zcode 首次写入落地,表缺失只说明该来源
+// 还没有会话。
+fn table_exists(connection: &Connection, table: &str) -> Result<bool> {
+    let exists: Option<i64> = connection
+        .query_row(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1",
+            [table],
+            |row| row.get(0),
+        )
+        .map(Some)
+        .or_else(|error| match error {
+            rusqlite::Error::QueryReturnedNoRows => Ok(None),
+            other => Err(other),
+        })
+        .with_context(|| format!("Failed to inspect ZCode table {table}"))?;
+    Ok(exists.is_some())
+}
+
 fn list_session_rows() -> Result<Vec<ZcodeSessionRow>> {
     let connection = open_connection()?;
+    if !table_exists(&connection, "session")? {
+        return Ok(Vec::new());
+    }
+
     let token_usages = session_token_usages(&connection)?;
     let mut statement = connection.prepare(
         "SELECT id, parent_id, directory, title, time_created, time_updated FROM session ORDER BY time_updated DESC",
@@ -267,6 +289,9 @@ pub(crate) fn usage_hours() -> Result<Option<SqlUsageHours>> {
         Ok(connection) => connection,
         Err(_) => return Ok(None),
     };
+    if !table_exists(&connection, "turn_usage")? {
+        return Ok(None);
+    }
 
     let mut statement = connection
         .prepare(
