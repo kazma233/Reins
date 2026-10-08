@@ -1,5 +1,5 @@
 use super::*;
-use crate::test_support::TestDir;
+use crate::test_support::{TestDir, TestEnvGuard};
 use crate::workspace::targets::builtin_target_preset_inner;
 use serde_json::json;
 
@@ -66,6 +66,8 @@ fn claimed_config<'a>(
 
 #[test]
 fn dsh_defaults_preset_and_prefix_relaxation() -> Result<()> {
+    // 读 ambient HOME 断言默认值,必须持全局锁防并行测试翻转 env。
+    let _guard = TestEnvGuard::lock();
     let home = home_dir().ok_or_else(|| anyhow!("测试环境缺少 HOME"))?;
     let preset = builtin_target_preset_inner("dsh")?;
     assert_eq!(
@@ -166,6 +168,8 @@ fn dsh_create_target_accepts_config_path_without_prefix() -> Result<()> {
 
 #[test]
 fn dsh_apply_creates_patch_file_and_preview_matches() -> Result<()> {
+    // 断言两侧各自读 HOME,不持锁会与并行 env 测试产生 TOCTOU 闪失。
+    let _guard = TestEnvGuard::lock();
     let root = TestDir::new("dsh-apply-create")?;
     let store = dsh_fixture(&root, "stdio", Some(30_000), "probe")?;
     let path = patch_path(&store);
