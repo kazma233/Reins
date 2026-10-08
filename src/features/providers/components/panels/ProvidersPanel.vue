@@ -1,15 +1,21 @@
 <script setup lang="ts">
-import { reactive, ref } from "vue";
+import { computed, reactive, ref } from "vue";
 import ConfirmDialog from "@shared/ui/ConfirmDialog.vue";
 import AppCard from "@shared/ui/AppCard.vue";
-import { deleteProvider, upsertProvider } from "../../api";
+import { extractErrorMessage } from "@shared/lib/errors";
+import { applyProviderToApp, deleteProvider, upsertProvider } from "../../api";
 import {
+  APP_LABELS,
   formFromProvider,
   formToInput,
   hasApiKey,
   protocolLabel,
+  providerSyncPlan,
   emptyProviderForm,
   type ProviderFormState,
+  type ProviderSyncPlanItem,
+  type ProviderSyncSkip,
+  type ProviderSyncTarget,
 } from "../../model";
 import { useProvidersAction } from "../../composables/useProvidersAction";
 import { useProvidersState } from "../../composables/useProvidersState";
@@ -25,6 +31,49 @@ const editCreating = ref(false);
 const editStep = ref<1 | 2>(1);
 const form = reactive<ProviderFormState>(emptyProviderForm());
 const deleteDialog = reactive({ open: false, providerId: "", providerLabel: "" });
+
+// 已应用 + 配置有偏差的条目都算同步目标，计划按提供商缓存一份供按钮与同步执行共用。
+const syncPlans = computed(() => {
+  const plans = new Map<string, ProviderSyncPlanItem[]>();
+  const current = state.value;
+  if (current) {
+    for (const provider of current.providers) {
+      plans.set(provider.id, providerSyncPlan(current, provider));
+    }
+  }
+  return plans;
+});
+
+function syncPlanFor(providerId: string): ProviderSyncPlanItem[] {
+  return syncPlans.value.get(providerId) ?? [];
+}
+
+function syncTargetsFor(providerId: string): ProviderSyncTarget[] {
+  return syncPlanFor(providerId).filter((item): item is ProviderSyncTarget => !item.skip);
+}
+
+function syncSkipsFor(providerId: string): ProviderSyncSkip[] {
+  return syncPlanFor(providerId).filter((item): item is ProviderSyncSkip => item.skip);
+}
+
+// 阻断原因是完整句子，嵌入提示时去掉句尾句号再统一收尾。
+function reasonText(reason: string): string {
+  return reason.replace(/。+$/, "");
+}
+
+function syncButtonTitle(providerId: string): string {
+  const plan = syncPlanFor(providerId);
+  if (plan.length === 0) {
+    return "尚未应用到任何 Agent。";
+  }
+  if (syncTargetsFor(providerId).length === 0) {
+    const reasons = syncSkipsFor(providerId)
+      .map((item) => `${APP_LABELS[item.app]} ${reasonText(item.reason)}`)
+      .join("；");
+    return `无法同步：${reasons}。`;
+  }
+  return "";
+}
 
 function openCreate() {
   Object.assign(form, emptyProviderForm());
@@ -75,6 +124,45 @@ function requestDeleteProvider(providerId: string) {
   deleteDialog.providerId = providerId;
   deleteDialog.providerLabel = provider?.label ?? providerId;
   deleteDialog.open = true;
+}
+
+// 同步是显式操作，点按即执行：逐个 Agent 应用，跳过与失败都汇总到一条提示。
+function runSync(providerId: string) {
+  const targets = syncTargetsFor(providerId);
+  const skips = syncSkipsFor(providerId);
+  runProvidersAction({
+    action: async () => {
+      const synced: string[] = [];
+      const failures: string[] = [];
+      for (const item of targets) {
+        try {
+          await applyProviderToApp(item.input);
+          synced.push(APP_LABELS[item.app]);
+        } catch (error) {
+          failures.push(`${APP_LABELS[item.app]}：${extractErrorMessage(error, "同步失败。")}`);
+        }
+      }
+      return { synced, failures };
+    },
+    success: ({ synced, failures }) => ({
+      message: syncNotice(synced, failures, skips),
+      tone: failures.length > 0 ? "error" : "success",
+    }),
+  });
+}
+
+function syncNotice(synced: string[], failures: string[], skips: ProviderSyncSkip[]): string {
+  const parts = [synced.length > 0 ? `已同步到 ${synced.join("、")}` : "没有可同步的 Agent"];
+  if (skips.length > 0) {
+    const skipped = skips
+      .map((item) => `${APP_LABELS[item.app]}（${reasonText(item.reason)}）`)
+      .join("、");
+    parts.push(`未同步：${skipped}`);
+  }
+  if (failures.length > 0) {
+    parts.push(`失败：${failures.join("；")}`);
+  }
+  return `${parts.join("；")}。`;
 }
 
 function confirmDeleteProvider() {
@@ -134,6 +222,15 @@ function confirmDeleteProvider() {
         </dl>
 
         <template #actions>
+          <button
+            class="secondary-button"
+            :disabled="runningAction || syncTargetsFor(provider.id).length === 0"
+            type="button"
+            :title="syncButtonTitle(provider.id)"
+            @click="runSync(provider.id)"
+          >
+            同步
+          </button>
           <button class="secondary-button" :disabled="runningAction" type="button" @click="openEdit(provider.id)">
             编辑
           </button>

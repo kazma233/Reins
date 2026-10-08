@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { ProviderAppState, ProviderView } from "./generated";
+import type { ProviderAppEntry, ProviderAppState, ProviderView, ProvidersState } from "./generated";
 import {
   applyBlockers,
   applyCandidates,
@@ -10,6 +10,7 @@ import {
   mergeFetchedModels,
   normalizeProviderIdInput,
   protocolCompatible,
+  providerSyncPlan,
   reasoningEffortMappingText,
   reasoningEffortWrite,
   reasoningLevelChoices,
@@ -402,3 +403,121 @@ describe("mergeFetchedModels", () => {
   });
 });
 
+describe("providerSyncPlan", () => {
+  function entry(providerId: string, overrides: Partial<ProviderAppEntry> = {}): ProviderAppEntry {
+    return {
+      key: `reins-${providerId}`,
+      status: "applied",
+      providerId,
+      label: null,
+      baseUrl: null,
+      modelIds: [],
+      defaultModelId: null,
+      notes: [],
+      protocol: null,
+      ...overrides,
+    };
+  }
+
+  function stateOf(apps: ProviderAppState[], providers: ProviderView[]): ProvidersState {
+    return { configPath: "providers.yaml", providers, apps };
+  }
+
+  function model(id: string): ProviderView["models"][number] {
+    return { id, label: id };
+  }
+
+  it("plans applied and drifted entries and ignores external ones", () => {
+    const target = provider({ id: "glm", models: [model("glm-4.5")] });
+    const plan = providerSyncPlan(
+      stateOf(
+        [
+          appState({ app: "codex", entries: [entry("glm")] }),
+          appState({ app: "claude", entries: [entry("glm", { status: "drifted" })] }),
+          appState({
+            app: "opencode",
+            entries: [
+              {
+                key: "someone-else",
+                status: "external",
+                providerId: null,
+                label: null,
+                baseUrl: null,
+                modelIds: [],
+                defaultModelId: null,
+                notes: [],
+              },
+            ],
+          }),
+        ],
+        [target]
+      ),
+      target
+    );
+    expect(plan.map((item) => item.app)).toEqual(["codex", "claude"]);
+    expect(plan.some((item) => item.skip)).toBe(false);
+  });
+
+  it("keeps each agent's applied models, default model and reasoning level", () => {
+    const target = provider({ id: "glm", models: [model("glm-4.5"), model("glm-4.6")] });
+    const apps = [
+      appState({
+        supportedReasoningLevels: ["low", "high"],
+        defaultReasoningLevel: "high",
+        entries: [entry("glm", { modelIds: ["glm-4.5"], defaultModelId: "glm-4.5" })],
+      }),
+    ];
+    const plan = providerSyncPlan(stateOf(apps, [target]), target);
+    expect(plan).toHaveLength(1);
+    const item = plan[0];
+    if (item.skip) {
+      throw new Error("expected a syncable item");
+    }
+    expect(item.input).toEqual({
+      providerId: "glm",
+      app: "codex",
+      modelIds: ["glm-4.5"],
+      defaultModelId: "glm-4.5",
+      defaultReasoningLevel: "high",
+    });
+  });
+
+  it("skips agents whose applied models all left the catalog", () => {
+    const target = provider({ id: "glm", models: [model("glm-4.6")] });
+    const apps = [appState({ entries: [entry("glm", { modelIds: ["glm-4.5"] })] })];
+    const plan = providerSyncPlan(stateOf(apps, [target]), target);
+    const item = plan[0];
+    if (!item.skip) {
+      throw new Error("expected a skipped item");
+    }
+    expect(item.reason).toContain("均不在当前目录中");
+  });
+
+  it("skips agents that cannot apply yet and reports the blockers", () => {
+    const target = provider({ id: "glm", apiKey: "", models: [model("glm-4.5")] });
+    const apps = [appState({ entries: [entry("glm")] })];
+    const plan = providerSyncPlan(stateOf(apps, [target]), target);
+    const item = plan[0];
+    if (!item.skip) {
+      throw new Error("expected a skipped item");
+    }
+    expect(item.reason).toContain("API Key");
+  });
+
+  it("skips agents whose tool cannot speak the provider protocol", () => {
+    const target = provider({ id: "glm", models: [model("glm-4.5")] });
+    const apps = [appState({ supportedProtocols: ["anthropic_messages"], entries: [entry("glm")] })];
+    const plan = providerSyncPlan(stateOf(apps, [target]), target);
+    const item = plan[0];
+    if (!item.skip) {
+      throw new Error("expected a skipped item");
+    }
+    expect(item.reason).toContain("不支持协议");
+  });
+
+  it("plans nothing for a provider that is not applied anywhere", () => {
+    const target = provider({ id: "glm", models: [model("glm-4.5")] });
+    const plan = providerSyncPlan(stateOf([appState()], [target]), target);
+    expect(plan).toEqual([]);
+  });
+});

@@ -1,4 +1,5 @@
 import type {
+  ApplyProviderInput,
   FetchedModel,
   ModelsDevMatchResult,
   ProviderAppEntry,
@@ -253,6 +254,69 @@ export function initialApplySelection(
       ? currentLevel
       : null;
   return { modelIds, defaultModelId, defaultReasoningLevel };
+}
+
+// 提供商同步计划：已应用与配置有偏差的条目都属于该提供商，逐个 Agent 生成
+// 应用输入；无法安全同步的 Agent 返回跳过原因，由调用方在确认弹窗展示。
+export type ProviderSyncTarget = { app: ProviderAppId; skip: false; input: ApplyProviderInput };
+export type ProviderSyncSkip = { app: ProviderAppId; skip: true; reason: string };
+export type ProviderSyncPlanItem = ProviderSyncTarget | ProviderSyncSkip;
+
+export function providerSyncPlan(
+  state: ProvidersState,
+  provider: ProviderView
+): ProviderSyncPlanItem[] {
+  const plan: ProviderSyncPlanItem[] = [];
+  for (const appState of state.apps) {
+    const applied = entriesForProvider(appState, provider.id);
+    if (applied.length === 0) {
+      continue;
+    }
+    // 已应用的模型全部不在目录中时 initialApplySelection 会回退成整个目录，
+    // 自动同步不替用户扩大选择，直接跳过。
+    const appliedModelIds = applied.flatMap((entry) => entry.modelIds);
+    const knownModelIds = appliedModelIds.filter((modelId) =>
+      provider.models.some((model) => model.id === modelId)
+    );
+    if (appliedModelIds.length > 0 && knownModelIds.length === 0) {
+      plan.push({
+        app: appState.app,
+        skip: true,
+        reason: "已应用的模型均不在当前目录中。",
+      });
+      continue;
+    }
+
+    const selection = initialApplySelection(appState, provider);
+    const blockers = applyBlockers(appState, provider, selection.modelIds);
+    if (blockers.length > 0) {
+      plan.push({ app: appState.app, skip: true, reason: blockers.join("") });
+      continue;
+    }
+    // 与应用弹窗一致：默认思考等级取交集，当前写入值保留在可选项里。
+    const levels = reasoningLevelChoices(
+      appState,
+      provider,
+      selection.modelIds,
+      selection.defaultReasoningLevel
+    );
+    const defaultReasoningLevel =
+      selection.defaultReasoningLevel && levels.includes(selection.defaultReasoningLevel)
+        ? selection.defaultReasoningLevel
+        : null;
+    plan.push({
+      app: appState.app,
+      skip: false,
+      input: {
+        providerId: provider.id,
+        app: appState.app,
+        modelIds: selection.modelIds,
+        defaultModelId: selection.defaultModelId,
+        defaultReasoningLevel,
+      },
+    });
+  }
+  return plan;
 }
 
 // ---------------------------------------------------------------------------
