@@ -26,6 +26,14 @@ beforeEach(() => {
   vi.mocked(getWorkspaceState).mockResolvedValue({ document: null, inspection: null });
 });
 
+function deferred() {
+  let resolve!: () => void;
+  const promise = new Promise<void>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+}
+
 it("uses backend Grok paths and preserves explicit edits when creating a target", async () => {
   vi.mocked(getBuiltinTargetPreset).mockResolvedValue({
     id: "grokbuild", enabled: true, skillDir: "/custom-grok/skills",
@@ -109,6 +117,69 @@ it("keeps a failed enable/disable on the panel result slot", async () => {
     message: "toggle boom",
     failed: true,
   });
+});
+
+it("marks only the toggled card as pending and keeps the page lock off", async () => {
+  const store = useWorkspaceStore();
+  const mutations = useTargetMutations();
+  const runningActionDuringWrite: boolean[] = [];
+  let pendingDuringWrite: string[] = [];
+  vi.mocked(updateWorkspaceTarget).mockImplementation(async (targetId) => {
+    runningActionDuringWrite.push(store.runningAction);
+    pendingDuringWrite = [...mutations.pendingToggleTargetIds.value];
+    return { targetId, updatedPaths: [] };
+  });
+
+  await mutations.toggleTargetEnabled({
+    id: "codex",
+    enabled: true,
+    skillDir: "~/.agents/skills",
+    configPath: null,
+    mcpConfigPrefix: "",
+    mcpConfigType: "common",
+  });
+
+  expect(runningActionDuringWrite).toEqual([false]);
+  expect(pendingDuringWrite).toEqual(["codex"]);
+  expect([...mutations.pendingToggleTargetIds.value]).toEqual([]);
+  expect(store.runningAction).toBe(false);
+});
+
+it("runs queued enable/disable writes in order", async () => {
+  const first = deferred();
+  const second = deferred();
+  const order: string[] = [];
+  vi.mocked(updateWorkspaceTarget).mockImplementation(async (targetId) => {
+    order.push(`start:${targetId}`);
+    await (targetId === "codex" ? first.promise : second.promise);
+    order.push(`done:${targetId}`);
+    return { targetId, updatedPaths: [] };
+  });
+
+  const mutations = useTargetMutations();
+  const toggle = (id: "codex" | "zcode") =>
+    mutations.toggleTargetEnabled({
+      id,
+      enabled: true,
+      skillDir: "~/.agents/skills",
+      configPath: null,
+      mcpConfigPrefix: "",
+      mcpConfigType: "common",
+    });
+
+  const codexToggle = toggle("codex");
+  const zcodeToggle = toggle("zcode");
+  expect([...mutations.pendingToggleTargetIds.value].sort()).toEqual(["codex", "zcode"]);
+
+  first.resolve();
+  await codexToggle;
+  // 第二次写入不得在第一次完成前开始，否则两次重读会互相覆盖快照
+  expect(order.slice(0, 2)).toEqual(["start:codex", "done:codex"]);
+
+  second.resolve();
+  await zcodeToggle;
+  expect(order).toEqual(["start:codex", "done:codex", "start:zcode", "done:zcode"]);
+  expect([...mutations.pendingToggleTargetIds.value]).toEqual([]);
 });
 
 it("registers dsh as a user-level preset that skips configPrefix pairing", async () => {

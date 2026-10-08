@@ -104,6 +104,48 @@ describe("runWorkspaceAction success path", () => {
 
     expect(store.loadError).toBeNull();
   });
+
+  it("keeps the page out of its loading state while reloading after the action", async () => {
+    const { store, runWorkspaceAction } = setup();
+    const observed: boolean[] = [];
+    mockedGetWorkspaceState.mockImplementation(async () => {
+      observed.push(store.loadingConfig || store.loadingInspection);
+      return { document: null, inspection: null };
+    });
+
+    await runWorkspaceAction({
+      action: async () => null,
+      reload: true,
+      error: "fallback",
+    });
+
+    expect(observed).toEqual([false]);
+    expect(store.loadingConfig).toBe(false);
+    expect(store.loadingInspection).toBe(false);
+  });
+
+  it("keeps the page lock off for card-scoped actions", async () => {
+    const { store, runWorkspaceAction } = setup();
+    const observed: boolean[] = [];
+    mockedGetWorkspaceState.mockImplementation(async () => {
+      observed.push(store.runningAction);
+      return { document: null, inspection: null };
+    });
+
+    await runWorkspaceAction({
+      action: async () => {
+        observed.push(store.runningAction);
+        return null;
+      },
+      reload: true,
+      pageLock: false,
+      error: "fallback",
+    });
+
+    expect(observed).toEqual([false, false]);
+    expect(mockedGetWorkspaceState).toHaveBeenCalledTimes(1);
+    expect(store.runningAction).toBe(false);
+  });
 });
 
 describe("runWorkspaceAction failure path", () => {

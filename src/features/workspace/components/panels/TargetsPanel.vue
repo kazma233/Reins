@@ -19,6 +19,7 @@ const { configDocument, loadingInspection, runningAction, loadError, retryWorksp
 const {
   targetCreateDialog,
   targetDeleteDialog,
+  pendingToggleTargetIds,
   openTargetCreateDialog,
   openTargetEditDialog,
   closeTargetCreateDialog,
@@ -53,6 +54,11 @@ const configProjects = computed(() => configDocument.value?.config?.projects ?? 
 // 启停失败的结果跟卡片按钮放在一起：结果按 target id 常驻，reload 重建卡片后仍在。
 function toggleError(targetId: string): string | null {
   return store.actionResults[`target-toggle:${targetId}`]?.message ?? null;
+}
+
+// 启停不进整页忙碌态，进行中的卡片自己锁定（文案不变，按钮宽度不会跟着跳）。
+function isTogglingTarget(targetId: string): boolean {
+  return pendingToggleTargetIds.value.has(targetId);
 }
 </script>
 
@@ -113,7 +119,7 @@ function toggleError(targetId: string): string | null {
                       />
                       <button
                         class="secondary-button"
-                        :disabled="runningAction"
+                        :disabled="runningAction || isTogglingTarget(target.id)"
                         type="button"
                         @click="openTargetEditDialog(target)"
                       >
@@ -121,7 +127,7 @@ function toggleError(targetId: string): string | null {
                       </button>
                       <button
                         class="secondary-button"
-                        :disabled="runningAction"
+                        :disabled="runningAction || isTogglingTarget(target.id)"
                         type="button"
                         @click="toggleTargetEnabled(target)"
                       >
@@ -129,7 +135,7 @@ function toggleError(targetId: string): string | null {
                       </button>
                       <button
                         class="danger-button"
-                        :disabled="runningAction"
+                        :disabled="runningAction || isTogglingTarget(target.id)"
                         type="button"
                         @click="openTargetDeleteDialog(target.id)"
                       >

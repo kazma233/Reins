@@ -1,4 +1,4 @@
-import { reactive } from "vue";
+import { reactive, ref } from "vue";
 import {
   createWorkspaceTarget,
   deleteWorkspaceTarget,
@@ -68,6 +68,18 @@ export function useTargetMutations() {
     targetId: null,
   });
 
+  // 正在启停的 target：只给这些卡片显示「停用中/启用中」，页面其余部分不变。
+  const pendingToggleTargetIds = ref<Set<string>>(new Set());
+  // 启停依次执行：并发时两次写入与两次重读会互相覆盖快照。
+  let toggleQueue: Promise<void> = Promise.resolve();
+
+  function markTogglePending(targetId: string, pending: boolean) {
+    const next = new Set(pendingToggleTargetIds.value);
+    if (pending) next.add(targetId);
+    else next.delete(targetId);
+    pendingToggleTargetIds.value = next;
+  }
+
   function openTargetCreateDialog() {
     targetCreateDialog.form = { ...DEFAULT_TARGET_FORM, errors: {} };
     targetCreateDialog.error = null;
@@ -135,25 +147,37 @@ export function useTargetMutations() {
 
   // 启停是显式按钮操作：按钮文案、状态 pill 与列表都会随 reload 更新，
   // 不需要成功提示；失败常驻在面板上（卡片随 reload 已更新，错误不能挂在卡片上）。
-  async function toggleTargetEnabled(target: TargetConfigView) {
+  // 它只影响一张卡，因此不占用整页忙碌态：卡片自己显示进行中状态。
+  function toggleTargetEnabled(target: TargetConfigView): Promise<void> {
     const resultKey = `target-toggle:${target.id}`;
     store.setActionResult(resultKey, null);
-    await runWorkspaceAction({
-      action: () =>
-        updateWorkspaceTarget(target.id, {
-          targetId: target.id,
-          enabled: !target.enabled,
-          skillDir: target.skillDir,
-          configPath: target.configPath,
-          mcpConfigPrefix: target.mcpConfigPrefix,
-          mcpConfigType: target.mcpConfigType,
-        }),
-      reload: true,
-      error: target.enabled ? "停用 target 失败。" : "启用 target 失败。",
-      onError: (message) => {
-        store.setActionResult(resultKey, { message, failed: true });
-      },
+    markTogglePending(target.id, true);
+
+    toggleQueue = toggleQueue.then(async () => {
+      try {
+        await runWorkspaceAction({
+          action: () =>
+            updateWorkspaceTarget(target.id, {
+              targetId: target.id,
+              enabled: !target.enabled,
+              skillDir: target.skillDir,
+              configPath: target.configPath,
+              mcpConfigPrefix: target.mcpConfigPrefix,
+              mcpConfigType: target.mcpConfigType,
+            }),
+          reload: true,
+          pageLock: false,
+          error: target.enabled ? "停用 target 失败。" : "启用 target 失败。",
+          onError: (message) => {
+            store.setActionResult(resultKey, { message, failed: true });
+          },
+        });
+      } finally {
+        markTogglePending(target.id, false);
+      }
     });
+
+    return toggleQueue;
   }
 
   function openTargetDeleteDialog(targetId: string) {
@@ -262,6 +286,7 @@ export function useTargetMutations() {
   return {
     targetCreateDialog,
     targetDeleteDialog,
+    pendingToggleTargetIds,
     openTargetCreateDialog,
     openTargetEditDialog,
     closeTargetCreateDialog,

@@ -9,10 +9,14 @@ export type RunWorkspaceActionOptions<T> = {
   error?: string;
   onError?: (message: string) => void;
   // 写操作：action 成功后重读工作区状态。在 onSuccess 之前执行，保证
-  // 界面与回调看到的是新状态。
+  // 界面与回调看到的是新状态；重读静默进行，不把整页切到加载态。
   reload?: boolean;
   // 成功后回调（重读之后）。弹窗关闭、流程推进都放这里，失败时跳过。
   onSuccess?: (result: T) => void;
+  // 卡片级操作置 false：不占用整页忙碌态，页面上其余控件保持可用。
+  // 整页忙碌会把所有按钮（含头部与其它卡片）一起置灰，点一张卡看起来
+  // 像整页闪了一下。关闭时由调用方自己维护该项的进行中状态。
+  pageLock?: boolean;
 };
 
 export function useWorkspaceAction() {
@@ -20,13 +24,16 @@ export function useWorkspaceAction() {
   const { reloadWorkspaceState } = useWorkspaceState();
 
   async function runWorkspaceAction<T>(options: RunWorkspaceActionOptions<T>): Promise<void> {
-    store.setRunningAction(true);
+    const pageLock = options.pageLock ?? true;
+    if (pageLock) {
+      store.setRunningAction(true);
+    }
 
     try {
       const result = await options.action();
 
       if (options.reload) {
-        await reloadWorkspaceState();
+        await reloadWorkspaceState({ background: true });
       }
 
       options.onSuccess?.(result);
@@ -34,7 +41,9 @@ export function useWorkspaceAction() {
       const message = extractErrorMessage(error, options.error ?? "操作失败。");
       options.onError?.(message);
     } finally {
-      store.setRunningAction(false);
+      if (pageLock) {
+        store.setRunningAction(false);
+      }
     }
   }
 

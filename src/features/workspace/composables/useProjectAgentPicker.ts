@@ -157,7 +157,7 @@ export function useProjectAgentPicker() {
       state.desiredAgentIds = [];
     }
 
-    await reloadWorkspaceState();
+    await reloadWorkspaceState({ background: true });
 
     store.setProjectPickerWarning(
       contextName,

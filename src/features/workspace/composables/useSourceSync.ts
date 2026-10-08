@@ -87,7 +87,7 @@ export function useSourceSync() {
     // 覆盖确认弹窗只在覆盖路径上叠在同步弹窗之上，同步结束就该收起来；
     // 同步弹窗保持打开，结果与后续操作都在原地。
     closeSourceSyncOverwriteDialog();
-    await reloadWorkspaceState();
+    await reloadWorkspaceState({ background: true });
   }
 
   function closeSourceSyncDialog() {

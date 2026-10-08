@@ -25,9 +25,14 @@ export function useWorkspaceState() {
   }
 
   // 读取失败是持久状态：错误条常驻到下次成功读取，重试入口在面板里。
-  async function reloadWorkspaceState() {
-    store.setLoadingConfig(true);
-    store.setLoadingInspection(true);
+  // background 用于写操作后的重读：界面上已有内容可看，进入整页加载态只会让
+  // 面板闪一下加载提示（列表随之位移），所以只静默替换数据。
+  async function reloadWorkspaceState(options?: { background?: boolean }) {
+    const showLoading = !options?.background;
+    if (showLoading) {
+      store.setLoadingConfig(true);
+      store.setLoadingInspection(true);
+    }
 
     try {
       applyWorkspaceState(await getWorkspaceState());
@@ -35,8 +40,10 @@ export function useWorkspaceState() {
     } catch (error) {
       store.setLoadError(extractErrorMessage(error, "读取配置失败。"));
     } finally {
-      store.setLoadingConfig(false);
-      store.setLoadingInspection(false);
+      if (showLoading) {
+        store.setLoadingConfig(false);
+        store.setLoadingInspection(false);
+      }
     }
   }
 

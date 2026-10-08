@@ -401,7 +401,7 @@ export function useMcpMutations() {
       mcpCardSyncDialog.loading = false;
     }
 
-    await reloadWorkspaceState();
+    await reloadWorkspaceState({ background: true });
     mcpCardSyncNotice.value = failed.length
       ? {
           serverName,
