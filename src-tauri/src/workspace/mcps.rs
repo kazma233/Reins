@@ -402,29 +402,6 @@ fn infer_mcp_file_format_from_path(config_path: &Path) -> Result<McpConfigFileFo
 }
 
 // ---------------------------------------------------------------------------
-// dsh (DeepSeek Harness) name sanitization
-// ---------------------------------------------------------------------------
-
-// dsh 要求 serverName 匹配 [A-Za-z0-9_-]{1,32}：非法字符折叠为 -，超长截断。
-// 读取侧（inspect 状态归类）与写入侧（DshPatchWriter）共用这一清洗规则。
-pub(super) fn dsh_server_name(server_name: &str) -> String {
-    let mut sanitized: String = server_name
-        .trim()
-        .chars()
-        .map(|ch| {
-            if ch.is_ascii_alphanumeric() || ch == '_' || ch == '-' {
-                ch
-            } else {
-                '-'
-            }
-        })
-        .collect();
-    // 映射后只有 ASCII，truncate 不会落在多字节边界上。
-    sanitized.truncate(32);
-    sanitized
-}
-
-// ---------------------------------------------------------------------------
 // Generic config file primitives (shared by all file-format writers)
 // ---------------------------------------------------------------------------
 

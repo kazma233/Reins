@@ -41,7 +41,7 @@ pub(crate) use self::targets::{
     delete_workspace_target_inner, update_workspace_project_inner, update_workspace_target_inner,
 };
 
-use self::mcps::{dsh_server_name, read_existing_mcp_entries};
+use self::mcps::read_existing_mcp_entries;
 use self::skills::git_cache_last_fetched_at_ms;
 #[cfg(windows)]
 use self::targets::read_directory_link_target;

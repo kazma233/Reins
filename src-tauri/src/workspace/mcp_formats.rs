@@ -13,7 +13,6 @@ use serde_yaml::Value as YamlValue;
 use toml::Value as TomlValue;
 
 use super::display_path;
-use super::mcps::dsh_server_name;
 use super::types::{
     McpConfigFileFormat, McpConfigType, McpTargetMutationResult, McpTransport, ResolvedMcpConfig,
     ResolvedTargetConfig,
@@ -39,6 +38,11 @@ pub(super) trait McpFormatWriter: Sync {
 
     /// 构造 desired 条目的 JSON 形态；不支持的类型按既定文案报错。
     fn desired_json_entry(&self, server: &ResolvedMcpConfig) -> Result<JsonValue>;
+
+    /// 读取侧的条目 key：默认与 server 名一致；dsh 按清洗后的 serverName。
+    fn entry_key_for(&self, name: &str) -> String {
+        name.to_string()
+    }
 
     /// 读既有条目（key 为 server 名；dsh 按清洗后的 serverName）。
     fn read_existing_entries(
@@ -164,6 +168,10 @@ impl McpFormatWriter for DshPatchWriter {
 
     fn desired_json_entry(&self, _server: &ResolvedMcpConfig) -> Result<JsonValue> {
         bail!("Dsh config type 仅支持 Cordis patch YAML。");
+    }
+
+    fn entry_key_for(&self, name: &str) -> String {
+        dsh_server_name(name)
     }
 
     fn read_existing_entries(
@@ -450,6 +458,25 @@ pub(super) fn desired_opencode_mcp(server: &ResolvedMcpConfig) -> Result<JsonVal
 // （无关插件、未知操作）原样保留，绝不整文件覆盖。
 const DSH_MCP_CLIENT_PLUGIN: &str = "@deepseek-ai/dsh-mcp-client";
 const DSH_DEFAULT_TOOL_CALL_TIMEOUT_MS: u64 = 60_000;
+
+// dsh 要求 serverName 匹配 [A-Za-z0-9_-]{1,32}：非法字符折叠为 -，超长截断。
+// 读取侧（inspect 状态归类）与写入侧（DshPatchWriter）共用这一清洗规则。
+fn dsh_server_name(server_name: &str) -> String {
+    let mut sanitized: String = server_name
+        .trim()
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || ch == '_' || ch == '-' {
+                ch
+            } else {
+                '-'
+            }
+        })
+        .collect();
+    // 映射后只有 ASCII，truncate 不会落在多字节边界上。
+    sanitized.truncate(32);
+    sanitized
+}
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -967,6 +994,26 @@ mod tests {
             DSH_YAML_ONLY
         );
         Ok(())
+    }
+
+    #[test]
+    fn entry_key_for_is_identity_except_dsh_sanitized() {
+        // 非 dsh writer 的条目 key 与 Reins 的 mcp name 恒等。
+        let plain = "my probe.v2/中文";
+        for config_type in [
+            McpConfigType::Common,
+            McpConfigType::GrokBuild,
+            McpConfigType::OpenCode,
+        ] {
+            assert_eq!(mcp_format_writer(config_type).entry_key_for(plain), plain);
+        }
+
+        // dsh 的条目 key 是清洗后的 serverName；用例形态与
+        // dsh_server_name_sanitization 既有测试保持一致。
+        let dsh = mcp_format_writer(McpConfigType::Dsh);
+        assert_eq!(dsh.entry_key_for("probe"), "probe");
+        assert_eq!(dsh.entry_key_for("my probe.v2/中文"), "my-probe-v2---");
+        assert_eq!(dsh.entry_key_for(&"a".repeat(40)), "a".repeat(32));
     }
 
     #[test]
