@@ -3,62 +3,25 @@ use std::fs::{self, File};
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::{LazyLock, Mutex};
+use std::sync::Arc;
 
-use anyhow::{Context, Result, anyhow, bail};
+use anyhow::{Context, Result, bail};
 use rusqlite::Connection;
 use serde_json::{Value, json};
 
+use super::family_index::{Family, FamilyRow};
+use super::family_timeline::FamilyAgentLabel;
+use super::reader_engine::{
+    FamilyReader, FamilySpec, MarkerShape, MemberTimeline, OverviewCounts, ReaderEngine,
+    RowErrorPolicy, scan_files,
+};
 use super::{
-    ContentBlock, SessionAgent, SessionEvent, SessionEventPage, SessionFileEntry, SessionMessage,
-    SessionMessagePage, SessionOverview, SessionReader, SessionSummary, SessionTokenUsage,
-    SourceApp, SummaryAccumulator, TimelineCacheEntry, TimelineRecord, UsageHourBuckets,
-    family_index::{Family, FamilyIndexCacheEntry, FamilyRow},
-    family_timeline::{FamilyAgentLabel, cached_family_events, cached_family_messages},
+    ContentBlock, SessionEvent, SessionMessage, SessionSummary, SessionTokenUsage, SourceApp,
+    SummaryAccumulator, TimelineRecord, UsageHourBuckets,
 };
 
-pub(crate) struct CodexBackend;
-
-pub(crate) static BACKEND: CodexBackend = CodexBackend;
-
-type CodexFamilyIndexCacheEntry = FamilyIndexCacheEntry<CodexSessionRow>;
-
-#[derive(Clone)]
-struct CodexSummaryCacheEntry {
-    updated_at: i64,
-    summary: SessionSummary,
-}
-
-static CODEX_TIMELINE_CACHE: LazyLock<Mutex<HashMap<String, TimelineCacheEntry>>> =
-    LazyLock::new(|| Mutex::new(HashMap::new()));
-static CODEX_FAMILY_INDEX_CACHE: LazyLock<Mutex<Option<CodexFamilyIndexCacheEntry>>> =
-    LazyLock::new(|| Mutex::new(None));
-static CODEX_SUMMARY_CACHE: LazyLock<Mutex<HashMap<String, CodexSummaryCacheEntry>>> =
-    LazyLock::new(|| Mutex::new(HashMap::new()));
-
-fn lock_timeline_cache()
--> Result<std::sync::MutexGuard<'static, HashMap<String, TimelineCacheEntry>>> {
-    CODEX_TIMELINE_CACHE
-        .lock()
-        .map_err(|_| anyhow!("Codex timeline cache lock was poisoned"))
-}
-
-fn lock_family_index_cache()
--> Result<std::sync::MutexGuard<'static, Option<CodexFamilyIndexCacheEntry>>> {
-    CODEX_FAMILY_INDEX_CACHE
-        .lock()
-        .map_err(|_| anyhow!("Codex family index cache lock was poisoned"))
-}
-
-fn lock_summary_cache()
--> Result<std::sync::MutexGuard<'static, HashMap<String, CodexSummaryCacheEntry>>> {
-    CODEX_SUMMARY_CACHE
-        .lock()
-        .map_err(|_| anyhow!("Codex summary cache lock was poisoned"))
-}
-
 #[derive(Clone, Debug)]
-struct CodexSessionRow {
+pub(crate) struct CodexSessionRow {
     path: PathBuf,
     summary: SessionSummary,
     parent_session_id: Option<String>,
@@ -99,73 +62,126 @@ impl FamilyRow for CodexSessionRow {
     }
 }
 
-impl SessionReader for CodexBackend {
-    fn list_entries(&self) -> Result<Vec<SessionFileEntry>> {
-        let mut entries = list_session_families()?
-            .into_iter()
-            .map(|family| -> Result<SessionFileEntry> {
-                let sort_timestamp = family.updated_at().unwrap_or_default();
-                Ok(SessionFileEntry {
-                    path: family.root.path.clone(),
-                    sort_timestamp,
-                    summary: Some(cached_family_summary(&family)?),
+#[derive(Clone)]
+pub(crate) struct CodexSpec;
+
+impl FamilySpec for CodexSpec {
+    type Row = CodexSessionRow;
+
+    fn app(&self) -> SourceApp {
+        SourceApp::Codex
+    }
+
+    fn label(&self) -> &'static str {
+        "Codex"
+    }
+
+    fn scan_root(&self, root: &Path) -> PathBuf {
+        root.join("sessions")
+    }
+
+    fn list_rows(&self, scan_root: &Path) -> Result<Vec<CodexSessionRow>> {
+        let files = crate::support::fs::enumerate_jsonl_files(scan_root)?;
+        scan_files(
+            files,
+            parse_session_index_row,
+            RowErrorPolicy::Abort,
+            "Codex",
+        )
+    }
+
+    fn group_families(&self, rows: Vec<CodexSessionRow>) -> Result<Vec<CodexSessionFamily>> {
+        Ok(build_family_index(rows))
+    }
+
+    fn parse_full_summary(&self, path: &Path) -> Result<SessionSummary> {
+        parse_full_session_summary(path)
+    }
+
+    // 索引行只读到首行 session_meta 即停,成员 usage 只能经路径级缓存取
+    // 整文件解析结果;resume 段与子代理线程的消耗并入 family 统计。
+    fn family_usage(
+        &self,
+        engine: &ReaderEngine<Self>,
+        family: &CodexSessionFamily,
+    ) -> Result<Option<SessionTokenUsage>> {
+        let mut total = None;
+        for row in &family.members {
+            if let Some(usage) = engine.path_summary(&row.path)?.token_usage {
+                super::merge_token_usage(&mut total, usage);
+            }
+        }
+        Ok(total)
+    }
+
+    // 单次扫描产出双半,替代原先 messages/events 各扫一遍文件。
+    fn load_members(&self, members: &[CodexSessionRow]) -> Result<Vec<MemberTimeline>> {
+        members
+            .iter()
+            .map(|row| {
+                let mut messages = Vec::new();
+                let mut events = Vec::new();
+
+                for (index, line) in BufReader::new(File::open(&row.path)?).lines().enumerate() {
+                    let value = super::parse_json_line(&line?)?;
+                    match parse_timeline_record(index, &value) {
+                        Some(TimelineRecord::Message(message)) => messages.push(message),
+                        Some(TimelineRecord::Event(event)) => events.push(event),
+                        None => {}
+                    }
+                }
+
+                Ok(MemberTimeline {
+                    messages: Arc::new(messages),
+                    events: Arc::new(events),
                 })
             })
-            .collect::<Result<Vec<_>>>()?;
-
-        super::sort_entries(&mut entries);
-        Ok(entries)
+            .collect()
     }
 
-    fn clear_cache(&self) -> Result<()> {
-        lock_timeline_cache()?.clear();
-        lock_summary_cache()?.clear();
-        *lock_family_index_cache()? = None;
-        Ok(())
+    fn agent_name(&self, row: &CodexSessionRow) -> String {
+        family_member_display_name(row)
     }
 
-    fn resolve_path(&self, source_session_id: &str) -> Result<PathBuf> {
-        session_path_for_id(source_session_id)
+    fn marker(&self, member_id: &str, row: &CodexSessionRow) -> MarkerShape {
+        let extras = json!({
+            "agent_nickname": row.agent_nickname,
+            "agent_role": row.agent_role,
+            "parent_session_id": row.parent_session_id,
+            "transcript_path": row.path.display().to_string(),
+        });
+
+        MarkerShape::labeled("Codex", member_id).extras(extras.clone(), extras)
     }
 
-    fn parse_summary(&self, path: &Path) -> Result<SessionSummary> {
-        self::parse_summary(path)
-    }
-
-    fn parse_overview(&self, path: &Path) -> Result<SessionOverview> {
-        self::parse_overview(path)
-    }
-
-    fn parse_messages_page(
-        &self,
-        path: &Path,
-        offset: usize,
-        limit: usize,
-    ) -> Result<SessionMessagePage> {
-        self::parse_messages_page(path, offset, limit)
-    }
-
-    fn parse_events_page(
-        &self,
-        path: &Path,
-        offset: usize,
-        limit: usize,
-    ) -> Result<SessionEventPage> {
-        self::parse_events_page(path, offset, limit)
-    }
-
-    fn parse_agent_messages(
-        &self,
-        path: &Path,
-        agent_session_id: &str,
-    ) -> Result<Vec<SessionMessage>> {
-        let family = session_family_for_path(path)?;
-        let messages = cached_messages_for_family(&family)?;
-        Ok(super::family_timeline::agent_messages(
-            messages,
-            agent_session_id,
+    fn root_extra_events(&self, family: &CodexSessionFamily) -> Result<Vec<SessionEvent>> {
+        Ok(subagent_lifecycle_events(
+            &family.root.path,
+            &family.members,
         ))
     }
+
+    fn overview_counts(&self) -> OverviewCounts {
+        OverviewCounts::Omitted
+    }
+
+    fn agent_label(&self, family: &CodexSessionFamily, row: &CodexSessionRow) -> FamilyAgentLabel {
+        if row.summary.source_session_id == family.root.summary.source_session_id {
+            FamilyAgentLabel::Root
+        } else if row.forked_from_id.is_some() {
+            FamilyAgentLabel::Derived(family_member_display_name(row))
+        } else {
+            FamilyAgentLabel::Child(family_member_display_name(row))
+        }
+    }
+}
+
+pub(crate) static BACKEND: FamilyReader<CodexSpec> = FamilyReader::new(CodexSpec, root);
+
+// 测试直接按根构造引擎实例:完全脱离进程 env 与全局锁,可并行。
+#[cfg(test)]
+pub(crate) fn engine_at(root: PathBuf, store_dir: PathBuf) -> ReaderEngine<CodexSpec> {
+    ReaderEngine::new(CodexSpec, root, store_dir)
 }
 
 pub(crate) fn root() -> Result<PathBuf> {
@@ -174,12 +190,8 @@ pub(crate) fn root() -> Result<PathBuf> {
         .join(".codex"))
 }
 
-pub(crate) fn find_session_file(source_session_id: &str) -> Result<PathBuf> {
-    crate::support::fs::find_session_file(&root()?.join("sessions"), source_session_id)
-}
-
 pub(crate) fn delete_session(path: &Path) -> Result<()> {
-    let family = session_family_for_path(path)?;
+    let family = BACKEND.engine()?.family_for_path(path)?;
 
     for member in &family.members {
         // 官方删除 root 会级联整条 family；已被级联删除的成员（state 库
@@ -217,9 +229,7 @@ pub(crate) fn delete_session(path: &Path) -> Result<()> {
         }
     }
 
-    lock_timeline_cache()?.clear();
-    lock_summary_cache()?.clear();
-    *lock_family_index_cache()? = None;
+    BACKEND.engine()?.clear()?;
     Ok(())
 }
 
@@ -243,56 +253,6 @@ fn thread_exists(session_id: &str) -> Result<bool> {
         }
     }
     Ok(false)
-}
-
-fn parse_summary(path: &Path) -> Result<SessionSummary> {
-    let family = session_family_for_path(path)?;
-    cached_family_summary(&family)
-}
-
-fn parse_overview(path: &Path) -> Result<SessionOverview> {
-    let family = session_family_for_path(path)?;
-    let summary = cached_family_summary(&family)?;
-
-    Ok(SessionOverview {
-        summary,
-        source_paths: family.source_paths(),
-        message_count: None,
-        event_count: None,
-        agents: family_agents(&family),
-    })
-}
-
-fn parse_messages_page(path: &Path, offset: usize, limit: usize) -> Result<SessionMessagePage> {
-    let family = session_family_for_path(path)?;
-    let all_messages = cached_messages_for_family(&family)?;
-    let (messages, start, next_offset, total_count) =
-        crate::support::paging::slice_page(&all_messages, offset, limit);
-
-    Ok(SessionMessagePage {
-        messages,
-        offset: start,
-        limit,
-        next_offset,
-        total_count,
-        has_more: next_offset.is_some(),
-    })
-}
-
-fn parse_events_page(path: &Path, offset: usize, limit: usize) -> Result<SessionEventPage> {
-    let family = session_family_for_path(path)?;
-    let all_events = cached_events_for_family(&family)?;
-    let (events, start, next_offset, total_count) =
-        crate::support::paging::slice_page(&all_events, offset, limit);
-
-    Ok(SessionEventPage {
-        events,
-        offset: start,
-        limit,
-        next_offset,
-        total_count,
-        has_more: next_offset.is_some(),
-    })
 }
 
 fn parse_session_index_row(path: &Path) -> Result<CodexSessionRow> {
@@ -498,23 +458,6 @@ pub(crate) fn usage_hours(path: &Path) -> Result<UsageHourBuckets> {
     Ok(buckets)
 }
 
-fn list_session_rows() -> Result<Vec<CodexSessionRow>> {
-    crate::support::fs::enumerate_jsonl_files(&root()?.join("sessions"))?
-        .into_iter()
-        .map(|path| parse_session_index_row(&path))
-        .collect()
-}
-
-fn codex_sessions_root_timestamp(sessions_root: &Path) -> Result<i64> {
-    let mut latest = crate::support::time::file_modified_timestamp_millis(sessions_root)?;
-
-    for path in crate::support::fs::enumerate_jsonl_files(sessions_root)? {
-        latest = latest.max(crate::support::time::file_modified_timestamp_millis(&path)?);
-    }
-
-    Ok(latest)
-}
-
 // Member/family ordering and the id/path maps live in the shared engine; this
 // only groups rows along the parent-thread chain and picks each family root.
 fn build_family_index(rows: Vec<CodexSessionRow>) -> Vec<CodexSessionFamily> {
@@ -561,44 +504,6 @@ fn build_family_index(rows: Vec<CodexSessionRow>) -> Vec<CodexSessionFamily> {
         .collect()
 }
 
-fn family_index() -> Result<CodexFamilyIndexCacheEntry> {
-    let sessions_root = root()?.join("sessions");
-    let source_key = sessions_root.display().to_string();
-    let updated_at = codex_sessions_root_timestamp(&sessions_root)?;
-
-    if let Some(entry) = lock_family_index_cache()?
-        .as_ref()
-        .filter(|entry| entry.is_valid(&source_key, updated_at))
-        .cloned()
-    {
-        return Ok(entry);
-    }
-
-    let entry = CodexFamilyIndexCacheEntry {
-        source_key,
-        updated_at,
-        index: super::family_index::FamilyIndex::build_with_ids(build_family_index(
-            list_session_rows()?,
-        )),
-    };
-
-    *lock_family_index_cache()? = Some(entry.clone());
-
-    Ok(entry)
-}
-
-fn list_session_families() -> Result<Vec<CodexSessionFamily>> {
-    Ok(family_index()?.index.families)
-}
-
-fn session_path_for_id(source_session_id: &str) -> Result<PathBuf> {
-    if let Some(path) = family_index()?.index.path_for_id(source_session_id) {
-        return Ok(path);
-    }
-
-    find_session_file(source_session_id)
-}
-
 fn root_session_id(row: &CodexSessionRow, by_id: &HashMap<String, CodexSessionRow>) -> String {
     let mut current_id = row.summary.source_session_id.clone();
     let mut parent_id = row.parent_session_id.clone();
@@ -620,252 +525,11 @@ fn root_session_id(row: &CodexSessionRow, by_id: &HashMap<String, CodexSessionRo
     current_id
 }
 
-fn session_family_for_path(path: &Path) -> Result<CodexSessionFamily> {
-    let key = crate::support::fs::path_key(path);
-    family_index()?
-        .index
-        .sessions_by_path
-        .get(&key)
-        .cloned()
-        .ok_or_else(|| anyhow!("Could not find Codex session for {}", path.display()))
-}
-
-fn cached_path_summary(path: &Path) -> Result<SessionSummary> {
-    let cache_key = path.display().to_string();
-    let updated_at = crate::support::time::file_modified_timestamp_millis(path)?;
-
-    if let Some(summary) = lock_summary_cache()?
-        .get(&cache_key)
-        .filter(|entry| entry.updated_at == updated_at)
-        .map(|entry| entry.summary.clone())
-    {
-        return Ok(summary);
-    }
-
-    // 跨进程的持久缓存：冷启动时未变更的文件跳过整文件解析。
-    if let Some(summary) = super::summary_cache::load(SourceApp::Codex, path, updated_at) {
-        lock_summary_cache()?.insert(
-            cache_key,
-            CodexSummaryCacheEntry {
-                updated_at,
-                summary: summary.clone(),
-            },
-        );
-        return Ok(summary);
-    }
-
-    let summary = parse_full_session_summary(path)?;
-    lock_summary_cache()?.insert(
-        cache_key,
-        CodexSummaryCacheEntry {
-            updated_at,
-            summary: summary.clone(),
-        },
-    );
-    super::summary_cache::store(SourceApp::Codex, path, updated_at, &summary);
-
-    Ok(summary)
-}
-
-fn cached_family_summary(family: &CodexSessionFamily) -> Result<SessionSummary> {
-    let mut summary = cached_path_summary(&family.root.path)?;
-    family.apply_summary_aggregates(&mut summary);
-
-    // 索引行只读到首行 session_meta 即停,成员 usage 只能经路径级缓存取
-    // 整文件解析结果;resume 段与子代理线程的消耗并入 family 统计。
-    let mut total = None;
-    for row in &family.members {
-        if let Some(usage) = cached_path_summary(&row.path)?.token_usage {
-            super::merge_token_usage(&mut total, usage);
-        }
-    }
-    summary.token_usage = total;
-
-    Ok(summary)
-}
-
 fn family_member_display_name(row: &CodexSessionRow) -> String {
     row.agent_nickname
         .clone()
         .or_else(|| row.agent_role.clone())
         .unwrap_or_else(|| row.summary.title.clone())
-}
-
-fn family_agents(family: &CodexSessionFamily) -> Vec<SessionAgent> {
-    super::family_timeline::family_agents(family, |row| {
-        if row.summary.source_session_id == family.root.summary.source_session_id {
-            FamilyAgentLabel::Root
-        } else if row.forked_from_id.is_some() {
-            FamilyAgentLabel::Derived(family_member_display_name(row))
-        } else {
-            FamilyAgentLabel::Child(family_member_display_name(row))
-        }
-    })
-}
-
-fn family_cache_timestamp(family: &CodexSessionFamily) -> Result<i64> {
-    family.members.iter().try_fold(0, |latest, row| {
-        Ok(
-            latest.max(crate::support::time::file_modified_timestamp_millis(
-                &row.path,
-            )?),
-        )
-    })
-}
-
-fn cached_messages_for_family(family: &CodexSessionFamily) -> Result<Vec<SessionMessage>> {
-    cached_family_messages(
-        &CODEX_TIMELINE_CACHE,
-        "Codex timeline",
-        family.root.summary.source_session_id.clone(),
-        family_cache_timestamp(family)?,
-        || load_messages_for_family(family),
-    )
-}
-
-fn cached_events_for_family(family: &CodexSessionFamily) -> Result<Vec<SessionEvent>> {
-    cached_family_events(
-        &CODEX_TIMELINE_CACHE,
-        "Codex timeline",
-        family.root.summary.source_session_id.clone(),
-        family_cache_timestamp(family)?,
-        || load_events_for_family(family),
-    )
-}
-
-fn load_messages(path: &Path) -> Result<Vec<SessionMessage>> {
-    let mut messages = Vec::new();
-
-    for (index, line) in BufReader::new(File::open(path)?).lines().enumerate() {
-        let value = super::parse_json_line(&line?)?;
-
-        if let Some(TimelineRecord::Message(message)) = parse_timeline_record(index, &value) {
-            messages.push(message);
-        }
-    }
-
-    Ok(messages)
-}
-
-fn load_events(path: &Path) -> Result<Vec<SessionEvent>> {
-    let mut events = Vec::new();
-
-    for (index, line) in BufReader::new(File::open(path)?).lines().enumerate() {
-        let value = super::parse_json_line(&line?)?;
-
-        if let Some(TimelineRecord::Event(event)) = parse_timeline_record(index, &value) {
-            events.push(event);
-        }
-    }
-
-    Ok(events)
-}
-
-fn load_messages_for_family(family: &CodexSessionFamily) -> Result<Vec<SessionMessage>> {
-    let mut messages = Vec::new();
-
-    for row in &family.members {
-        if row.summary.source_session_id != family.root.summary.source_session_id {
-            messages.push(subagent_marker_message(row));
-        }
-
-        let row_session_id = row.summary.source_session_id.clone();
-        messages.extend(load_messages(&row.path)?.into_iter().map(|mut message| {
-            message.session_id = Some(message.session_id.unwrap_or_else(|| row_session_id.clone()));
-            message
-        }));
-    }
-
-    messages.sort_by(|left, right| {
-        left.timestamp
-            .cmp(&right.timestamp)
-            .then_with(|| left.id.cmp(&right.id))
-    });
-
-    Ok(messages)
-}
-
-fn load_events_for_family(family: &CodexSessionFamily) -> Result<Vec<SessionEvent>> {
-    let mut events = Vec::new();
-
-    events.extend(subagent_lifecycle_events(
-        &family.root.path,
-        &family.members,
-    ));
-
-    for row in &family.members {
-        if row.summary.source_session_id != family.root.summary.source_session_id {
-            events.push(subagent_marker_event(row));
-        }
-
-        let row_session_id = row.summary.source_session_id.clone();
-        events.extend(load_events(&row.path)?.into_iter().map(|mut event| {
-            event.session_id = Some(event.session_id.unwrap_or_else(|| row_session_id.clone()));
-            event
-        }));
-    }
-
-    events.sort_by(|left, right| {
-        left.timestamp
-            .cmp(&right.timestamp)
-            .then_with(|| left.id.cmp(&right.id))
-    });
-
-    Ok(events)
-}
-
-fn subagent_label(row: &CodexSessionRow) -> String {
-    family_member_display_name(row)
-}
-
-fn subagent_marker_message(row: &CodexSessionRow) -> SessionMessage {
-    let title = subagent_label(row);
-
-    SessionMessage {
-        id: format!("codex-subagent-start-{}", row.summary.source_session_id),
-        role: "assistant".to_string(),
-        timestamp: row.summary.created_at,
-        blocks: vec![ContentBlock {
-            kind: "output_text".to_string(),
-            text: Some(format!(
-                "Sub-agent session: {}\n{}",
-                title, row.summary.source_session_id
-            )),
-            tool_name: None,
-            tool_call_id: None,
-            is_error: None,
-            payload: Some(json!({
-                "type": "subagent_started",
-                "session_id": row.summary.source_session_id,
-                "title": title,
-                "agent_nickname": row.agent_nickname,
-                "agent_role": row.agent_role,
-                "parent_session_id": row.parent_session_id,
-                "transcript_path": row.path.display().to_string(),
-            })),
-        }],
-        session_id: Some(row.summary.source_session_id.clone()),
-    }
-}
-
-fn subagent_marker_event(row: &CodexSessionRow) -> SessionEvent {
-    let title = subagent_label(row);
-
-    SessionEvent {
-        id: format!("codex-subagent-event-{}", row.summary.source_session_id),
-        kind: "subagent_started".to_string(),
-        timestamp: row.summary.created_at,
-        summary: format!("Sub-agent session started: {}", title),
-        payload: Some(json!({
-            "session_id": row.summary.source_session_id,
-            "title": title,
-            "agent_nickname": row.agent_nickname,
-            "agent_role": row.agent_role,
-            "parent_session_id": row.parent_session_id,
-            "transcript_path": row.path.display().to_string(),
-        })),
-        session_id: Some(row.summary.source_session_id.clone()),
-    }
 }
 
 fn subagent_lifecycle_events(root_path: &Path, members: &[CodexSessionRow]) -> Vec<SessionEvent> {
@@ -902,7 +566,10 @@ fn subagent_lifecycle_events(root_path: &Path, members: &[CodexSessionRow]) -> V
                                 id: format!("codex-subagent-spawn-{index}"),
                                 kind: "subagent_spawned".to_string(),
                                 timestamp,
-                                summary: format!("Sub-agent spawned: {}", subagent_label(row)),
+                                summary: format!(
+                                    "Sub-agent spawned: {}",
+                                    family_member_display_name(row)
+                                ),
                                 payload: Some(super::record_payload(&value)),
                                 session_id: Some(row.summary.source_session_id.clone()),
                             });
@@ -917,7 +584,10 @@ fn subagent_lifecycle_events(root_path: &Path, members: &[CodexSessionRow]) -> V
                                 id: format!("codex-subagent-close-{index}"),
                                 kind: "subagent_closed".to_string(),
                                 timestamp,
-                                summary: format!("Sub-agent closed: {}", subagent_label(row)),
+                                summary: format!(
+                                    "Sub-agent closed: {}",
+                                    family_member_display_name(row)
+                                ),
                                 payload: Some(super::record_payload(&value)),
                                 session_id: Some(row.summary.source_session_id.clone()),
                             });
@@ -970,7 +640,10 @@ fn subagent_lifecycle_events(root_path: &Path, members: &[CodexSessionRow]) -> V
                         id: format!("codex-subagent-notification-{index}"),
                         kind: "subagent_notification".to_string(),
                         timestamp,
-                        summary: format!("Sub-agent notification: {}", subagent_label(row)),
+                        summary: format!(
+                            "Sub-agent notification: {}",
+                            family_member_display_name(row)
+                        ),
                         payload: Some(super::record_payload(&value)),
                         session_id: Some(row.summary.source_session_id.clone()),
                     });

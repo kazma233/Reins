@@ -21,6 +21,7 @@ mod grokbuild;
 mod pi;
 mod session_cache;
 mod session_delete;
+mod session_engine;
 mod session_index;
 mod session_listing;
 mod session_readers;
