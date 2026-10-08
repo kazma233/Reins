@@ -89,7 +89,12 @@
 
 ## 依赖红线
 
-1. `sessions`、`workspace`、`providers` 两两之间禁止直接互相依赖。
-2. `shared` 禁止依赖 `features/*`。
-3. `support` 禁止依赖 `session`、`workspace` 和 `providers` DTO。
-4. 新增代码如果需要跨域复用，先判断它是否真的是稳定共享能力，否则仍留在各自业务域。
+1. `session`、`workspace`、`providers` 两两之间禁止直接互相依赖。
+2. 新增一级模块 `agents`（工具静态清单）：三域均可依赖它；`agents` 自身不依赖任何业务域，仅引用 `SourceApp`、`ProviderAppId`、`McpConfigType` 等枚举类型做跨域 id 映射与布局字段。
+3. `shared` 禁止依赖 `features/*`。
+4. `support` 禁止依赖 `session`、`workspace` 和 `providers` DTO。
+5. 新增代码如果需要跨域复用，先判断它是否真的是稳定共享能力，否则仍留在各自业务域。
+
+## 变更记录
+
+- 2026-10-09 增补——工具清单五份拷贝收敛为 `agents` 模块单一来源（本次）。

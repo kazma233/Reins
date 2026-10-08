@@ -4,6 +4,12 @@ reins 是管理多个 AI CLI 编码工具的桌面应用：浏览历史会话、
 
 ## 语言
 
+### 通用
+
+**工具清单（agents / AgentSpec）**：
+reins 管理的全部 AI 编码工具的静态描述表：规范键、产品名、跨域 id 映射、全局与项目布局；是唯一的单一来源，各域的 defaults 表、模板与文案从中派生。
+_Avoid_: agent 列表、target 表（指派生出的副本）
+
 ### 会话（session 域）
 
 **来源（Source / SourceApp）**：
