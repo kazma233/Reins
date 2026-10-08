@@ -31,7 +31,7 @@ interface 形状经 design-it-twice 三方案对比（极简数据表 / 16 钩�
 - 分组与 root 选取（孤儿语义、resume 选根、is_root 判定）留在读取器——family_index.rs 头注释声明的边界不变。
 - marker 的 id 方案与 payload 字段是前端契约，改动需过 session_readers 断言；锁/not-found 文案同理。
 - 新增 family 来源 = 新 reader 文件 + `FamilySpec` 实现（典型来源只写必填 8 项）+ sources.rs 一条注册。
-- `engine_at(root, store_dir)` 是 reader 级测试的构造入口：完全脱离进程 env、可并行。**遗留**：存量 reader 测试仍经 BACKEND（env 根）运行，整文件级测试迁移到 engine_at 是明确的后续批次；opencode/zcode/dsh 的 engine_at 带过渡 `#[allow(dead_code)]`，接线测试后删除。
+- `engine_at(root, store_dir)` 是 reader 级测试的构造入口：完全脱离进程 env、可并行。（2026-10-09 更新：存量 reader 级测试已迁移 engine_at，五家文件的 TestEnvGuard 用量 31→6；opencode/zcode 的数据访问已改接实例 scan_root——此前 engine_at 对这两家是假脱 env，红测试实测读到本机真实 db。）
 
 ## 验证
 

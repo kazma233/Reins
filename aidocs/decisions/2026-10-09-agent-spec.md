@@ -28,9 +28,9 @@
 - 八张派生等价快照测试**先对现状代码跑绿**（builtin/project defaults 逐字段、模板全文逐字节、provider label 集合、config_paths 六臂输出），派生改造后未改一字全部保持绿——行为等价的主证据。
 - `cargo fmt --check` / `cargo check --all-targets` 0/0；`cargo test` 383 通过 / 0 失败 / 2 忽略（另见下）；`pnpm codegen` 幂等；`pnpm test` 167 通过（agentDisplayName 用例随函数退役）；`pnpm build` 通过。
 - 净 -40 行（22 改 + 2 新增，+267/−307）。
-- **unverified**：一次未复现的测试闪失（本批与实施代理各遇一次，均在冷启动首轮、其后 20+ 轮含单线程全绿，未能捕获用例名）——按证据边界记录，待再次出现时定位。
+- ~~未复现的测试闪失~~（2026-10-09 定位并修复：`tests/workspace_dsh.rs` 两个用例不持锁读 HOME 的 TOCTOU 竞态，补全局锁后过滤调度与四轮全量稳定绿。）
 
 ## 相邻遗留（记录不处理）
 
-- session 域 reader 的 display_name/锁前缀（"Claude Code" 等）仍是引擎契约文本，按「不过度强求统一」未并入 spec；若未来要收敛，经 AgentSpec.label 派生是现成路径。
-- `workspace/inspect.rs:144` 有一处读取侧 `McpConfigType` key 归类判断（候选 3 报告的相邻项），可后续收敛为 writer 的 `entry_key_for` 声明。
+- ~~session 域 reader 的 display_name 经 spec 派生~~（2026-10-09 已完成：五家 display_label == AgentSpec.label 有一致性测试钉住；dsh 的 not-found 文案随之统一为 "DeepSeek Harness"。锁前缀 label() 仍是引擎契约文本，不并入。）
+- ~~`workspace/inspect.rs` 的读取侧 key 归类判断~~（2026-10-09 已收敛为 writer 的 `entry_key_for` 声明。）
