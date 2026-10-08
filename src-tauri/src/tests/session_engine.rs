@@ -6,8 +6,10 @@ use anyhow::Result;
 use serde_json::json;
 use uuid::Uuid;
 
+use crate::agents::spec_by_source_app;
 use crate::session::family_index::FamilyRow;
-use crate::session::{SessionReader, codex};
+use crate::session::reader_engine::FamilySpec;
+use crate::session::{SessionReader, claude_code, codex, dsh, opencode, zcode};
 
 // 读取器引擎按根直接构造:整个测试不碰进程 env、不持 TestEnvGuard 的全局
 // 锁,可与其他 reader 测试并行。这是 reader 级测试脱离 env 的目标形态。
@@ -89,7 +91,7 @@ fn claude_engine_reads_without_touching_process_env() -> Result<()> {
         })],
     )?;
 
-    let engine = crate::session::claude_code::engine_at(dir.clone(), dir.join("store"));
+    let engine = claude_code::engine_at(dir.clone(), dir.join("store"));
 
     let entries = engine.list_entries()?;
     assert_eq!(entries.len(), 1);
@@ -103,6 +105,82 @@ fn claude_engine_reads_without_touching_process_env() -> Result<()> {
 
     let family = engine.family_for_id(session_id)?;
     assert_eq!(family.root.member_path().as_ref(), transcript.as_path());
+
+    fs::remove_dir_all(&dir).ok();
+    Ok(())
+}
+
+// not-found 错误主语（display_label）与 AgentSpec.label（产品名单一来源）
+// 的一致性：五家引擎 reader 的错误文案拼写必须与界面其他位置同源，新增
+// 覆写时在这里暴露拼写分叉。
+fn assert_display_label_matches_agent_spec<R: FamilySpec>(spec: R) {
+    let expected = spec_by_source_app(spec.app())
+        .unwrap_or_else(|| panic!("{:?} 未登记 agents 清单", spec.app()))
+        .label;
+    assert_eq!(spec.display_label(), expected);
+}
+
+#[test]
+fn reader_display_labels_match_agent_spec_labels() {
+    assert_display_label_matches_agent_spec(codex::CodexSpec);
+    assert_display_label_matches_agent_spec(claude_code::ClaudeSpec);
+    assert_display_label_matches_agent_spec(opencode::OpenCodeSpec);
+    assert_display_label_matches_agent_spec(zcode::ZcodeSpec);
+    assert_display_label_matches_agent_spec(dsh::DshSpec);
+}
+
+// engine_at 的意图是完全脱离进程 env：夹具只写自定义根，全程不设置
+// HOME。SQL 来源的数据查询必须从实例 scan_root 派生 db 路径。
+#[test]
+fn opencode_engine_reads_custom_root_without_env() -> Result<()> {
+    let dir = env::temp_dir().join(format!("reins-engine-opencode-{}", Uuid::new_v4()));
+    fs::create_dir_all(&dir)?;
+    super::seed_opencode_family_at(&dir, "ses_engine_root", "ses_engine_child")?;
+
+    let engine = opencode::engine_at(dir.clone(), dir.join("store"));
+
+    let entries = engine.list_entries()?;
+    assert_eq!(entries.len(), 1);
+    assert_eq!(
+        entries[0].summary.as_ref().expect("summary").title,
+        "Root task (+1 subagents)"
+    );
+
+    let page = engine.parse_messages_page("ses_engine_root", 0, 10)?;
+    assert!(page.messages.iter().any(|message| {
+        message
+            .blocks
+            .iter()
+            .any(|block| block.text.as_deref() == Some("Root question"))
+    }));
+
+    fs::remove_dir_all(&dir).ok();
+    Ok(())
+}
+
+#[test]
+fn zcode_engine_reads_custom_root_without_env() -> Result<()> {
+    let dir = env::temp_dir().join(format!("reins-engine-zcode-{}", Uuid::new_v4()));
+    fs::create_dir_all(&dir)?;
+    let db_path = dir.join("db.sqlite");
+    super::zcode::seed_zcode_family_at(&db_path, "ses_engine_root", "ses_engine_child")?;
+
+    let engine = zcode::engine_at(db_path.clone(), dir.join("store"));
+
+    let entries = engine.list_entries()?;
+    assert_eq!(entries.len(), 1);
+    assert_eq!(
+        entries[0].summary.as_ref().expect("summary").title,
+        "Root task (+1 subagents)"
+    );
+
+    let page = engine.parse_messages_page("ses_engine_root", 0, 10)?;
+    assert!(page.messages.iter().any(|message| {
+        message
+            .blocks
+            .iter()
+            .any(|block| block.text.as_deref() == Some("帮我看下这个项目"))
+    }));
 
     fs::remove_dir_all(&dir).ok();
     Ok(())

@@ -105,7 +105,8 @@ pub(crate) trait FamilySpec: Clone + Send + Sync + 'static {
     fn app(&self) -> SourceApp;
     /// 锁文案与默认 marker id 前缀(如 "Codex")。
     fn label(&self) -> &'static str;
-    /// family 未找到错误的显示名;claude 覆写 "Claude Code"(带空格拼写)。
+    /// family 未找到错误的显示名;默认等于 label(),产品名与锁前缀拼写
+    /// 不同时覆写(claude/dsh 经 agents 清单派生)。
     fn display_label(&self) -> &'static str {
         self.label()
     }
@@ -150,12 +151,15 @@ pub(crate) trait FamilySpec: Clone + Send + Sync + 'static {
         Ok(family.sum_token_usage(|row| self.row_usage(row)))
     }
 
-    /// timeline 失效(毫秒口径)。默认:成员文件 mtime 最大值。
-    fn family_freshness(&self, family: &Family<Self::Row>) -> Result<i64> {
+    /// timeline 失效(毫秒口径)。默认:成员文件 mtime 最大值;SQL 来源
+    /// 覆写为 max(db mtime, family updated_at),db 路径从 scan_root 派生。
+    fn family_freshness(&self, scan_root: &Path, family: &Family<Self::Row>) -> Result<i64> {
+        let _ = scan_root;
         member_mtime_max(family)
     }
-    /// 逐成员一次扫描产出双半;返回与 members 等长同序。
-    fn load_members(&self, members: &[Self::Row]) -> Result<Vec<MemberTimeline>>;
+    /// 逐成员一次扫描产出双半;返回与 members 等长同序。SQL 来源经
+    /// scan_root 打开实例 db。
+    fn load_members(&self, scan_root: &Path, members: &[Self::Row]) -> Result<Vec<MemberTimeline>>;
     /// marker 注入条件;默认 member_id ≠ root。注意与 (+N) 计数是两条
     /// 独立口径,不得合并(claude 有"有 marker、不计数"的成员)。
     fn is_subagent_member(&self, family: &Family<Self::Row>, row: &Self::Row) -> bool {
@@ -175,13 +179,18 @@ pub(crate) trait FamilySpec: Clone + Send + Sync + 'static {
     fn overview_counts(&self) -> OverviewCounts {
         OverviewCounts::Timeline
     }
-    /// OverviewCounts::Declared 时的原始计数(不含 marker)。
-    fn count_family_records(&self, _family: &Family<Self::Row>) -> Result<(usize, usize)> {
+    /// OverviewCounts::Declared 时的原始计数(不含 marker);SQL 来源经
+    /// scan_root 打开实例 db。
+    fn count_family_records(
+        &self,
+        _scan_root: &Path,
+        _family: &Family<Self::Row>,
+    ) -> Result<(usize, usize)> {
         bail!("{} 未声明 OverviewCounts::Declared", self.label())
     }
     fn agent_label(&self, family: &Family<Self::Row>, row: &Self::Row) -> FamilyAgentLabel;
     /// overview.source_paths;默认成员路径,SQL 来源覆写以 db 文件打头。
-    fn family_source_paths(&self, family: &Family<Self::Row>) -> Vec<String> {
+    fn family_source_paths(&self, _scan_root: &Path, family: &Family<Self::Row>) -> Vec<String> {
         family.source_paths()
     }
     /// parse_agent_messages 的成员归属校验(dsh 专用)。
@@ -449,10 +458,9 @@ impl<R: FamilySpec> ReaderEngine<R> {
 
     pub(crate) fn family_timeline(&self, family: &Family<R::Row>) -> Result<MemberTimeline> {
         let cache_key = family.root.member_id().to_string();
+        let freshness = self.spec.family_freshness(&self.scan_root, family)?;
         self.timeline
-            .load(cache_key, self.spec.family_freshness(family)?, || {
-                self.load_family_timeline(family)
-            })
+            .load(cache_key, freshness, || self.load_family_timeline(family))
     }
 
     // 装配管线:前置事件 → markers → 各成员双半(session_id 兜底)→ 各半终排。
@@ -464,7 +472,7 @@ impl<R: FamilySpec> ReaderEngine<R> {
         let mut messages = Vec::new();
         let mut events = self.spec.root_extra_events(family)?;
 
-        let timelines = self.spec.load_members(&family.members)?;
+        let timelines = self.spec.load_members(&self.scan_root, &family.members)?;
         for (row, timeline) in family.members.iter().zip(timelines) {
             if self.spec.is_subagent_member(family, row) {
                 messages.push(self.marker_message(row));
@@ -594,7 +602,8 @@ impl<R: FamilySpec> SessionReader for ReaderEngine<R> {
                 (Some(timeline.messages.len()), Some(timeline.events.len()))
             }
             OverviewCounts::Declared => {
-                let (messages, events) = self.spec.count_family_records(&family)?;
+                let (messages, events) =
+                    self.spec.count_family_records(&self.scan_root, &family)?;
                 let markers = family.members.len().saturating_sub(1);
                 (Some(messages + markers), Some(events + markers))
             }
@@ -602,7 +611,7 @@ impl<R: FamilySpec> SessionReader for ReaderEngine<R> {
 
         Ok(SessionOverview {
             summary,
-            source_paths: self.spec.family_source_paths(&family),
+            source_paths: self.spec.family_source_paths(&self.scan_root, &family),
             message_count,
             event_count,
             agents: family_agents(&family, |row| self.spec.agent_label(&family, row)),
@@ -999,7 +1008,11 @@ mod tests {
             }
         }
 
-        fn load_members(&self, members: &[TestRow]) -> Result<Vec<MemberTimeline>> {
+        fn load_members(
+            &self,
+            _scan_root: &Path,
+            members: &[TestRow],
+        ) -> Result<Vec<MemberTimeline>> {
             Ok(members
                 .iter()
                 .map(|row| MemberTimeline {
@@ -1035,7 +1048,11 @@ mod tests {
             self.counts
         }
 
-        fn count_family_records(&self, _family: &Family<TestRow>) -> Result<(usize, usize)> {
+        fn count_family_records(
+            &self,
+            _scan_root: &Path,
+            _family: &Family<TestRow>,
+        ) -> Result<(usize, usize)> {
             Ok((1, 1))
         }
 

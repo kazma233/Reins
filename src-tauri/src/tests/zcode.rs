@@ -1,4 +1,5 @@
 use super::*;
+use crate::session::SessionReader;
 
 // zcode fixture:与真实库同构的最小 schema,只建 reader 查询用到的列。
 // 数据形态对应 ~/.zcode/cli/db/db.sqlite 的实测结构,见
@@ -8,14 +9,14 @@ struct ZcodeSeed {
     child_id: String,
 }
 
-fn seed_zcode_family(root_id: &str, child_id: &str) -> Result<ZcodeSeed> {
-    let db_path = session::zcode::db_path()?;
-
+// env-free 版：向传入的 db 文件写夹具，供 engine_at 构造的 reader 级
+// 测试使用（zcode 的 scan_root 就是 db 文件路径）。
+pub(super) fn seed_zcode_family_at(db_path: &Path, root_id: &str, child_id: &str) -> Result<()> {
     if let Some(parent) = db_path.parent() {
         fs::create_dir_all(parent)?;
     }
 
-    let connection = Connection::open(&db_path)?;
+    let connection = Connection::open(db_path)?;
     connection.execute_batch(
         "
         CREATE TABLE session (
@@ -275,25 +276,31 @@ fn seed_zcode_family(root_id: &str, child_id: &str) -> Result<ZcodeSeed> {
         params![child_id],
     )?;
 
-    Ok(ZcodeSeed {
-        root_id: root_id.to_string(),
-        child_id: child_id.to_string(),
-    })
+    Ok(())
 }
 
-fn zcode_test_home() -> Result<(PathBuf, TestEnvGuard)> {
-    let temp_home = env::temp_dir().join(format!("reins-test-{}", Uuid::new_v4()));
-    fs::create_dir_all(&temp_home)?;
-    let guard = TestEnvGuard::set_home(&temp_home);
-    Ok((temp_home, guard))
+// env-free 夹具:engine_at 的 root 就是 db 文件路径,不碰进程 env。
+fn zcode_engine_at(
+    db_path: &Path,
+) -> crate::session::reader_engine::ReaderEngine<crate::session::zcode::ZcodeSpec> {
+    crate::session::zcode::engine_at(db_path.to_path_buf(), temp_store())
+}
+
+fn temp_store() -> PathBuf {
+    env::temp_dir().join(format!("reins-store-{}", Uuid::new_v4()))
 }
 
 #[test]
 fn zcode_root_session_aggregates_subagent_sessions() -> Result<()> {
-    let (temp_home, _guard) = zcode_test_home()?;
-    let seed = seed_zcode_family("sess_root", "sess_child")?;
+    let db_dir = env::temp_dir().join(format!("reins-zcode-{}", Uuid::new_v4()));
+    fs::create_dir_all(&db_dir)?;
+    let seed = ZcodeSeed {
+        root_id: "sess_root".to_string(),
+        child_id: "sess_child".to_string(),
+    };
+    seed_zcode_family_at(&db_dir.join("db.sqlite"), &seed.root_id, &seed.child_id)?;
 
-    let reader = session::reader(SourceApp::Zcode);
+    let reader = zcode_engine_at(&db_dir.join("db.sqlite"));
 
     let summary = reader.parse_summary(&seed.root_id)?;
     assert_eq!(summary.source_session_id, seed.root_id);
@@ -307,7 +314,7 @@ fn zcode_root_session_aggregates_subagent_sessions() -> Result<()> {
     assert_eq!(usage.cache_read_tokens, 65);
     assert_eq!(usage.cache_write_tokens, 14);
 
-    let detail = read_detail(reader, &seed.root_id)?;
+    let detail = read_detail(&reader, &seed.root_id)?;
 
     assert!(
         detail
@@ -344,32 +351,40 @@ fn zcode_root_session_aggregates_subagent_sessions() -> Result<()> {
                 .is_some_and(|text| text.contains("子任务完成"))))
     );
 
-    fs::remove_dir_all(&temp_home).ok();
     Ok(())
 }
 
 #[test]
 fn zcode_overview_counts_match_loaded_timeline() -> Result<()> {
-    let (temp_home, _guard) = zcode_test_home()?;
-    let seed = seed_zcode_family("sess_root", "sess_child")?;
+    let db_dir = env::temp_dir().join(format!("reins-zcode-{}", Uuid::new_v4()));
+    fs::create_dir_all(&db_dir)?;
+    let seed = ZcodeSeed {
+        root_id: "sess_root".to_string(),
+        child_id: "sess_child".to_string(),
+    };
+    seed_zcode_family_at(&db_dir.join("db.sqlite"), &seed.root_id, &seed.child_id)?;
 
-    let reader = session::reader(SourceApp::Zcode);
+    let reader = zcode_engine_at(&db_dir.join("db.sqlite"));
     let overview = reader.parse_overview(&seed.root_id)?;
-    let detail = read_detail(reader, &seed.root_id)?;
+    let detail = read_detail(&reader, &seed.root_id)?;
 
     assert_eq!(overview.message_count, Some(detail.messages.len()));
     assert_eq!(overview.event_count, Some(detail.events.len()));
 
-    fs::remove_dir_all(&temp_home).ok();
     Ok(())
 }
 
 #[test]
 fn zcode_classifies_timeline_by_semantics_and_parses_parts() -> Result<()> {
-    let (temp_home, _guard) = zcode_test_home()?;
-    let seed = seed_zcode_family("sess_root", "sess_child")?;
+    let db_dir = env::temp_dir().join(format!("reins-zcode-{}", Uuid::new_v4()));
+    fs::create_dir_all(&db_dir)?;
+    let seed = ZcodeSeed {
+        root_id: "sess_root".to_string(),
+        child_id: "sess_child".to_string(),
+    };
+    seed_zcode_family_at(&db_dir.join("db.sqlite"), &seed.root_id, &seed.child_id)?;
 
-    let detail = read_detail(session::reader(SourceApp::Zcode), &seed.root_id)?;
+    let detail = read_detail(&zcode_engine_at(&db_dir.join("db.sqlite")), &seed.root_id)?;
 
     // user_prompt:text 与 file 附件都可见
     let user_message = detail
@@ -473,6 +488,5 @@ fn zcode_classifies_timeline_by_semantics_and_parses_parts() -> Result<()> {
         .expect("timeline event message becomes an event");
     assert!(timeline_event.summary.contains("model_change"));
 
-    fs::remove_dir_all(&temp_home).ok();
     Ok(())
 }

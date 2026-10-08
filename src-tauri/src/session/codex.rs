@@ -115,7 +115,11 @@ impl FamilySpec for CodexSpec {
     }
 
     // 单次扫描产出双半,替代原先 messages/events 各扫一遍文件。
-    fn load_members(&self, members: &[CodexSessionRow]) -> Result<Vec<MemberTimeline>> {
+    fn load_members(
+        &self,
+        _scan_root: &Path,
+        members: &[CodexSessionRow],
+    ) -> Result<Vec<MemberTimeline>> {
         members
             .iter()
             .map(|row| {

@@ -1,4 +1,5 @@
 use super::*;
+use crate::session::SessionReader;
 
 const CACHE_DB_RELATIVE_PATH: &str = ".reins/session-summary-cache_v2.db";
 
@@ -28,8 +29,13 @@ fn tamper_cached_title(temp_home: &Path, from: &str, to: &str) -> Result<()> {
 }
 
 fn write_codex_transcript(temp_home: &Path, session_id: &str, question: &str) -> Result<PathBuf> {
-    let transcript_path = temp_home
-        .join(".codex/sessions/2026/09/04")
+    write_codex_transcript_at(&temp_home.join(".codex"), session_id, question)
+}
+
+// engine_at 版：向传入的 codex 根目录（生产 root() 的等价物）写转录夹具。
+fn write_codex_transcript_at(root: &Path, session_id: &str, question: &str) -> Result<PathBuf> {
+    let transcript_path = root
+        .join("sessions/2026/09/04")
         .join(format!("rollout-2026-09-04T09-00-00-{session_id}.jsonl"));
 
     write_jsonl(
@@ -64,11 +70,6 @@ fn codex_titles() -> Result<Vec<String>> {
         .into_iter()
         .map(|entry| entry.summary.expect("list entries carry summaries").title)
         .collect())
-}
-
-// 模拟进程重启：清空后端内存缓存，保留持久缓存。
-fn forget_in_memory_caches(source_app: SourceApp) -> Result<()> {
-    session::reader(source_app).clear_cache()
 }
 
 // 子进程模式：由 persistence_survives_process_restart 通过环境变量唤起，
@@ -124,40 +125,52 @@ fn cached_summary() -> SessionSummary {
     }
 }
 
+// reader 级 env-free 版：engine_at 实例 + 共享 store 目录。两次断言各构造
+// 新实例(内存缓存为空)，模拟进程重启后的冷启动。
 #[test]
 fn codex_cold_start_reads_title_from_persistent_cache() -> Result<()> {
-    let temp_home = env::temp_dir().join(format!("reins-test-{}", Uuid::new_v4()));
-    fs::create_dir_all(&temp_home)?;
-    let _guard = TestEnvGuard::set_home(&temp_home);
-
+    let root = env::temp_dir().join(format!("reins-codex-{}", Uuid::new_v4()));
+    let store = root.join(".reins");
     let session_id = "55555555-5555-4555-8555-555555555555";
-    write_codex_transcript(&temp_home, session_id, "First question")?;
+    write_codex_transcript_at(&root, session_id, "First question")?;
+
+    let titles = || -> Result<Vec<String>> {
+        Ok(session::codex::engine_at(root.clone(), store.clone())
+            .list_entries()?
+            .into_iter()
+            .map(|entry| entry.summary.expect("list entries carry summaries").title)
+            .collect())
+    };
 
     // 首次列表：全量解析并把摘要写入持久缓存。
-    assert_eq!(codex_titles()?, ["First question"]);
-    assert_eq!(cache_row_count(&temp_home)?, 1);
+    assert_eq!(titles()?, ["First question"]);
+    assert_eq!(cache_row_count(&root)?, 1);
 
-    tamper_cached_title(&temp_home, "First question", "TAMPERED CACHE TITLE")?;
-    forget_in_memory_caches(SourceApp::Codex)?;
+    tamper_cached_title(&root, "First question", "TAMPERED CACHE TITLE")?;
 
     // 冷启动：文件未变更，摘要必须命中持久缓存而不是重新解析。
-    assert_eq!(codex_titles()?, ["TAMPERED CACHE TITLE"]);
+    assert_eq!(titles()?, ["TAMPERED CACHE TITLE"]);
 
-    fs::remove_dir_all(&temp_home).ok();
     Ok(())
 }
 
 #[test]
 fn codex_changed_file_reparses_and_refreshes_cache() -> Result<()> {
-    let temp_home = env::temp_dir().join(format!("reins-test-{}", Uuid::new_v4()));
-    fs::create_dir_all(&temp_home)?;
-    let _guard = TestEnvGuard::set_home(&temp_home);
-
+    let root = env::temp_dir().join(format!("reins-codex-{}", Uuid::new_v4()));
+    let store = root.join(".reins");
     let session_id = "66666666-6666-4666-8666-666666666666";
-    let transcript_path = write_codex_transcript(&temp_home, session_id, "First question")?;
+    let transcript_path = write_codex_transcript_at(&root, session_id, "First question")?;
     let original_mtime = support::time::file_modified_timestamp_millis(&transcript_path)?;
 
-    assert_eq!(codex_titles()?, ["First question"]);
+    let titles = || -> Result<Vec<String>> {
+        Ok(session::codex::engine_at(root.clone(), store.clone())
+            .list_entries()?
+            .into_iter()
+            .map(|entry| entry.summary.expect("list entries carry summaries").title)
+            .collect())
+    };
+
+    assert_eq!(titles()?, ["First question"]);
 
     // 追加内容会推进文件 mtime（水位线），缓存行随之失效。
     std::thread::sleep(std::time::Duration::from_millis(25));
@@ -188,22 +201,16 @@ fn codex_changed_file_reparses_and_refreshes_cache() -> Result<()> {
         original_mtime
     );
 
-    forget_in_memory_caches(SourceApp::Codex)?;
-    assert_eq!(codex_titles()?, ["Second question"]);
+    assert_eq!(titles()?, ["Second question"]);
 
-    fs::remove_dir_all(&temp_home).ok();
     Ok(())
 }
 
 #[test]
 fn claude_cold_start_reads_title_from_persistent_cache() -> Result<()> {
-    let temp_home = env::temp_dir().join(format!("reins-test-{}", Uuid::new_v4()));
-    fs::create_dir_all(&temp_home)?;
-    let _guard = TestEnvGuard::set_home(&temp_home);
-
-    let session_file = temp_home
-        .join(".claude/projects/demo-project")
-        .join("session-123.jsonl");
+    let root = env::temp_dir().join(format!("reins-claude-{}", Uuid::new_v4()));
+    let store = root.join(".reins");
+    let session_file = root.join("projects/demo-project").join("session-123.jsonl");
     write_jsonl(
         &session_file,
         &[json!({
@@ -213,7 +220,7 @@ fn claude_cold_start_reads_title_from_persistent_cache() -> Result<()> {
     )?;
 
     let titles = || -> Result<Vec<String>> {
-        Ok(session::reader(SourceApp::ClaudeCode)
+        Ok(session::claude_code::engine_at(root.clone(), store.clone())
             .list_entries()?
             .into_iter()
             .map(|entry| entry.summary.expect("list entries carry summaries").title)
@@ -221,12 +228,10 @@ fn claude_cold_start_reads_title_from_persistent_cache() -> Result<()> {
     };
 
     assert_eq!(titles()?, ["First question"]);
-    tamper_cached_title(&temp_home, "First question", "TAMPERED CACHE TITLE")?;
-    forget_in_memory_caches(SourceApp::ClaudeCode)?;
+    tamper_cached_title(&root, "First question", "TAMPERED CACHE TITLE")?;
 
     assert_eq!(titles()?, ["TAMPERED CACHE TITLE"]);
 
-    fs::remove_dir_all(&temp_home).ok();
     Ok(())
 }
 

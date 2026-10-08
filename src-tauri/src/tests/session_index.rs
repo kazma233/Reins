@@ -1,4 +1,10 @@
 use super::*;
+use crate::session::SessionReader;
+
+// engine_at 的持久缓存目录：每个测试独立目录，避免跨测试串扰。
+fn temp_store() -> PathBuf {
+    env::temp_dir().join(format!("reins-store-{}", Uuid::new_v4()))
+}
 
 // The family index must apply the dual-write rule: the family key (the
 // root's source id) resolves to the root transcript, and each member's own
@@ -9,16 +15,10 @@ use super::*;
 
 #[test]
 fn claude_resolves_family_key_to_root_and_member_id_to_member() -> Result<()> {
-    let temp_home = env::temp_dir().join(format!("reins-test-{}", Uuid::new_v4()));
-    fs::create_dir_all(&temp_home)?;
-    let _guard = TestEnvGuard::set_home(&temp_home);
-
+    let root = env::temp_dir().join(format!("reins-claude-{}", Uuid::new_v4()));
     let root_id = "root-session";
     let child_id = "child-session";
-    let project_dir = temp_home
-        .join(".claude")
-        .join("projects")
-        .join("demo-project");
+    let project_dir = root.join("projects").join("demo-project");
     let root_path = project_dir.join(format!("{root_id}.jsonl"));
     let child_path = project_dir
         .join("subagents")
@@ -46,7 +46,7 @@ fn claude_resolves_family_key_to_root_and_member_id_to_member() -> Result<()> {
         })],
     )?;
 
-    let reader = session::reader(SourceApp::ClaudeCode);
+    let reader = session::claude_code::engine_at(root, temp_store());
     assert_eq!(
         reader.parse_summary(root_id)?.transcript_path,
         root_path.display().to_string()
@@ -57,27 +57,21 @@ fn claude_resolves_family_key_to_root_and_member_id_to_member() -> Result<()> {
         root_path.display().to_string()
     );
 
-    fs::remove_dir_all(&temp_home).ok();
     Ok(())
 }
 
 #[test]
 fn codex_resolves_family_key_to_root_and_member_id_to_member() -> Result<()> {
-    let temp_home = env::temp_dir().join(format!("reins-test-{}", Uuid::new_v4()));
-    fs::create_dir_all(&temp_home)?;
-    let _guard = TestEnvGuard::set_home(&temp_home);
-
+    let root = env::temp_dir().join(format!("reins-codex-{}", Uuid::new_v4()));
     let root_id = "44444444-4444-4444-8444-444444444444";
     let child_id = "55555555-5555-4555-8555-555555555555";
-    let root_path = temp_home
-        .join(".codex")
+    let root_path = root
         .join("sessions")
         .join("2026")
         .join("04")
         .join("21")
         .join(format!("rollout-2026-04-21T12-00-00-{root_id}.jsonl"));
-    let child_path = temp_home
-        .join(".codex")
+    let child_path = root
         .join("sessions")
         .join("2026")
         .join("04")
@@ -109,7 +103,7 @@ fn codex_resolves_family_key_to_root_and_member_id_to_member() -> Result<()> {
         })],
     )?;
 
-    let reader = session::reader(SourceApp::Codex);
+    let reader = session::codex::engine_at(root, temp_store());
     assert_eq!(
         reader.parse_summary(root_id)?.transcript_path,
         root_path.display().to_string()
@@ -119,6 +113,5 @@ fn codex_resolves_family_key_to_root_and_member_id_to_member() -> Result<()> {
         root_path.display().to_string()
     );
 
-    fs::remove_dir_all(&temp_home).ok();
     Ok(())
 }

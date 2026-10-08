@@ -681,6 +681,14 @@ impl FamilySpec for DshSpec {
         "DSH index".to_string()
     }
 
+    // not-found 错误主语经 agents 清单派生(产品全名);label() 的 "DSH" 是
+    // marker 前缀与锁名等引擎契约文本,两者刻意不同。
+    fn display_label(&self) -> &'static str {
+        crate::agents::spec_by_source_app(SourceApp::Dsh)
+            .expect("dsh registered in AGENTS")
+            .label
+    }
+
     // 传入的 root 就是 sessions 目录,不再下钻子目录。
     fn scan_root(&self, root: &Path) -> PathBuf {
         root.to_path_buf()
@@ -742,7 +750,11 @@ impl FamilySpec for DshSpec {
 
     // 双半共用一次解码:转录是多帧 zstd,原先 messages/events 两个 loader
     // 对同一文件各完整解码一遍。
-    fn load_members(&self, members: &[DshFamilyRow]) -> Result<Vec<MemberTimeline>> {
+    fn load_members(
+        &self,
+        _scan_root: &Path,
+        members: &[DshFamilyRow],
+    ) -> Result<Vec<MemberTimeline>> {
         members
             .iter()
             .map(|row| {
@@ -800,10 +812,7 @@ impl FamilySpec for DshSpec {
 }
 
 // 测试直接按根构造引擎实例:完全脱离进程 env 与全局锁,可并行。
-// codex/claude 的同形助手已被 session_engine 级用例消费;dsh 的引擎级用例
-// 尚未落地,落地后删除此 allow。
 #[cfg(test)]
-#[allow(dead_code)]
 pub(crate) fn engine_at(
     root: PathBuf,
     store_dir: PathBuf,

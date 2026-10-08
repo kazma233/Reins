@@ -1,4 +1,5 @@
 use super::*;
+use crate::session::SessionReader;
 
 // dsh fixture:转录事件结构对应 ~/.dsh/sessions 的实测样本,事件 schema 见
 // aidocs/context/2026-10-07-dsh-session-storage-exploration.md。
@@ -45,11 +46,21 @@ const ZSTD_MULTIFRAME: &[u8] = &[
     0x02, 0xc1, 0xc3, 0xab, 0x98, 0x01,
 ];
 
-fn dsh_test_home() -> Result<(PathBuf, TestEnvGuard)> {
-    let temp_home = env::temp_dir().join(format!("reins-test-{}", Uuid::new_v4()));
-    fs::create_dir_all(&temp_home)?;
-    let guard = TestEnvGuard::set_home(&temp_home);
-    Ok((temp_home, guard))
+// env-free 夹具根:engine_at 的 root 就是 sessions 目录,不碰进程 env。
+fn dsh_sessions_root() -> Result<PathBuf> {
+    let root = env::temp_dir().join(format!("reins-dsh-{}", Uuid::new_v4()));
+    fs::create_dir_all(&root)?;
+    Ok(root)
+}
+
+fn dsh_engine_at(
+    sessions_root: &Path,
+) -> crate::session::reader_engine::ReaderEngine<crate::session::dsh::DshSpec> {
+    crate::session::dsh::engine_at(sessions_root.to_path_buf(), temp_store())
+}
+
+fn temp_store() -> PathBuf {
+    env::temp_dir().join(format!("reins-store-{}", Uuid::new_v4()))
 }
 
 fn session_header(id: &str, created_at: i64, delegation_depth: u32) -> Value {
@@ -141,16 +152,16 @@ fn with_surface_append(mut value: Value) -> Value {
     value
 }
 
+// 夹具直接写 sessions 根目录(engine_at 的 root 就是 sessions 目录,
+// 等价于生产 sessions_root() 的返回值)。
 fn write_session(
-    home: &Path,
+    sessions_root: &Path,
     session_id: &str,
     generation: u32,
     compressed: bool,
     lines: &[Value],
 ) -> Result<PathBuf> {
-    let directory = home
-        .join(".dsh/sessions/--D-projects-demo--")
-        .join(session_id);
+    let directory = sessions_root.join("--D-projects-demo--").join(session_id);
     fs::create_dir_all(&directory)?;
     let file_name = if compressed {
         format!("session.v{generation}.jsonl.zstd")
@@ -164,10 +175,8 @@ fn write_session(
 
 #[test]
 fn dsh_decodes_multiframe_zstd_and_picks_highest_generation() -> Result<()> {
-    let (home, _guard) = dsh_test_home()?;
-    let directory = home
-        .join(".dsh/sessions/--D-projects-demo--")
-        .join("session-multi");
+    let home = dsh_sessions_root()?;
+    let directory = home.join("--D-projects-demo--").join("session-multi");
     fs::create_dir_all(&directory)?;
     // 旧代 v3 明文共存,读取必须取最高代 v4 的多帧 zstd
     write_jsonl(
@@ -176,7 +185,7 @@ fn dsh_decodes_multiframe_zstd_and_picks_highest_generation() -> Result<()> {
     )?;
     fs::write(&directory.join("session.v4.jsonl.zstd"), ZSTD_MULTIFRAME)?;
 
-    let reader = session::reader(SourceApp::Dsh);
+    let reader = dsh_engine_at(&home);
     let entries = reader.list_entries()?;
     assert_eq!(entries.len(), 1);
 
@@ -199,7 +208,7 @@ fn dsh_decodes_multiframe_zstd_and_picks_highest_generation() -> Result<()> {
         (11, 7, 3, 5)
     );
 
-    let detail = read_detail(reader, "session-multi")?;
+    let detail = read_detail(&reader, "session-multi")?;
     // 三个帧的内容全部解出:帧1 只有 header+permission(无消息),帧2/帧3 各一条消息
     assert!(detail.messages.iter().any(|message| {
         message
@@ -243,16 +252,13 @@ fn dsh_decodes_multiframe_zstd_and_picks_highest_generation() -> Result<()> {
     );
     assert!(payload.get("seq").is_some());
     assert!(payload.get("data").is_some());
-    fs::remove_dir_all(&home).ok();
     Ok(())
 }
 
 #[test]
 fn dsh_tolerates_truncated_zstd_tail() -> Result<()> {
-    let (home, _guard) = dsh_test_home()?;
-    let directory = home
-        .join(".dsh/sessions/--D-projects-demo--")
-        .join("session-live");
+    let home = dsh_sessions_root()?;
+    let directory = home.join("--D-projects-demo--").join("session-live");
     fs::create_dir_all(&directory)?;
     // 截 420 字节:帧1+帧2 完整,帧3 从中间截断(live 写入中的文件)
     fs::write(
@@ -260,10 +266,10 @@ fn dsh_tolerates_truncated_zstd_tail() -> Result<()> {
         &ZSTD_MULTIFRAME[..420],
     )?;
 
-    let reader = session::reader(SourceApp::Dsh);
+    let reader = dsh_engine_at(&home);
     let entries = reader.list_entries()?;
     assert_eq!(entries.len(), 1);
-    let detail = read_detail(reader, &entries[0].source_session_id)?;
+    let detail = read_detail(&reader, &entries[0].source_session_id)?;
     assert!(detail.messages.iter().any(|message| {
         message
             .blocks
@@ -279,7 +285,6 @@ fn dsh_tolerates_truncated_zstd_tail() -> Result<()> {
                 .as_deref()
                 .is_some_and(|text| text.contains("frame three"))))
     );
-    fs::remove_dir_all(&home).ok();
     Ok(())
 }
 
@@ -434,7 +439,7 @@ fn mapping_fixture(id: &str) -> Vec<Value> {
 
 #[test]
 fn dsh_maps_event_types_to_messages_events_and_usage() -> Result<()> {
-    let (home, _guard) = dsh_test_home()?;
+    let home = dsh_sessions_root()?;
     write_session(
         &home,
         "session-map",
@@ -443,7 +448,7 @@ fn dsh_maps_event_types_to_messages_events_and_usage() -> Result<()> {
         &mapping_fixture("session-map"),
     )?;
 
-    let reader = session::reader(SourceApp::Dsh);
+    let reader = dsh_engine_at(&home);
     let summary = reader.parse_summary("session-map")?;
     // session/title latest-wins
     assert_eq!(summary.title, "Final title");
@@ -459,7 +464,7 @@ fn dsh_maps_event_types_to_messages_events_and_usage() -> Result<()> {
         (150, 15, 20, 5)
     );
 
-    let detail = read_detail(reader, "session-map")?;
+    let detail = read_detail(&reader, "session-map")?;
 
     // 人类 user 消息进消息时间线;合成注入不进
     let user = detail
@@ -598,13 +603,12 @@ fn dsh_maps_event_types_to_messages_events_and_usage() -> Result<()> {
             "ignored type {ignored} leaked into messages"
         );
     }
-    fs::remove_dir_all(&home).ok();
     Ok(())
 }
 
 #[test]
 fn dsh_title_falls_back_to_first_user_message_then_session_id() -> Result<()> {
-    let (home, _guard) = dsh_test_home()?;
+    let home = dsh_sessions_root()?;
     write_session(
         &home,
         "session-titled",
@@ -629,7 +633,7 @@ fn dsh_title_falls_back_to_first_user_message_then_session_id() -> Result<()> {
         &[session_header("session-empty", 2000, 0)],
     )?;
 
-    let reader = session::reader(SourceApp::Dsh);
+    let reader = dsh_engine_at(&home);
     let summaries: Vec<SessionSummary> = reader
         .list_entries()?
         .into_iter()
@@ -646,13 +650,12 @@ fn dsh_title_falls_back_to_first_user_message_then_session_id() -> Result<()> {
         .expect("empty session");
     assert_eq!(empty.title, "session-empty");
     assert_eq!(empty.created_at, Some(2000));
-    fs::remove_dir_all(&home).ok();
     Ok(())
 }
 
 #[test]
 fn dsh_surface_replace_folds_covered_range() -> Result<()> {
-    let (home, _guard) = dsh_test_home()?;
+    let home = dsh_sessions_root()?;
     let lines = vec![
         session_header("session-fold", 1000, 0),
         user_message(1, 1100, "原始问题", "user"),
@@ -679,8 +682,8 @@ fn dsh_surface_replace_folds_covered_range() -> Result<()> {
     ];
     write_session(&home, "session-fold", 4, false, &lines)?;
 
-    let reader = session::reader(SourceApp::Dsh);
-    let detail = read_detail(reader, "session-fold")?;
+    let reader = dsh_engine_at(&home);
+    let detail = read_detail(&reader, "session-fold")?;
     let message_texts: Vec<&str> = detail
         .messages
         .iter()
@@ -704,13 +707,12 @@ fn dsh_surface_replace_folds_covered_range() -> Result<()> {
         .token_usage
         .expect("usage");
     assert_eq!((usage.input_tokens, usage.output_tokens), (10, 2));
-    fs::remove_dir_all(&home).ok();
     Ok(())
 }
 
 #[test]
 fn dsh_family_folds_subagents_and_hides_orphans() -> Result<()> {
-    let (home, _guard) = dsh_test_home()?;
+    let home = dsh_sessions_root()?;
     write_session(
         &home,
         "session-root",
@@ -767,7 +769,7 @@ fn dsh_family_folds_subagents_and_hides_orphans() -> Result<()> {
         ],
     )?;
 
-    let reader = session::reader(SourceApp::Dsh);
+    let reader = dsh_engine_at(&home);
     let entries = reader.list_entries()?;
     assert_eq!(entries.len(), 1, "root family is the only entry");
 
@@ -798,7 +800,7 @@ fn dsh_family_folds_subagents_and_hides_orphans() -> Result<()> {
     // catalog 的 label 优先作为 marker 标题
     assert_eq!(overview.summary.title, summary.title);
 
-    let detail = read_detail(reader, "session-root")?;
+    let detail = read_detail(&reader, "session-root")?;
     let marker = detail
         .messages
         .iter()
@@ -850,13 +852,12 @@ fn dsh_family_folds_subagents_and_hides_orphans() -> Result<()> {
         "session-root"
     );
     assert!(reader.parse_summary("session-orphan").is_err());
-    fs::remove_dir_all(&home).ok();
     Ok(())
 }
 
 #[test]
 fn dsh_usage_hours_bucketed_by_assistant_event_time() -> Result<()> {
-    let (home, _guard) = dsh_test_home()?;
+    let home = dsh_sessions_root()?;
     let hour = |h: u32| {
         chrono::TimeZone::with_ymd_and_hms(&chrono::Local, 2026, 4, 21, h, 0, 0)
             .single()
@@ -918,7 +919,6 @@ fn dsh_usage_hours_bucketed_by_assistant_event_time() -> Result<()> {
             ),
         ])
     );
-    fs::remove_dir_all(&home).ok();
     Ok(())
 }
 

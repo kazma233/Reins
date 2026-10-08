@@ -48,7 +48,13 @@ fn write_jsonl(path: &Path, lines: &[Value]) -> Result<()> {
 }
 
 fn seed_opencode_family(root_id: &str, child_id: &str) -> Result<()> {
-    let db_path = session::opencode::db_path()?;
+    seed_opencode_family_at(&session::opencode::root()?, root_id, child_id)
+}
+
+// env-free 版：直接向传入的 opencode 根目录写 opencode.db 夹具，供
+// engine_at 构造的 reader 级测试使用。
+fn seed_opencode_family_at(opencode_root: &Path, root_id: &str, child_id: &str) -> Result<()> {
+    let db_path = opencode_root.join("opencode.db");
 
     if let Some(parent) = db_path.parent() {
         fs::create_dir_all(parent)?;

@@ -263,6 +263,12 @@ pub(crate) fn spec_by_provider_app(app: ProviderAppId) -> Option<&'static AgentS
     AGENTS.iter().find(|spec| spec.provider_app == Some(app))
 }
 
+// session 域 wire id → AgentSpec；not-found 错误主语等产品名从这里派生，
+// 与界面文案保持同一份拼写。
+pub(crate) fn spec_by_source_app(app: SourceApp) -> Option<&'static AgentSpec> {
+    AGENTS.iter().find(|spec| spec.source_app == Some(app))
+}
+
 // ---------------------------------------------------------------------------
 // 前端生成物：agent 产品名常量（src/shared/lib/agent-labels.ts）
 // ---------------------------------------------------------------------------

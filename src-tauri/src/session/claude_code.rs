@@ -80,9 +80,12 @@ impl FamilySpec for ClaudeSpec {
         "Claude"
     }
 
-    // 错误文案用带空格的产品名(claude_code.rs 历史口径)。
+    // 错误文案主语经 agents 清单派生，与界面产品名保持同一份拼写
+    // （label() 的 "Claude" 是锁前缀等引擎契约文本，两者刻意不同）。
     fn display_label(&self) -> &'static str {
-        "Claude Code"
+        crate::agents::spec_by_source_app(SourceApp::ClaudeCode)
+            .expect("claude registered in AGENTS")
+            .label
     }
 
     fn scan_root(&self, root: &Path) -> PathBuf {
@@ -113,7 +116,7 @@ impl FamilySpec for ClaudeSpec {
     }
 
     // 同上:family 失效把非 root 成员的父目录 mtime 计入。
-    fn family_freshness(&self, family: &ClaudeSessionFamily) -> Result<i64> {
+    fn family_freshness(&self, _scan_root: &Path, family: &ClaudeSessionFamily) -> Result<i64> {
         family_timestamp(family)
     }
 
@@ -127,7 +130,11 @@ impl FamilySpec for ClaudeSpec {
     }
 
     // 单次扫描产出双半;记录解析自带 agent_session_id,引擎兜底不生效。
-    fn load_members(&self, members: &[ClaudeSessionRow]) -> Result<Vec<MemberTimeline>> {
+    fn load_members(
+        &self,
+        _scan_root: &Path,
+        members: &[ClaudeSessionRow],
+    ) -> Result<Vec<MemberTimeline>> {
         members
             .iter()
             .map(|row| {

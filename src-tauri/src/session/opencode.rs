@@ -27,15 +27,16 @@ pub(crate) struct OpenCodeSessionRow {
     time_updated: i64,
     // 一次 GROUP BY 查询按 session_id 预聚合,避免列表逐会话全表扫。
     token_usage: Option<SessionTokenUsage>,
+    // "db路径:id" 组合串:list_rows 时按实例 scan_root 的 db 生成,作为该
+    // 记录的稳定展示 key(行来自 SQLite,没有真实转录文件)。
+    path: PathBuf,
 }
 
 type OpenCodeSessionFamily = Family<OpenCodeSessionRow>;
 
 impl FamilyRow for OpenCodeSessionRow {
-    // OpenCode rows come from SQLite and have no path column; the transcript
-    // path is derived from the session id on demand.
     fn member_path(&self) -> std::borrow::Cow<'_, Path> {
-        std::borrow::Cow::Owned(session_path(&self.id))
+        std::borrow::Cow::Borrowed(&self.path)
     }
 
     fn family_root_id(&self) -> &str {
@@ -89,8 +90,8 @@ impl FamilySpec for OpenCodeSpec {
         root.to_path_buf()
     }
 
-    fn list_rows(&self, _scan_root: &Path) -> Result<Vec<OpenCodeSessionRow>> {
-        list_session_rows()
+    fn list_rows(&self, scan_root: &Path) -> Result<Vec<OpenCodeSessionRow>> {
+        list_session_rows(scan_root)
     }
 
     fn group_families(&self, rows: Vec<OpenCodeSessionRow>) -> Result<Vec<OpenCodeSessionFamily>> {
@@ -98,8 +99,8 @@ impl FamilySpec for OpenCodeSpec {
     }
 
     // 索引失效只看 db 文件 mtime:全部行都从它 join 出来,行内时间不参与。
-    fn index_freshness(&self, _scan_root: &Path) -> Result<Freshness> {
-        opencode_db_timestamp().map(Freshness::Stamp)
+    fn index_freshness(&self, scan_root: &Path) -> Result<Freshness> {
+        opencode_db_timestamp_at(scan_root).map(Freshness::Stamp)
     }
 
     fn summary_kind(&self) -> SummaryKind {
@@ -115,7 +116,7 @@ impl FamilySpec for OpenCodeSpec {
             title: root.title.clone(),
             cwd: Some(root.directory.clone()),
             git_branch: None,
-            transcript_path: session_path(&root.id).display().to_string(),
+            transcript_path: root.member_path().display().to_string(),
             created_at: Some(root.time_created),
             updated_at: Some(root.time_updated),
             token_usage: None,
@@ -128,13 +129,17 @@ impl FamilySpec for OpenCodeSpec {
     }
 
     // 时间线失效:max(db mtime, family updated_at)。
-    fn family_freshness(&self, family: &OpenCodeSessionFamily) -> Result<i64> {
-        Ok(opencode_db_timestamp()?.max(family.updated_at().unwrap_or_default()))
+    fn family_freshness(&self, scan_root: &Path, family: &OpenCodeSessionFamily) -> Result<i64> {
+        Ok(opencode_db_timestamp_at(scan_root)?.max(family.updated_at().unwrap_or_default()))
     }
 
     // 单次 SQL 查询装配双半,替代原先 messages/events 各查一遍数据库。
-    fn load_members(&self, members: &[OpenCodeSessionRow]) -> Result<Vec<MemberTimeline>> {
-        let connection = open_connection()?;
+    fn load_members(
+        &self,
+        scan_root: &Path,
+        members: &[OpenCodeSessionRow],
+    ) -> Result<Vec<MemberTimeline>> {
+        let connection = open_connection_at(scan_root)?;
         let member_ids = members.iter().map(|row| row.id.clone()).collect::<Vec<_>>();
         let message_rows = load_message_rows(&connection, &member_ids)?;
 
@@ -207,9 +212,13 @@ impl FamilySpec for OpenCodeSpec {
         OverviewCounts::Declared
     }
 
-    fn count_family_records(&self, family: &OpenCodeSessionFamily) -> Result<(usize, usize)> {
+    fn count_family_records(
+        &self,
+        scan_root: &Path,
+        family: &OpenCodeSessionFamily,
+    ) -> Result<(usize, usize)> {
         let member_ids: Vec<&str> = family.members.iter().map(|row| row.id.as_str()).collect();
-        count_family_records(&member_ids)
+        count_family_records(scan_root, &member_ids)
     }
 
     fn agent_label(
@@ -225,12 +234,8 @@ impl FamilySpec for OpenCodeSpec {
     }
 
     // overview.source_paths:db 文件打头,成员行由它 join 出来,删除只动 db。
-    fn family_source_paths(&self, family: &OpenCodeSessionFamily) -> Vec<String> {
-        let mut paths = vec![
-            db_path()
-                .map(|path| path.display().to_string())
-                .unwrap_or_else(|_| "<opencode-db>".to_string()),
-        ];
+    fn family_source_paths(&self, scan_root: &Path, family: &OpenCodeSessionFamily) -> Vec<String> {
+        let mut paths = vec![db_path_at(scan_root).display().to_string()];
 
         paths.extend(family.source_paths());
         paths
@@ -240,9 +245,7 @@ impl FamilySpec for OpenCodeSpec {
 pub(crate) static BACKEND: FamilyReader<OpenCodeSpec> = FamilyReader::new(OpenCodeSpec, root);
 
 // 测试直接按根构造引擎实例:完全脱离进程 env 与全局锁,可并行。
-// 过渡态:reader 级 env-free 测试接线前暂无调用方。
 #[cfg(test)]
-#[allow(dead_code)]
 pub(crate) fn engine_at(
     root: PathBuf,
     store_dir: PathBuf,
@@ -258,16 +261,22 @@ pub(crate) fn root() -> Result<PathBuf> {
         .join("opencode"))
 }
 
+// 模块级 env 版 db 路径仅供生产路径(delete/usage)使用;reader 引擎实例的
+// 数据查询一律从实例 scan_root 派生,env 与实例互不串扰。
 pub(crate) fn db_path() -> Result<PathBuf> {
     Ok(root()?.join("opencode.db"))
 }
 
-pub(crate) fn session_path(session_id: &str) -> PathBuf {
-    // v2 会话只存在于 SQLite，没有 transcript 文件；用 "db路径:id" 组合串
-    // 作为该记录的稳定 key。整体不是真实路径，path_key 会走原样字符串分支，
-    // 写入与查询两侧同经本函数，key 保持一致。
-    let db = db_path().unwrap_or_else(|_| PathBuf::from("/tmp/opencode.db"));
-    PathBuf::from(format!("{}:{}", db.display(), session_id))
+fn db_path_at(scan_root: &Path) -> PathBuf {
+    scan_root.join("opencode.db")
+}
+
+fn open_connection_at(scan_root: &Path) -> Result<Connection> {
+    Connection::open(db_path_at(scan_root)).context("Failed to open OpenCode sqlite database")
+}
+
+fn opencode_db_timestamp_at(scan_root: &Path) -> Result<i64> {
+    crate::support::time::file_modified_timestamp_millis(&db_path_at(scan_root))
 }
 
 pub(crate) fn delete_session(source_session_id: &str) -> Result<()> {
@@ -337,8 +346,9 @@ pub(crate) fn delete_plan(overview: &SessionOverview) -> Result<Vec<DeletePlanAc
         .collect())
 }
 
-fn list_session_rows() -> Result<Vec<OpenCodeSessionRow>> {
-    let connection = open_connection()?;
+fn list_session_rows(scan_root: &Path) -> Result<Vec<OpenCodeSessionRow>> {
+    let connection = open_connection_at(scan_root)?;
+    let db_path = db_path_at(scan_root);
     let token_usages = session_token_usages(&connection)?;
     let mut statement = connection.prepare(
         "SELECT id, parent_id, directory, title, time_created, time_updated FROM session_v2 ORDER BY time_updated DESC",
@@ -349,6 +359,9 @@ fn list_session_rows() -> Result<Vec<OpenCodeSessionRow>> {
         let id: String = row.get(0)?;
         let title: Option<String> = row.get(3)?;
         let token_usage = token_usages.get(&id).copied();
+        // v2 会话只存在于 SQLite，没有 transcript 文件；用 "db路径:id" 组合串
+        // 作为该记录的稳定 key。整体不是真实路径，path_key 会走原样字符串分支。
+        let path = PathBuf::from(format!("{}:{}", db_path.display(), id));
         Ok(OpenCodeSessionRow {
             title: title
                 .filter(|title| !title.is_empty())
@@ -359,6 +372,7 @@ fn list_session_rows() -> Result<Vec<OpenCodeSessionRow>> {
             time_created: row.get(4)?,
             time_updated: row.get(5)?,
             token_usage,
+            path,
         })
     })?;
 
@@ -528,12 +542,8 @@ fn root_session_id(
     current_id
 }
 
-fn opencode_db_timestamp() -> Result<i64> {
-    crate::support::time::file_modified_timestamp_millis(&db_path()?)
-}
-
-fn count_family_records(member_ids: &[&str]) -> Result<(usize, usize)> {
-    let connection = open_connection()?;
+fn count_family_records(scan_root: &Path, member_ids: &[&str]) -> Result<(usize, usize)> {
+    let connection = open_connection_at(scan_root)?;
     let member_ids = member_ids
         .iter()
         .map(|id| (*id).to_string())

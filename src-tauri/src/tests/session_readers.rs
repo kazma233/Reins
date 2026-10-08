@@ -1,20 +1,24 @@
 use super::*;
+use crate::session::SessionReader;
+
+// engine_at 的持久缓存目录：每个测试独立目录，避免跨测试串扰。
+fn temp_store() -> PathBuf {
+    env::temp_dir().join(format!("reins-store-{}", Uuid::new_v4()))
+}
 
 #[test]
 fn opencode_root_session_aggregates_subagent_sessions() -> Result<()> {
-    let temp_home = env::temp_dir().join(format!("reins-test-{}", Uuid::new_v4()));
-    fs::create_dir_all(&temp_home)?;
-    let _guard = TestEnvGuard::set_home(&temp_home);
-
+    let root = env::temp_dir().join(format!("reins-opencode-{}", Uuid::new_v4()));
     let root_id = "ses_root_session";
     let child_id = "ses_child_session";
-    seed_opencode_family(root_id, child_id)?;
+    seed_opencode_family_at(&root, root_id, child_id)?;
 
-    let summary = session::reader(SourceApp::OpenCode).parse_summary(root_id)?;
+    let reader = session::opencode::engine_at(root, temp_store());
+    let summary = reader.parse_summary(root_id)?;
     assert_eq!(summary.source_session_id, root_id);
     assert!(summary.title.contains("+1 subagents"));
 
-    let detail = read_detail(session::reader(SourceApp::OpenCode), root_id)?;
+    let detail = read_detail(&reader, root_id)?;
 
     assert!(
         detail
@@ -40,40 +44,32 @@ fn opencode_root_session_aggregates_subagent_sessions() -> Result<()> {
             .any(|path| path.ends_with(&format!(":{child_id}")))
     );
 
-    fs::remove_dir_all(&temp_home).ok();
     Ok(())
 }
 
 #[test]
 fn opencode_overview_counts_match_loaded_timeline() -> Result<()> {
-    let temp_home = env::temp_dir().join(format!("reins-test-{}", Uuid::new_v4()));
-    fs::create_dir_all(&temp_home)?;
-    let _guard = TestEnvGuard::set_home(&temp_home);
-
+    let root = env::temp_dir().join(format!("reins-opencode-{}", Uuid::new_v4()));
     let root_id = "ses_root_session";
     let child_id = "ses_child_session";
-    seed_opencode_family(root_id, child_id)?;
+    seed_opencode_family_at(&root, root_id, child_id)?;
 
-    let reader = session::reader(SourceApp::OpenCode);
+    let reader = session::opencode::engine_at(root, temp_store());
     let overview = reader.parse_overview(root_id)?;
-    let detail = read_detail(reader, root_id)?;
+    let detail = read_detail(&reader, root_id)?;
 
     assert_eq!(overview.message_count, Some(detail.messages.len()));
     assert_eq!(overview.event_count, Some(detail.events.len()));
 
-    fs::remove_dir_all(&temp_home).ok();
     Ok(())
 }
 
 #[test]
 fn codex_ignores_agents_banner_when_picking_title() -> Result<()> {
-    let temp_home = env::temp_dir().join(format!("reins-test-{}", Uuid::new_v4()));
-    fs::create_dir_all(&temp_home)?;
-    let _guard = TestEnvGuard::set_home(&temp_home);
-
+    let root = env::temp_dir().join(format!("reins-codex-{}", Uuid::new_v4()));
     let session_id = "33333333-3333-4333-8333-333333333333";
-    let transcript_path = temp_home
-        .join(".codex/sessions/2026/04/21")
+    let transcript_path = root
+        .join("sessions/2026/04/21")
         .join(format!("rollout-2026-04-21T12-00-00-{session_id}.jsonl"));
     if let Some(parent) = transcript_path.parent() {
         fs::create_dir_all(parent)?;
@@ -120,24 +116,20 @@ fn codex_ignores_agents_banner_when_picking_title() -> Result<()> {
 
     write_jsonl(&transcript_path, &transcript)?;
 
-    let summary = session::reader(SourceApp::Codex).parse_summary(session_id)?;
+    let summary = session::codex::engine_at(root, temp_store()).parse_summary(session_id)?;
 
     assert_eq!(summary.source_session_id, session_id);
     assert_eq!(summary.title, "How do I list the current files?");
 
-    fs::remove_dir_all(&temp_home).ok();
     Ok(())
 }
 
 #[test]
 fn codex_skips_agents_instructions_block_when_picking_title() -> Result<()> {
-    let temp_home = env::temp_dir().join(format!("reins-test-{}", Uuid::new_v4()));
-    fs::create_dir_all(&temp_home)?;
-    let _guard = TestEnvGuard::set_home(&temp_home);
-
+    let root = env::temp_dir().join(format!("reins-codex-{}", Uuid::new_v4()));
     let session_id = "44444444-4444-4444-8444-444444444444";
-    let transcript_path = temp_home
-        .join(".codex/sessions/2026/04/21")
+    let transcript_path = root
+        .join("sessions/2026/04/21")
         .join(format!("rollout-2026-04-21T12-00-00-{session_id}.jsonl"));
     if let Some(parent) = transcript_path.parent() {
         fs::create_dir_all(parent)?;
@@ -188,24 +180,18 @@ fn codex_skips_agents_instructions_block_when_picking_title() -> Result<()> {
 
     write_jsonl(&transcript_path, &transcript)?;
 
-    let summary = session::reader(SourceApp::Codex).parse_summary(session_id)?;
+    let summary = session::codex::engine_at(root, temp_store()).parse_summary(session_id)?;
 
     assert_eq!(summary.source_session_id, session_id);
     assert_eq!(summary.title, "帮我看一下这个报错");
 
-    fs::remove_dir_all(&temp_home).ok();
     Ok(())
 }
 
 #[test]
 fn claude_ignores_agents_banner_when_picking_title() -> Result<()> {
-    let temp_home = env::temp_dir().join(format!("reins-test-{}", Uuid::new_v4()));
-    fs::create_dir_all(&temp_home)?;
-    let _guard = TestEnvGuard::set_home(&temp_home);
-
-    let session_file = temp_home
-        .join(".claude/projects/demo-project")
-        .join("session-123.jsonl");
+    let root = env::temp_dir().join(format!("reins-claude-{}", Uuid::new_v4()));
+    let session_file = root.join("projects/demo-project").join("session-123.jsonl");
     let transcript = vec![
         json!({
             "type": "user",
@@ -223,22 +209,19 @@ fn claude_ignores_agents_banner_when_picking_title() -> Result<()> {
 
     write_jsonl(&session_file, &transcript)?;
 
-    let summary = session::reader(SourceApp::ClaudeCode).parse_summary("session-123")?;
+    let summary =
+        session::claude_code::engine_at(root, temp_store()).parse_summary("session-123")?;
 
     assert_eq!(summary.title, "How do I list the current files?");
 
-    fs::remove_dir_all(&temp_home).ok();
     Ok(())
 }
 
 #[test]
 fn claude_keeps_injected_context_as_readable_block() -> Result<()> {
-    let temp_home = env::temp_dir().join(format!("reins-test-{}", Uuid::new_v4()));
-    fs::create_dir_all(&temp_home)?;
-    let _guard = TestEnvGuard::set_home(&temp_home);
-
-    let session_file = temp_home
-        .join(".claude/projects/demo-project")
+    let root = env::temp_dir().join(format!("reins-claude-{}", Uuid::new_v4()));
+    let session_file = root
+        .join("projects/demo-project")
         .join("session-context.jsonl");
     write_jsonl(
         &session_file,
@@ -253,7 +236,8 @@ fn claude_keeps_injected_context_as_readable_block() -> Result<()> {
         ],
     )?;
 
-    let detail = read_detail(session::reader(SourceApp::ClaudeCode), "session-context")?;
+    let reader = session::claude_code::engine_at(root, temp_store());
+    let detail = read_detail(&reader, "session-context")?;
     let block = detail
         .messages
         .iter()
@@ -270,18 +254,14 @@ fn claude_keeps_injected_context_as_readable_block() -> Result<()> {
             .any(|block| block.kind == "empty_message")
     }));
 
-    fs::remove_dir_all(&temp_home).ok();
     Ok(())
 }
 
 #[test]
 fn claude_turns_image_blocks_into_renderable_image_blocks() -> Result<()> {
-    let temp_home = env::temp_dir().join(format!("reins-test-{}", Uuid::new_v4()));
-    fs::create_dir_all(&temp_home)?;
-    let _guard = TestEnvGuard::set_home(&temp_home);
-
-    let session_file = temp_home
-        .join(".claude/projects/demo-project")
+    let root = env::temp_dir().join(format!("reins-claude-{}", Uuid::new_v4()));
+    let session_file = root
+        .join("projects/demo-project")
         .join("session-image.jsonl");
     write_jsonl(
         &session_file,
@@ -303,7 +283,8 @@ fn claude_turns_image_blocks_into_renderable_image_blocks() -> Result<()> {
         })],
     )?;
 
-    let detail = read_detail(session::reader(SourceApp::ClaudeCode), "session-image")?;
+    let reader = session::claude_code::engine_at(root, temp_store());
+    let detail = read_detail(&reader, "session-image")?;
     let references: Vec<&str> = detail
         .messages
         .iter()
@@ -319,18 +300,14 @@ fn claude_turns_image_blocks_into_renderable_image_blocks() -> Result<()> {
         ]
     );
 
-    fs::remove_dir_all(&temp_home).ok();
     Ok(())
 }
 
 #[test]
 fn claude_renders_local_command_records_as_readable_blocks() -> Result<()> {
-    let temp_home = env::temp_dir().join(format!("reins-test-{}", Uuid::new_v4()));
-    fs::create_dir_all(&temp_home)?;
-    let _guard = TestEnvGuard::set_home(&temp_home);
-
-    let session_file = temp_home
-        .join(".claude/projects/demo-project")
+    let root = env::temp_dir().join(format!("reins-claude-{}", Uuid::new_v4()));
+    let session_file = root
+        .join("projects/demo-project")
         .join("session-local-command.jsonl");
     write_jsonl(
         &session_file,
@@ -359,10 +336,8 @@ fn claude_renders_local_command_records_as_readable_blocks() -> Result<()> {
         ],
     )?;
 
-    let detail = read_detail(
-        session::reader(SourceApp::ClaudeCode),
-        "session-local-command",
-    )?;
+    let reader = session::claude_code::engine_at(root, temp_store());
+    let detail = read_detail(&reader, "session-local-command")?;
     let blocks: Vec<(&str, Option<&str>)> = detail
         .messages
         .iter()
@@ -382,22 +357,14 @@ fn claude_renders_local_command_records_as_readable_blocks() -> Result<()> {
     // 三条都不是对话内容，但都不再退化成原始报文兜底块
     assert!(!blocks.iter().any(|(kind, _)| *kind == "empty_message"));
 
-    fs::remove_dir_all(&temp_home).ok();
     Ok(())
 }
 
 #[test]
 fn claude_skips_unreadable_files_when_indexing() -> Result<()> {
-    let temp_home = env::temp_dir().join(format!("reins-test-{}", Uuid::new_v4()));
-    fs::create_dir_all(&temp_home)?;
-    let _guard = TestEnvGuard::set_home(&temp_home);
-
-    let valid_path = temp_home
-        .join(".claude/projects/demo-project")
-        .join("session-123.jsonl");
-    let invalid_path = temp_home
-        .join(".claude/projects/demo-project")
-        .join("broken.jsonl");
+    let root = env::temp_dir().join(format!("reins-claude-{}", Uuid::new_v4()));
+    let valid_path = root.join("projects/demo-project").join("session-123.jsonl");
+    let invalid_path = root.join("projects/demo-project").join("broken.jsonl");
 
     write_jsonl(
         &valid_path,
@@ -411,22 +378,19 @@ fn claude_skips_unreadable_files_when_indexing() -> Result<()> {
 
     fs::write(&invalid_path, "{ not valid json }\n")?;
 
-    let entries = session::reader(SourceApp::ClaudeCode).list_entries()?;
+    let reader = session::claude_code::engine_at(root, temp_store());
+    let entries = reader.list_entries()?;
     assert_eq!(entries.len(), 1);
     assert_eq!(entries[0].path, valid_path);
 
-    fs::remove_dir_all(&temp_home).ok();
     Ok(())
 }
 
 #[test]
 fn claude_exposes_unsupported_message_content() -> Result<()> {
-    let temp_home = env::temp_dir().join(format!("reins-test-{}", Uuid::new_v4()));
-    fs::create_dir_all(&temp_home)?;
-    let _guard = TestEnvGuard::set_home(&temp_home);
-
-    let session_file = temp_home
-        .join(".claude/projects/demo-project")
+    let root = env::temp_dir().join(format!("reins-claude-{}", Uuid::new_v4()));
+    let session_file = root
+        .join("projects/demo-project")
         .join("session-unsupported.jsonl");
     write_jsonl(
         &session_file,
@@ -442,10 +406,8 @@ fn claude_exposes_unsupported_message_content() -> Result<()> {
         })],
     )?;
 
-    let detail = read_detail(
-        session::reader(SourceApp::ClaudeCode),
-        "session-unsupported",
-    )?;
+    let reader = session::claude_code::engine_at(root, temp_store());
+    let detail = read_detail(&reader, "session-unsupported")?;
 
     assert!(detail.messages.iter().any(|message| {
         message.blocks.iter().any(|block| {
@@ -457,19 +419,15 @@ fn claude_exposes_unsupported_message_content() -> Result<()> {
         })
     }));
 
-    fs::remove_dir_all(&temp_home).ok();
     Ok(())
 }
 
 #[test]
 fn codex_turns_input_image_into_renderable_image_block() -> Result<()> {
-    let temp_home = env::temp_dir().join(format!("reins-test-{}", Uuid::new_v4()));
-    fs::create_dir_all(&temp_home)?;
-    let _guard = TestEnvGuard::set_home(&temp_home);
-
+    let root = env::temp_dir().join(format!("reins-codex-{}", Uuid::new_v4()));
     let session_id = "88888888-8888-4888-8888-888888888888";
-    let transcript_path = temp_home
-        .join(".codex/sessions/2026/04/21")
+    let transcript_path = root
+        .join("sessions/2026/04/21")
         .join(format!("rollout-2026-04-21T12-00-00-{session_id}.jsonl"));
     write_jsonl(
         &transcript_path,
@@ -508,7 +466,7 @@ fn codex_turns_input_image_into_renderable_image_block() -> Result<()> {
         ],
     )?;
 
-    let detail = read_detail(session::reader(SourceApp::Codex), session_id)?;
+    let detail = read_detail(&session::codex::engine_at(root, temp_store()), session_id)?;
     let block = detail
         .messages
         .iter()
@@ -543,19 +501,15 @@ fn codex_turns_input_image_into_renderable_image_block() -> Result<()> {
     // 加密字段是唯一例外
     assert!(!serde_json::to_string(payload)?.contains("SYNTHETIC_BLOB"));
 
-    fs::remove_dir_all(&temp_home).ok();
     Ok(())
 }
 
 #[test]
 fn codex_keeps_injected_context_as_readable_block() -> Result<()> {
-    let temp_home = env::temp_dir().join(format!("reins-test-{}", Uuid::new_v4()));
-    fs::create_dir_all(&temp_home)?;
-    let _guard = TestEnvGuard::set_home(&temp_home);
-
+    let root = env::temp_dir().join(format!("reins-codex-{}", Uuid::new_v4()));
     let session_id = "77777777-7777-4777-8777-777777777777";
-    let transcript_path = temp_home
-        .join(".codex/sessions/2026/04/21")
+    let transcript_path = root
+        .join("sessions/2026/04/21")
         .join(format!("rollout-2026-04-21T12-00-00-{session_id}.jsonl"));
     write_jsonl(
         &transcript_path,
@@ -593,7 +547,7 @@ fn codex_keeps_injected_context_as_readable_block() -> Result<()> {
         ],
     )?;
 
-    let detail = read_detail(session::reader(SourceApp::Codex), session_id)?;
+    let detail = read_detail(&session::codex::engine_at(root, temp_store()), session_id)?;
     let block = detail
         .messages
         .iter()
@@ -611,19 +565,15 @@ fn codex_keeps_injected_context_as_readable_block() -> Result<()> {
             .any(|block| block.kind == "empty_message")
     }));
 
-    fs::remove_dir_all(&temp_home).ok();
     Ok(())
 }
 
 #[test]
 fn codex_exposes_unsupported_message_content_and_blocks() -> Result<()> {
-    let temp_home = env::temp_dir().join(format!("reins-test-{}", Uuid::new_v4()));
-    fs::create_dir_all(&temp_home)?;
-    let _guard = TestEnvGuard::set_home(&temp_home);
-
+    let root = env::temp_dir().join(format!("reins-codex-{}", Uuid::new_v4()));
     let session_id = "66666666-6666-4666-8666-666666666666";
-    let transcript_path = temp_home
-        .join(".codex/sessions/2026/04/21")
+    let transcript_path = root
+        .join("sessions/2026/04/21")
         .join(format!("rollout-2026-04-21T12-00-00-{session_id}.jsonl"));
     write_jsonl(
         &transcript_path,
@@ -664,7 +614,7 @@ fn codex_exposes_unsupported_message_content_and_blocks() -> Result<()> {
         ],
     )?;
 
-    let detail = read_detail(session::reader(SourceApp::Codex), session_id)?;
+    let detail = read_detail(&session::codex::engine_at(root, temp_store()), session_id)?;
 
     assert!(detail.messages.iter().any(|message| {
         message.blocks.iter().any(|block| {
@@ -685,17 +635,13 @@ fn codex_exposes_unsupported_message_content_and_blocks() -> Result<()> {
         })
     }));
 
-    fs::remove_dir_all(&temp_home).ok();
     Ok(())
 }
 
 #[test]
 fn opencode_exposes_messages_without_visible_parts() -> Result<()> {
-    let temp_home = env::temp_dir().join(format!("reins-test-{}", Uuid::new_v4()));
-    fs::create_dir_all(&temp_home)?;
-    let _guard = TestEnvGuard::set_home(&temp_home);
-
-    let db_path = session::opencode::db_path()?;
+    let root = env::temp_dir().join(format!("reins-opencode-{}", Uuid::new_v4()));
+    let db_path = root.join("opencode.db");
     if let Some(parent) = db_path.parent() {
         fs::create_dir_all(parent)?;
     }
@@ -758,7 +704,10 @@ fn opencode_exposes_messages_without_visible_parts() -> Result<()> {
         ],
     )?;
 
-    let detail = read_detail(session::reader(SourceApp::OpenCode), session_id)?;
+    let detail = read_detail(
+        &session::opencode::engine_at(root, temp_store()),
+        session_id,
+    )?;
 
     assert!(detail.messages.iter().any(|message| {
         message.blocks.iter().any(|block| {
@@ -770,17 +719,13 @@ fn opencode_exposes_messages_without_visible_parts() -> Result<()> {
         })
     }));
 
-    fs::remove_dir_all(&temp_home).ok();
     Ok(())
 }
 
 #[test]
 fn opencode_v2_parses_tool_content_and_non_message_events() -> Result<()> {
-    let temp_home = env::temp_dir().join(format!("reins-test-{}", Uuid::new_v4()));
-    fs::create_dir_all(&temp_home)?;
-    let _guard = TestEnvGuard::set_home(&temp_home);
-
-    let db_path = session::opencode::db_path()?;
+    let root = env::temp_dir().join(format!("reins-opencode-{}", Uuid::new_v4()));
+    let db_path = root.join("opencode.db");
     if let Some(parent) = db_path.parent() {
         fs::create_dir_all(parent)?;
     }
@@ -897,7 +842,10 @@ fn opencode_v2_parses_tool_content_and_non_message_events() -> Result<()> {
         ],
     )?;
 
-    let detail = read_detail(session::reader(SourceApp::OpenCode), session_id)?;
+    let detail = read_detail(
+        &session::opencode::engine_at(root, temp_store()),
+        session_id,
+    )?;
 
     // 消息时间线只有 user/assistant 行
     assert_eq!(detail.messages.len(), 1);
@@ -954,19 +902,15 @@ fn opencode_v2_parses_tool_content_and_non_message_events() -> Result<()> {
         compaction.summary
     );
 
-    fs::remove_dir_all(&temp_home).ok();
     Ok(())
 }
 
 #[test]
 fn claude_root_session_aggregates_subagent_sessions() -> Result<()> {
-    let temp_home = env::temp_dir().join(format!("reins-test-{}", Uuid::new_v4()));
-    fs::create_dir_all(&temp_home)?;
-    let _guard = TestEnvGuard::set_home(&temp_home);
-
+    let root = env::temp_dir().join(format!("reins-claude-{}", Uuid::new_v4()));
     let root_id = "root-session";
     let child_id = "child-session";
-    let project_dir = temp_home.join(".claude/projects/demo-project");
+    let project_dir = root.join("projects/demo-project");
     let root_path = project_dir.join(format!("{root_id}.jsonl"));
     let child_path = project_dir
         .join("subagents")
@@ -1024,7 +968,7 @@ fn claude_root_session_aggregates_subagent_sessions() -> Result<()> {
         r#"{"agentType":"Explore","description":"Find fetch_rss scheduling code"}"#,
     )?;
 
-    let reader = session::reader(SourceApp::ClaudeCode);
+    let reader = session::claude_code::engine_at(root, temp_store());
     let entries = reader.list_entries()?;
     assert_eq!(entries.len(), 1);
     assert_eq!(entries[0].path, root_path);
@@ -1062,7 +1006,7 @@ fn claude_root_session_aggregates_subagent_sessions() -> Result<()> {
             && agent.label == "Find fetch_rss scheduling code(子)"
     }));
 
-    let detail = read_detail(reader, root_id)?;
+    let detail = read_detail(&reader, root_id)?;
     // Path equality treats '/' and '\' as equivalent on Windows, unlike the
     // raw string comparison against the mixed-separator test paths.
     assert_eq!(detail.source_paths.len(), 2);
@@ -1092,10 +1036,11 @@ fn claude_root_session_aggregates_subagent_sessions() -> Result<()> {
             .any(|event| event.kind == "subagent_started")
     );
 
-    fs::remove_dir_all(&temp_home).ok();
     Ok(())
 }
 
+// 末段断言走 session::timeline::get_session_agent_messages_inner(命令层入口,
+// 经注册表读 env BACKEND),因此整个用例保持 env 根,不迁移 engine_at。
 #[test]
 fn codex_root_session_aggregates_subagent_sessions() -> Result<()> {
     let temp_home = env::temp_dir().join(format!("reins-test-{}", Uuid::new_v4()));
@@ -1245,12 +1190,9 @@ fn codex_root_session_aggregates_subagent_sessions() -> Result<()> {
 
 #[test]
 fn codex_resume_segments_keep_original_segment_as_root() -> Result<()> {
-    let temp_home = env::temp_dir().join(format!("reins-test-{}", Uuid::new_v4()));
-    fs::create_dir_all(&temp_home)?;
-    let _guard = TestEnvGuard::set_home(&temp_home);
-
+    let root = env::temp_dir().join(format!("reins-codex-{}", Uuid::new_v4()));
     let session_id = "88888888-8888-4888-8888-888888888888";
-    let sessions_dir = temp_home.join(".codex/sessions/2026/09/02");
+    let sessions_dir = root.join("sessions/2026/09/02");
     let original_path =
         sessions_dir.join(format!("rollout-2026-09-02T16-00-15-{session_id}.jsonl"));
     let resume_path = sessions_dir.join(format!(
@@ -1311,7 +1253,7 @@ fn codex_resume_segments_keep_original_segment_as_root() -> Result<()> {
         ],
     )?;
 
-    let reader = session::reader(SourceApp::Codex);
+    let reader = session::codex::engine_at(root, temp_store());
     let entries = reader.list_entries()?;
     assert_eq!(entries.len(), 1);
     // root 必须是原始段：标题取自原始段首条消息，而不是续跑段的"继续"。
@@ -1321,19 +1263,15 @@ fn codex_resume_segments_keep_original_segment_as_root() -> Result<()> {
     // 续跑段与原始段共享 session id，是同一条线程而不是 subagent。
     assert!(!summary.title.contains("subagents"));
 
-    fs::remove_dir_all(&temp_home).ok();
     Ok(())
 }
 
 #[test]
 fn codex_title_strips_markdown_link_syntax() -> Result<()> {
-    let temp_home = env::temp_dir().join(format!("reins-test-{}", Uuid::new_v4()));
-    fs::create_dir_all(&temp_home)?;
-    let _guard = TestEnvGuard::set_home(&temp_home);
-
+    let root = env::temp_dir().join(format!("reins-codex-{}", Uuid::new_v4()));
     let session_id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
-    let transcript_path = temp_home
-        .join(".codex/sessions/2026/09/02")
+    let transcript_path = root
+        .join("sessions/2026/09/02")
         .join(format!("rollout-2026-09-02T16-00-15-{session_id}.jsonl"));
 
     write_jsonl(
@@ -1363,7 +1301,7 @@ fn codex_title_strips_markdown_link_syntax() -> Result<()> {
         ],
     )?;
 
-    let entries = session::reader(SourceApp::Codex).list_entries()?;
+    let entries = session::codex::engine_at(root, temp_store()).list_entries()?;
     assert_eq!(entries.len(), 1);
     // 链接语法必须剥掉只留 label，否则 72 字符截断后标题全是 [label](url)。
     assert_eq!(
@@ -1371,6 +1309,5 @@ fn codex_title_strips_markdown_link_syntax() -> Result<()> {
         "$mongo-slow-log-report 帮我看下这份skill有没有问题"
     );
 
-    fs::remove_dir_all(&temp_home).ok();
     Ok(())
 }
