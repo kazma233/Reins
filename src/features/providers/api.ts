@@ -34,10 +34,6 @@ export function deleteProvider(providerId: string): Promise<ProviderMutationResu
   return invoke("delete_provider", { providerId });
 }
 
-export function fetchProviderModels(providerId: string): Promise<FetchedModelsResult> {
-  return invoke("fetch_provider_models", { providerId });
-}
-
 // 新增提供商未保存时直连拉取；密钥只作当次请求参数，不落盘。
 export function fetchProviderModelsDirect(
   protocol: ProviderProtocol,

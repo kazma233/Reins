@@ -67,17 +67,8 @@ pub(crate) async fn delete_provider(
     run_blocking(move || delete_provider_inner(&store, &ToolEnv::from_env(), &provider_id)).await
 }
 
-#[tauri::command]
-pub(crate) async fn fetch_provider_models(
-    store: tauri::State<'_, ProviderConfigStore>,
-    provider_id: String,
-) -> std::result::Result<FetchedModelsResult, String> {
-    let store = store.inner().clone();
-    run_blocking(move || fetch_models_inner(&store, &provider_id)).await
-}
-
-// 新增平台未落盘时的直连拉取：只用表单数据与当次输入的密钥，
-// 不读 providers.yaml、不写任何持久状态。
+// 按表单当前值拉取模型列表：不读 providers.yaml、不写任何持久状态，
+// 因此用户改了表单还没保存时，拉取也按改后的值走。
 #[tauri::command]
 pub(crate) async fn fetch_provider_models_direct(
     protocol: ProviderProtocol,
@@ -296,20 +287,6 @@ pub(crate) fn delete_provider_inner(
         action: "delete".to_string(),
         detail: format!("平台 {provider_id} 已删除。"),
     })
-}
-
-pub(crate) fn fetch_models_inner(
-    store: &ProviderConfigStore,
-    provider_id: &str,
-) -> Result<FetchedModelsResult> {
-    let providers = store.load()?;
-    let provider = providers
-        .get(provider_id)
-        .ok_or_else(|| anyhow::anyhow!("平台不存在：{provider_id}"))?;
-    let Some(api_key) = provider.stored_api_key() else {
-        bail!("请先设置平台 {provider_id} 的 API Key。");
-    };
-    fetch_provider_models_inner(provider, &api_key)
 }
 
 // 生成应用产物。preview=true 时内容里的密钥用脱敏占位符，不读真实密钥。

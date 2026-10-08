@@ -408,8 +408,6 @@ function applyModelsDevCompletion(meta: ModelsDevMeta) {
     <ProviderFetchModelsDialog
       v-if="showModels"
       :open="fetchDialogOpen"
-      :provider-id="form.originalProviderId ?? ''"
-      :key-present="keyPresent"
       :protocol="form.protocol"
       :base-url="form.baseUrl"
       :api-key="form.apiKey"

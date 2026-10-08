@@ -61,7 +61,6 @@ pub fn run() {
             providers::commands::get_provider_app_state,
             providers::commands::upsert_provider,
             providers::commands::delete_provider,
-            providers::commands::fetch_provider_models,
             providers::commands::fetch_provider_models_direct,
             providers::commands::fetch_modelsdev_catalog,
             providers::commands::preview_provider_apply,

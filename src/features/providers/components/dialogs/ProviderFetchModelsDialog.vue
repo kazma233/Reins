@@ -3,20 +3,16 @@ import { computed, ref, watch } from "vue";
 import ConfirmDialog from "@shared/ui/ConfirmDialog.vue";
 import DialogShell from "@shared/ui/DialogShell.vue";
 import { extractErrorMessage } from "@shared/lib/errors";
-import { fetchProviderModels, fetchProviderModelsDirect } from "../../api";
+import { fetchProviderModelsDirect } from "../../api";
 import { hasModelId } from "../../model";
 import type { FetchedModel, ProviderProtocol } from "../../generated";
 
 type ProviderFetchModelsDialogProps = {
   open: boolean;
-  // 已保存提供商传其 ID；新建态传空串。是否按 ID 拉取还要看 keyPresent。
-  providerId: string;
-  // 该提供商当前是否已存 Key：有则按提供商 ID 拉取（读 providers.yaml），
-  // 没有则走直连，用当次输入的 apiKey，不报「未设 Key」。
-  keyPresent: boolean;
   protocol: ProviderProtocol;
   baseUrl: string;
-  // 直连拉取使用的当次输入密钥。
+  // 拉取用表单当前值（含未保存的改动）：编辑态若读 providers.yaml 里已保存的
+  // 那一份，用户刚改的 Base URL / 协议 / Key 就不会生效。
   apiKey: string;
   // 当前模型目录里已有的模型 ID：命中者以勾选状态展示且不可取消，默认不加入；
   // 点击时弹窗提示已存在。
@@ -56,17 +52,14 @@ async function runFetch() {
   fetching.value = true;
   errorText.value = "";
   try {
-    // 已存 Key 时按已保存提供商拉取，与编辑提供商行为一致；
-    // 没有时退回直连，用表单 Base URL + 当次输入的 Key。
+    // 始终用表单当前的协议 / Base URL / Key 直连拉取，保存过的提供商也如此：
+    // 用户改了表单还没保存时，拉取要按改后的值走。
     // 后端可能经历多级候选路径回退，url 是实际命中的那一个。
-    const result =
-      props.providerId && props.keyPresent
-        ? await fetchProviderModels(props.providerId)
-        : await fetchProviderModelsDirect(
-            props.protocol,
-            props.baseUrl.trim(),
-            props.apiKey.trim()
-          );
+    const result = await fetchProviderModelsDirect(
+      props.protocol,
+      props.baseUrl.trim(),
+      props.apiKey.trim()
+    );
     models.value = result.models;
     fetchedUrl.value = result.url;
     selected.value = {};
