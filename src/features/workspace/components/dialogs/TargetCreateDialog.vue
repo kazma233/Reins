@@ -77,6 +77,11 @@ const presetLabels = Object.fromEntries(
           <span>
             ID
             <span class="manager-required-mark"> *</span>
+            <AppFieldError
+              class="manager-field__error"
+              id="target-id-error"
+              :message="form.errors.targetId ?? null"
+            />
           </span>
           <small class="manager-field__hint">唯一标识。只允许小写字母、数字和 `-`。</small>
           <input
@@ -86,12 +91,18 @@ const presetLabels = Object.fromEntries(
             type="text"
             @input="$emit('clearFieldError', 'targetId')"
           />
-          <AppFieldError id="target-id-error" :message="form.errors.targetId ?? null" />
         </label>
 
         <div class="manager-picker-row">
           <label class="manager-field manager-picker-row__field">
-            <span>skills 目录</span>
+            <span>
+              skills 目录
+              <AppFieldError
+                class="manager-field__error"
+                id="target-skill-dir-error"
+                :message="form.errors.skillDir ?? null"
+              />
+            </span>
             <small class="manager-field__hint">skill 会软链接到这个目录。</small>
             <input
               v-model="form.skillDir"
@@ -100,7 +111,6 @@ const presetLabels = Object.fromEntries(
               type="text"
               @input="$emit('clearFieldError', 'skillDir')"
             />
-            <AppFieldError id="target-skill-dir-error" :message="form.errors.skillDir ?? null" />
           </label>
           <div class="manager-actions manager-picker-row__actions">
             <button
@@ -116,7 +126,14 @@ const presetLabels = Object.fromEntries(
 
         <div class="manager-picker-row">
           <label class="manager-field manager-picker-row__field">
-            <span>MCP 配置文件（可选）</span>
+            <span>
+              MCP 配置文件（可选）
+              <AppFieldError
+                class="manager-field__error"
+                id="target-config-path-error"
+                :message="form.errors.configPath ?? null"
+              />
+            </span>
             <small class="manager-field__hint">
               target 的 MCP 配置文件路径。不需要 MCP 分发的 target 可留空，留空时不写入任何 MCP
               配置。
@@ -128,7 +145,6 @@ const presetLabels = Object.fromEntries(
               type="text"
               @input="$emit('clearFieldError', 'configPath')"
             />
-            <AppFieldError id="target-config-path-error" :message="form.errors.configPath ?? null" />
           </label>
           <div class="manager-actions manager-picker-row__actions">
             <button
@@ -143,7 +159,14 @@ const presetLabels = Object.fromEntries(
         </div>
 
         <label class="manager-field">
-          <span>configPrefix</span>
+          <span>
+            configPrefix
+            <AppFieldError
+              class="manager-field__error"
+              id="target-config-prefix-error"
+              :message="form.errors.mcpConfigPrefix ?? null"
+            />
+          </span>
           <small class="manager-field__hint">
             写入 MCP 节点的路径，比如 `mcpServers` 或 `mcp`。与 MCP 配置文件路径成对填写。
           </small>
@@ -154,7 +177,6 @@ const presetLabels = Object.fromEntries(
             type="text"
             @input="$emit('clearFieldError', 'mcpConfigPrefix')"
           />
-          <AppFieldError id="target-config-prefix-error" :message="form.errors.mcpConfigPrefix ?? null" />
         </label>
 
         <div class="manager-stack">

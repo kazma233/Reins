@@ -210,6 +210,11 @@ function applyModelsDevCompletion(meta: ModelsDevMeta) {
         <span>
           ID
           <span aria-hidden="true"> *</span>
+          <AppFieldError
+            class="providers-field__error"
+            id="provider-id-error"
+            :message="form.errors?.providerId ?? null"
+          />
         </span>
         <AppInput
           :model-value="form.providerId"
@@ -217,7 +222,6 @@ function applyModelsDevCompletion(meta: ModelsDevMeta) {
           :disabled="loading || form.originalProviderId !== null"
           @update:model-value="form.providerId = normalizeProviderIdInput(String($event))"
         />
-        <AppFieldError id="provider-id-error" :message="form.errors?.providerId ?? null" />
         <small class="providers-field__hint">
           唯一标识，保存后不可修改（纯本地标识，Key 存同一份 providers.yaml 的条目里）。只允许小写字母、数字和 `-`，不能以
           `reins-` 开头。
@@ -228,13 +232,17 @@ function applyModelsDevCompletion(meta: ModelsDevMeta) {
         <span>
           名称
           <span aria-hidden="true"> *</span>
+          <AppFieldError
+            class="providers-field__error"
+            id="provider-label-error"
+            :message="form.errors?.label ?? null"
+          />
         </span>
         <AppInput
           v-model="form.label"
           :aria-describedby="form.errors?.label ? 'provider-label-error' : undefined"
           :disabled="loading"
         />
-        <AppFieldError id="provider-label-error" :message="form.errors?.label ?? null" />
         <small class="providers-field__hint">提供商显示名，可随时修改。</small>
       </label>
 
@@ -253,13 +261,17 @@ function applyModelsDevCompletion(meta: ModelsDevMeta) {
         <span>
           Base URL
           <span aria-hidden="true"> *</span>
+          <AppFieldError
+            class="providers-field__error"
+            id="provider-base-url-error"
+            :message="form.errors?.baseUrl ?? null"
+          />
         </span>
         <AppInput
           v-model="form.baseUrl"
           :aria-describedby="form.errors?.baseUrl ? 'provider-base-url-error' : undefined"
           :disabled="loading"
         />
-        <AppFieldError id="provider-base-url-error" :message="form.errors?.baseUrl ?? null" />
         <small class="providers-field__hint">聚合提供商的 API 根地址，例如 https://openrouter.ai/api/v1。</small>
       </label>
 
@@ -273,6 +285,11 @@ function applyModelsDevCompletion(meta: ModelsDevMeta) {
     <div v-if="showModels">
       <div class="providers-section-header" style="margin-top: 18px">
         <h4 class="providers-section-title">模型目录</h4>
+        <AppFieldError
+          class="providers-field__error"
+          id="provider-models-error"
+          :message="form.errors?.models ?? null"
+        />
         <div class="providers-card__actions">
           <button class="secondary-button" :disabled="loading" type="button" @click="fetchDialogOpen = true">
             从提供商拉取
@@ -285,7 +302,6 @@ function applyModelsDevCompletion(meta: ModelsDevMeta) {
       <p class="providers-section-hint">
         元数据（上下文窗口、最大输出、图像、思考等级）会随应用写入目标工具；缺失时对应工具可能展示能力警告。
       </p>
-      <AppFieldError id="provider-models-error" :message="form.errors?.models ?? null" />
     </div>
 
     <div v-if="showModels" class="providers-model-list">

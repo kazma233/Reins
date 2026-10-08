@@ -64,7 +64,14 @@ function toggleAgent(agentId: string) {
       <AppFieldError :message="error" />
 
       <label class="manager-field">
-        <span class="manager-field-label">project ID</span>
+        <span class="manager-field-label">
+          project ID
+          <AppFieldError
+            class="manager-field__error"
+            id="project-id-error"
+            :message="form.errors.projectId ?? null"
+          />
+        </span>
         <input
           v-model="form.projectId"
           :aria-describedby="form.errors.projectId ? 'project-id-error' : undefined"
@@ -75,11 +82,17 @@ function toggleAgent(agentId: string) {
           type="text"
           @input="$emit('clearFieldError', 'projectId')"
         />
-        <AppFieldError id="project-id-error" :message="form.errors.projectId ?? null" />
       </label>
 
       <div class="manager-field">
-        <span class="manager-field-label">项目路径</span>
+        <span class="manager-field-label">
+          项目路径
+          <AppFieldError
+            class="manager-field__error"
+            id="project-path-error"
+            :message="form.errors.path ?? null"
+          />
+        </span>
         <div class="manager-field-row">
           <input
             v-model="form.path"
@@ -99,7 +112,6 @@ function toggleAgent(agentId: string) {
             选择
           </button>
         </div>
-        <AppFieldError id="project-path-error" :message="form.errors.path ?? null" />
       </div>
 
       <div class="manager-field">

@@ -52,6 +52,11 @@ const confirmLabel = computed(() => (props.form.originalName ? "保存" : "添�
         <span>
           名称
           <span class="manager-required-mark"> *</span>
+          <AppFieldError
+            class="manager-field__error"
+            id="mcp-name-error"
+            :message="form.errors.name ?? null"
+          />
         </span>
         <small class="manager-field__hint">唯一标识。会作为配置里的 mcp 名称。</small>
         <input
@@ -61,7 +66,6 @@ const confirmLabel = computed(() => (props.form.originalName ? "保存" : "添�
           type="text"
           @input="$emit('clearFieldError', 'name')"
         />
-        <AppFieldError id="mcp-name-error" :message="form.errors.name ?? null" />
       </label>
 
       <AppCheckbox v-model="form.enabled">启用</AppCheckbox>
@@ -110,6 +114,11 @@ const confirmLabel = computed(() => (props.form.originalName ? "保存" : "添�
             <span>
               Command
               <span class="manager-required-mark"> *</span>
+              <AppFieldError
+                class="manager-field__error"
+                id="mcp-command-error"
+                :message="form.errors.command ?? null"
+              />
             </span>
             <small class="manager-field__hint">本地启动命令，比如 `npx`、`uvx`、`docker`。</small>
             <input
@@ -119,7 +128,6 @@ const confirmLabel = computed(() => (props.form.originalName ? "保存" : "添�
               type="text"
               @input="$emit('clearFieldError', 'command')"
             />
-            <AppFieldError id="mcp-command-error" :message="form.errors.command ?? null" />
           </label>
           <label class="manager-field">
             <span>Args</span>
@@ -127,7 +135,14 @@ const confirmLabel = computed(() => (props.form.originalName ? "保存" : "添�
             <textarea v-model="form.args" class="manager-editor manager-textarea" rows="4" />
           </label>
           <label class="manager-field">
-            <span>Env</span>
+            <span>
+              Env
+              <AppFieldError
+                class="manager-field__error"
+                id="mcp-env-error"
+                :message="form.errors.env ?? null"
+              />
+            </span>
             <small class="manager-field__hint">每行一条 `KEY=VALUE`。只有符合格式的内容会进入预览。</small>
             <textarea
               v-model="form.env"
@@ -137,7 +152,6 @@ const confirmLabel = computed(() => (props.form.originalName ? "保存" : "添�
               rows="5"
               @input="$emit('clearFieldError', 'env')"
             />
-            <AppFieldError id="mcp-env-error" :message="form.errors.env ?? null" />
           </label>
         </div>
       </template>
@@ -148,6 +162,11 @@ const confirmLabel = computed(() => (props.form.originalName ? "保存" : "添�
             <span>
               连接地址
               <span class="manager-required-mark"> *</span>
+              <AppFieldError
+                class="manager-field__error"
+                id="mcp-url-error"
+                :message="form.errors.url ?? null"
+              />
             </span>
             <small class="manager-field__hint">远程 mcp 服务地址，`http` 和 `sse` 都填这里。</small>
             <input
@@ -157,10 +176,16 @@ const confirmLabel = computed(() => (props.form.originalName ? "保存" : "添�
               type="text"
               @input="$emit('clearFieldError', 'url')"
             />
-            <AppFieldError id="mcp-url-error" :message="form.errors.url ?? null" />
           </label>
           <label class="manager-field">
-            <span>Headers</span>
+            <span>
+              Headers
+              <AppFieldError
+                class="manager-field__error"
+                id="mcp-headers-error"
+                :message="form.errors.headers ?? null"
+              />
+            </span>
             <small class="manager-field__hint">每行一条 `KEY=VALUE`，会写入远程请求头。</small>
             <textarea
               v-model="form.headers"
@@ -170,13 +195,19 @@ const confirmLabel = computed(() => (props.form.originalName ? "保存" : "添�
               rows="5"
               @input="$emit('clearFieldError', 'headers')"
             />
-            <AppFieldError id="mcp-headers-error" :message="form.errors.headers ?? null" />
           </label>
         </div>
       </template>
 
       <label class="manager-field">
-        <span>Timeout</span>
+        <span>
+          Timeout
+          <AppFieldError
+            class="manager-field__error"
+            id="mcp-timeout-error"
+            :message="form.errors.timeout ?? null"
+          />
+        </span>
         <small class="manager-field__hint">选填，单位毫秒。留空则不写入。</small>
         <input
           v-model="form.timeout"
@@ -185,7 +216,6 @@ const confirmLabel = computed(() => (props.form.originalName ? "保存" : "添�
           type="text"
           @input="$emit('clearFieldError', 'timeout')"
         />
-        <AppFieldError id="mcp-timeout-error" :message="form.errors.timeout ?? null" />
       </label>
     </div>
   </DialogShell>

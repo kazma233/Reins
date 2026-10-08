@@ -270,6 +270,16 @@
   font-size: var(--font-size-md);
 }
 
+/* 字段错误跟在 label 同一行：出现时不会把下方内容顶下去 */
+.providers-field__error {
+  margin-left: 6px;
+}
+
+/* 列表级错误（模型目录）跟在标题右侧，不参与 space-between 的分布 */
+.providers-section-header .providers-field__error {
+  margin-right: auto;
+}
+
 .providers-field__hint {
   margin: -2px 0 0;
   color: var(--color-muted);

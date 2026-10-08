@@ -137,13 +137,19 @@ function confirm() {
 
     <div class="providers-form-grid">
       <label class="providers-field">
-        <span>模型 ID</span>
+        <span>
+          模型 ID
+          <AppFieldError
+            class="providers-field__error"
+            id="provider-model-id-error"
+            :message="idError"
+          />
+        </span>
         <AppInput
           v-model="draft.id"
           :aria-describedby="idError ? 'provider-model-id-error' : undefined"
           data-autofocus
         />
-        <AppFieldError id="provider-model-id-error" :message="idError" />
       </label>
       <label class="providers-field">
         <span>显示名</span>
