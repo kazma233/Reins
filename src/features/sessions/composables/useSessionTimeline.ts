@@ -2,23 +2,15 @@ import { computed, ref, watch, type Ref } from "vue";
 import { getSessionEvents, getSessionMessages } from "../api";
 import { extractErrorMessage } from "@shared/lib/errors";
 import { createKeyGuard } from "@shared/lib/request-guard";
+import { sessionIdentityKey } from "../stores/session";
 import type {
   SessionEvent,
   SessionMessage,
-  SessionOverview,
-  SourceApp
+  SessionOverview
 } from "../types";
 
 // 详情时间线单页条数:滚动到底自动续拉,80 条在首屏成本与滚动频率间取衡。
 export const DETAIL_PAGE_SIZE = 80;
-
-export function sessionRequestKey(
-  sourceApp: SourceApp,
-  sourceSessionId: string,
-  transcriptPath: string
-): string {
-  return `${sourceApp}:${sourceSessionId}:${transcriptPath}`;
-}
 
 // messages/events 的加载流程完全同构,收敛成一个 loader,避免双份状态机漂移。
 export type TimelineLoader<T> = {
@@ -118,10 +110,9 @@ export function useSessionTimeline(
     if (!current) {
       return null;
     }
-    return sessionRequestKey(
+    return sessionIdentityKey(
       current.summary.sourceApp,
-      current.summary.sourceSessionId,
-      current.summary.transcriptPath
+      current.summary.sourceSessionId
     );
   });
 
@@ -136,7 +127,6 @@ export function useSessionTimeline(
         currentOverview.summary.sourceApp,
         currentOverview.summary.sourceSessionId,
         {
-          transcriptPath: currentOverview.summary.transcriptPath,
           offset,
           limit: DETAIL_PAGE_SIZE
         }
@@ -154,7 +144,6 @@ export function useSessionTimeline(
         currentOverview.summary.sourceApp,
         currentOverview.summary.sourceSessionId,
         {
-          transcriptPath: currentOverview.summary.transcriptPath,
           offset,
           limit: DETAIL_PAGE_SIZE
         }

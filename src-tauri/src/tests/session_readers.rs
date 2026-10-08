@@ -10,13 +10,11 @@ fn opencode_root_session_aggregates_subagent_sessions() -> Result<()> {
     let child_id = "ses_child_session";
     seed_opencode_family(root_id, child_id)?;
 
-    let root_path = session::opencode::session_path(root_id);
-
-    let summary = session::reader(SourceApp::OpenCode).parse_summary(&root_path)?;
+    let summary = session::reader(SourceApp::OpenCode).parse_summary(root_id)?;
     assert_eq!(summary.source_session_id, root_id);
     assert!(summary.title.contains("+1 subagents"));
 
-    let detail = read_detail(session::reader(SourceApp::OpenCode), &root_path)?;
+    let detail = read_detail(session::reader(SourceApp::OpenCode), root_id)?;
 
     assert!(
         detail
@@ -56,10 +54,9 @@ fn opencode_overview_counts_match_loaded_timeline() -> Result<()> {
     let child_id = "ses_child_session";
     seed_opencode_family(root_id, child_id)?;
 
-    let root_path = session::opencode::session_path(root_id);
     let reader = session::reader(SourceApp::OpenCode);
-    let overview = reader.parse_overview(&root_path)?;
-    let detail = read_detail(reader, &root_path)?;
+    let overview = reader.parse_overview(root_id)?;
+    let detail = read_detail(reader, root_id)?;
 
     assert_eq!(overview.message_count, Some(detail.messages.len()));
     assert_eq!(overview.event_count, Some(detail.events.len()));
@@ -123,7 +120,7 @@ fn codex_ignores_agents_banner_when_picking_title() -> Result<()> {
 
     write_jsonl(&transcript_path, &transcript)?;
 
-    let summary = session::reader(SourceApp::Codex).parse_summary(&transcript_path)?;
+    let summary = session::reader(SourceApp::Codex).parse_summary(session_id)?;
 
     assert_eq!(summary.source_session_id, session_id);
     assert_eq!(summary.title, "How do I list the current files?");
@@ -191,7 +188,7 @@ fn codex_skips_agents_instructions_block_when_picking_title() -> Result<()> {
 
     write_jsonl(&transcript_path, &transcript)?;
 
-    let summary = session::reader(SourceApp::Codex).parse_summary(&transcript_path)?;
+    let summary = session::reader(SourceApp::Codex).parse_summary(session_id)?;
 
     assert_eq!(summary.source_session_id, session_id);
     assert_eq!(summary.title, "帮我看一下这个报错");
@@ -226,7 +223,7 @@ fn claude_ignores_agents_banner_when_picking_title() -> Result<()> {
 
     write_jsonl(&session_file, &transcript)?;
 
-    let summary = session::reader(SourceApp::ClaudeCode).parse_summary(&session_file)?;
+    let summary = session::reader(SourceApp::ClaudeCode).parse_summary("session-123")?;
 
     assert_eq!(summary.title, "How do I list the current files?");
 
@@ -256,7 +253,7 @@ fn claude_keeps_injected_context_as_readable_block() -> Result<()> {
         ],
     )?;
 
-    let detail = read_detail(session::reader(SourceApp::ClaudeCode), &session_file)?;
+    let detail = read_detail(session::reader(SourceApp::ClaudeCode), "session-context")?;
     let block = detail
         .messages
         .iter()
@@ -306,7 +303,7 @@ fn claude_turns_image_blocks_into_renderable_image_blocks() -> Result<()> {
         })],
     )?;
 
-    let detail = read_detail(session::reader(SourceApp::ClaudeCode), &session_file)?;
+    let detail = read_detail(session::reader(SourceApp::ClaudeCode), "session-image")?;
     let references: Vec<&str> = detail
         .messages
         .iter()
@@ -362,7 +359,10 @@ fn claude_renders_local_command_records_as_readable_blocks() -> Result<()> {
         ],
     )?;
 
-    let detail = read_detail(session::reader(SourceApp::ClaudeCode), &session_file)?;
+    let detail = read_detail(
+        session::reader(SourceApp::ClaudeCode),
+        "session-local-command",
+    )?;
     let blocks: Vec<(&str, Option<&str>)> = detail
         .messages
         .iter()
@@ -442,7 +442,10 @@ fn claude_exposes_unsupported_message_content() -> Result<()> {
         })],
     )?;
 
-    let detail = read_detail(session::reader(SourceApp::ClaudeCode), &session_file)?;
+    let detail = read_detail(
+        session::reader(SourceApp::ClaudeCode),
+        "session-unsupported",
+    )?;
 
     assert!(detail.messages.iter().any(|message| {
         message.blocks.iter().any(|block| {
@@ -505,7 +508,7 @@ fn codex_turns_input_image_into_renderable_image_block() -> Result<()> {
         ],
     )?;
 
-    let detail = read_detail(session::reader(SourceApp::Codex), &transcript_path)?;
+    let detail = read_detail(session::reader(SourceApp::Codex), session_id)?;
     let block = detail
         .messages
         .iter()
@@ -590,7 +593,7 @@ fn codex_keeps_injected_context_as_readable_block() -> Result<()> {
         ],
     )?;
 
-    let detail = read_detail(session::reader(SourceApp::Codex), &transcript_path)?;
+    let detail = read_detail(session::reader(SourceApp::Codex), session_id)?;
     let block = detail
         .messages
         .iter()
@@ -661,7 +664,7 @@ fn codex_exposes_unsupported_message_content_and_blocks() -> Result<()> {
         ],
     )?;
 
-    let detail = read_detail(session::reader(SourceApp::Codex), &transcript_path)?;
+    let detail = read_detail(session::reader(SourceApp::Codex), session_id)?;
 
     assert!(detail.messages.iter().any(|message| {
         message.blocks.iter().any(|block| {
@@ -755,8 +758,7 @@ fn opencode_exposes_messages_without_visible_parts() -> Result<()> {
         ],
     )?;
 
-    let root_path = session::opencode::session_path(session_id);
-    let detail = read_detail(session::reader(SourceApp::OpenCode), &root_path)?;
+    let detail = read_detail(session::reader(SourceApp::OpenCode), session_id)?;
 
     assert!(detail.messages.iter().any(|message| {
         message.blocks.iter().any(|block| {
@@ -895,8 +897,7 @@ fn opencode_v2_parses_tool_content_and_non_message_events() -> Result<()> {
         ],
     )?;
 
-    let root_path = session::opencode::session_path(session_id);
-    let detail = read_detail(session::reader(SourceApp::OpenCode), &root_path)?;
+    let detail = read_detail(session::reader(SourceApp::OpenCode), session_id)?;
 
     // 消息时间线只有 user/assistant 行
     assert_eq!(detail.messages.len(), 1);
@@ -1034,10 +1035,10 @@ fn claude_root_session_aggregates_subagent_sessions() -> Result<()> {
             .is_some_and(|summary| summary.title.contains("+1 subagents"))
     );
 
-    let summary = reader.parse_summary(&root_path)?;
+    let summary = reader.parse_summary(root_id)?;
     assert!(summary.title.contains("+1 subagents"));
 
-    let overview = reader.parse_overview(&root_path)?;
+    let overview = reader.parse_overview(root_id)?;
     assert_eq!(overview.summary.source_session_id, root_id);
     assert_eq!(overview.agents.len(), 2);
     assert_eq!(
@@ -1061,7 +1062,7 @@ fn claude_root_session_aggregates_subagent_sessions() -> Result<()> {
             && agent.label == "Find fetch_rss scheduling code(子)"
     }));
 
-    let detail = read_detail(reader, &root_path)?;
+    let detail = read_detail(reader, root_id)?;
     // Path equality treats '/' and '\' as equivalent on Windows, unlike the
     // raw string comparison against the mixed-separator test paths.
     assert_eq!(detail.source_paths.len(), 2);
@@ -1185,11 +1186,11 @@ fn codex_root_session_aggregates_subagent_sessions() -> Result<()> {
         ],
     )?;
 
-    let summary = session::reader(SourceApp::Codex).parse_summary(&root_path)?;
+    let summary = session::reader(SourceApp::Codex).parse_summary(root_id)?;
     assert_eq!(summary.source_session_id, root_id);
     assert!(summary.title.contains("+1 subagents"));
 
-    let detail = read_detail(session::reader(SourceApp::Codex), &root_path)?;
+    let detail = read_detail(session::reader(SourceApp::Codex), root_id)?;
 
     assert!(
         detail
@@ -1217,12 +1218,8 @@ fn codex_root_session_aggregates_subagent_sessions() -> Result<()> {
 
     // 子代理弹窗取数：只返回该 agent 的消息(marker + 子会话消息),与分页进度无关。
     // 走命令层入口而非 reader,连 resolve_session_path 一起覆盖
-    let child_messages = session::timeline::get_session_agent_messages_inner(
-        SourceApp::Codex,
-        root_id,
-        child_id,
-        Some(root_path.to_string_lossy().as_ref()),
-    )?;
+    let child_messages =
+        session::timeline::get_session_agent_messages_inner(SourceApp::Codex, root_id, child_id)?;
     assert_eq!(child_messages.len(), 3);
     assert!(
         child_messages

@@ -3,9 +3,19 @@ import type {
   DeletePlan,
   SessionOverview,
   SessionSummary,
+  SourceApp,
   SourceStatus
 } from "../types";
 import { ALL_SOURCES, type SourceSelection } from "../source-app";
+
+// 会话身份的唯一前端主键:(来源, source_sessionId) 复合键。transcript_path
+// 只是展示字段,不参与去重、选中或导航。
+export function sessionIdentityKey(
+  sourceApp: SourceApp,
+  sourceSessionId: string
+): string {
+  return `${sourceApp}:${sourceSessionId}`;
+}
 
 type SessionState = {
   sources: SourceStatus[];
@@ -53,13 +63,19 @@ export const useSessionStore = defineStore("session", {
       this.sessions = sessions;
     },
     appendSessions(incomingSessions: SessionSummary[]) {
-      // Dedup by transcriptPath so paginated loads stay stable.
+      // Dedup by session identity so paginated loads stay stable.
       const sessionsById = new Map(
-        this.sessions.map((session) => [session.transcriptPath, session])
+        this.sessions.map((session) => [
+          sessionIdentityKey(session.sourceApp, session.sourceSessionId),
+          session
+        ])
       );
 
       for (const session of incomingSessions) {
-        sessionsById.set(session.transcriptPath, session);
+        sessionsById.set(
+          sessionIdentityKey(session.sourceApp, session.sourceSessionId),
+          session
+        );
       }
 
       this.sessions = Array.from(sessionsById.values());

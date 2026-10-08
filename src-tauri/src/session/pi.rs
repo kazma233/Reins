@@ -83,31 +83,15 @@ impl SessionReader for PiBackend {
         Ok(())
     }
 
-    fn resolve_path(&self, source_session_id: &str) -> Result<PathBuf> {
-        if let Some(path) = index()?
-            .entries
-            .into_iter()
-            .find(|entry| {
-                read_header(&entry.path)
-                    .ok()
-                    .is_some_and(|header| header.id == source_session_id)
-            })
-            .map(|entry| entry.path)
-        {
-            return Ok(path);
-        }
-
-        find_session_file(source_session_id)
+    fn parse_summary(&self, source_session_id: &str) -> Result<SessionSummary> {
+        cached_summary(&resolve_session_path(source_session_id)?)
     }
 
-    fn parse_summary(&self, path: &Path) -> Result<SessionSummary> {
-        cached_summary(path)
-    }
-
-    fn parse_overview(&self, path: &Path) -> Result<SessionOverview> {
-        let summary = cached_summary(path)?;
-        let timeline = cached_timeline(path)?;
-        let header = read_header(path)?;
+    fn parse_overview(&self, source_session_id: &str) -> Result<SessionOverview> {
+        let path = resolve_session_path(source_session_id)?;
+        let summary = cached_summary(&path)?;
+        let timeline = cached_timeline(&path)?;
+        let header = read_header(&path)?;
 
         Ok(SessionOverview {
             summary,
@@ -124,27 +108,38 @@ impl SessionReader for PiBackend {
 
     fn parse_messages_page(
         &self,
-        path: &Path,
+        source_session_id: &str,
         offset: usize,
         limit: usize,
     ) -> Result<SessionMessagePage> {
-        self::parse_messages_page(path, offset, limit)
+        let timeline = cached_timeline(&resolve_session_path(source_session_id)?)?;
+        Ok(message_page(&timeline.messages, offset, limit))
     }
 
     fn parse_events_page(
         &self,
-        path: &Path,
+        source_session_id: &str,
         offset: usize,
         limit: usize,
     ) -> Result<SessionEventPage> {
-        let timeline = cached_timeline(path)?;
+        let timeline = cached_timeline(&resolve_session_path(source_session_id)?)?;
         Ok(event_page(&timeline.events, offset, limit))
     }
 }
 
-fn parse_messages_page(path: &Path, offset: usize, limit: usize) -> Result<SessionMessagePage> {
-    let timeline = cached_timeline(path)?;
-    Ok(message_page(&timeline.messages, offset, limit))
+// id → transcript 路径的内部解析:索引反查(header id)未命中再线性扫
+// sessions 目录。trait 不再暴露路径,这是 pi 自己的实现细节。
+fn resolve_session_path(source_session_id: &str) -> Result<PathBuf> {
+    if let Some(path) = index()?
+        .entries
+        .into_iter()
+        .find(|entry| entry.source_session_id == source_session_id)
+        .map(|entry| entry.path)
+    {
+        return Ok(path);
+    }
+
+    find_session_file(source_session_id)
 }
 
 pub(crate) fn root() -> Result<PathBuf> {
@@ -200,11 +195,12 @@ fn expand_configured_path(value: &str) -> Result<PathBuf> {
     Ok(resolve_configured_path(value, &cwd, &home))
 }
 
-pub(crate) fn delete_session(path: &Path) -> Result<()> {
+pub(crate) fn delete_session(source_session_id: &str) -> Result<()> {
+    let path = resolve_session_path(source_session_id)?;
     let sessions_root_path = sessions_root()?;
     let canonical_sessions_root =
         crate::support::fs::canonicalize(&sessions_root_path).unwrap_or(sessions_root_path);
-    let target = crate::support::fs::canonicalize(path)
+    let target = crate::support::fs::canonicalize(&path)
         .with_context(|| format!("Failed to resolve Pi session {}", path.display()))?;
     if !target.starts_with(&canonical_sessions_root)
         || target.extension().and_then(|ext| ext.to_str()) != Some("jsonl")
@@ -215,7 +211,7 @@ pub(crate) fn delete_session(path: &Path) -> Result<()> {
         );
     }
 
-    fs::remove_file(path).with_context(|| format!("Failed to delete {}", path.display()))?;
+    fs::remove_file(&path).with_context(|| format!("Failed to delete {}", path.display()))?;
     prune_empty_parents(sessions_root()?, path.parent());
     BACKEND.clear_cache()
 }
@@ -246,9 +242,10 @@ fn index() -> Result<PiIndexCacheEntry> {
     let mut entries = files
         .into_iter()
         .filter_map(|path| {
-            read_header(&path).ok()?;
+            let header = read_header(&path).ok()?;
             let sort_timestamp = file_mtime(&path).ok()?;
             Some(SessionFileEntry {
+                source_session_id: header.id,
                 path,
                 sort_timestamp,
                 summary: None,

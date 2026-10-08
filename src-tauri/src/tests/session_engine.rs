@@ -6,6 +6,7 @@ use anyhow::Result;
 use serde_json::json;
 use uuid::Uuid;
 
+use crate::session::family_index::FamilyRow;
 use crate::session::{SessionReader, codex};
 
 // 读取器引擎按根直接构造:整个测试不碰进程 env、不持 TestEnvGuard 的全局
@@ -53,14 +54,14 @@ fn codex_engine_reads_without_touching_process_env() -> Result<()> {
         "How do I list the current files?"
     );
 
-    let summary = engine.parse_summary(&transcript)?;
+    let summary = engine.parse_summary(session_id)?;
     assert_eq!(summary.source_session_id, session_id);
 
-    let page = engine.parse_messages_page(&transcript, 0, 10)?;
+    let page = engine.parse_messages_page(session_id, 0, 10)?;
     assert_eq!(page.total_count, 1);
 
-    let resolved = engine.resolve_path(session_id)?;
-    assert_eq!(resolved, transcript);
+    let family = engine.family_for_id(session_id)?;
+    assert_eq!(family.root.member_path().as_ref(), transcript.as_path());
 
     fs::remove_dir_all(&dir).ok();
     Ok(())
@@ -97,11 +98,11 @@ fn claude_engine_reads_without_touching_process_env() -> Result<()> {
         "How do I list the current files?"
     );
 
-    let summary = engine.parse_summary(&transcript)?;
+    let summary = engine.parse_summary(session_id)?;
     assert_eq!(summary.source_session_id, session_id);
 
-    let resolved = engine.resolve_path(session_id)?;
-    assert_eq!(resolved, transcript);
+    let family = engine.family_for_id(session_id)?;
+    assert_eq!(family.root.member_path().as_ref(), transcript.as_path());
 
     fs::remove_dir_all(&dir).ok();
     Ok(())

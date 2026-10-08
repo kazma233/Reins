@@ -13,7 +13,7 @@ import {
 import SessionDetail from "./components/SessionDetail.vue";
 import SessionList from "./components/SessionList.vue";
 import SourceSwitcher from "./components/SourceSwitcher.vue";
-import { useSessionStore } from "./stores/session";
+import { sessionIdentityKey, useSessionStore } from "./stores/session";
 import { ALL_SOURCES, isSourceApp, type SourceSelection } from "./source-app";
 import type { SessionPage, SourceStatus } from "./types";
 import { extractErrorMessage } from "@shared/lib/errors";
@@ -84,20 +84,23 @@ const selectedSummary = computed(() => {
   }
 
   const visibleSummary = sessions.value.find(
-    (session) => session.transcriptPath === selectedSessionKey.value
+    (session) =>
+      sessionIdentityKey(session.sourceApp, session.sourceSessionId) ===
+      selectedSessionKey.value
   );
 
   if (visibleSummary) {
     return visibleSummary;
   }
 
-  // 合并视图下保留的详情摘要可能来自任意来源，按当前来源过滤会误伤。
-  const retainedSummary = sessionOverview.value?.summary;
+  // 合并视图下保留的详情摘要可能来自任意来源，复合键自带来源，不会再误伤。
+  const retainedSummary = sessionOverview.value?.summary ?? null;
   const retainedMatches =
-    selectedSource.value === ALL_SOURCES
-      ? retainedSummary?.transcriptPath === selectedSessionKey.value
-      : retainedSummary?.sourceApp === selectedSource.value &&
-        retainedSummary.transcriptPath === selectedSessionKey.value;
+    retainedSummary !== null &&
+    sessionIdentityKey(
+      retainedSummary.sourceApp,
+      retainedSummary.sourceSessionId
+    ) === selectedSessionKey.value;
   return retainedMatches ? retainedSummary : null;
 });
 
@@ -208,8 +211,7 @@ watch(
     detailReloadToken,
     selectedSessionKey,
     selectedSource,
-    () => selectedSummary.value?.sourceSessionId,
-    () => selectedSummary.value?.transcriptPath
+    () => selectedSummary.value?.sourceSessionId
   ],
   (_new, _old, onCleanup) => {
     let cancelled = false;
@@ -251,13 +253,11 @@ watch(
         // 删除计划与 overview 并行获取；计划失败只隐藏删除入口，不阻断详情。
         const planPromise = getDeletePlan(
           summary.sourceApp,
-          summary.sourceSessionId,
-          summary.transcriptPath
+          summary.sourceSessionId
         ).catch(() => null);
         const nextDetail = await getSessionOverview(
           summary.sourceApp,
-          summary.sourceSessionId,
-          summary.transcriptPath
+          summary.sourceSessionId
         );
         const nextPlan = await planPromise;
 

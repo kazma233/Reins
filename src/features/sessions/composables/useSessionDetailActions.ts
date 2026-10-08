@@ -80,11 +80,7 @@ export function useSessionDetailActions(
     deleteError.value = null;
 
     try {
-      await deleteSession(
-        detail.summary.sourceApp,
-        detail.summary.sourceSessionId,
-        detail.summary.transcriptPath
-      );
+      await deleteSession(detail.summary.sourceApp, detail.summary.sourceSessionId);
 
       if (!requestGuard.isCurrent(requestKey)) {
         return;

@@ -2,8 +2,10 @@ use super::*;
 
 // The family index must apply the dual-write rule: the family key (the
 // root's source id) resolves to the root transcript, and each member's own
-// id resolves to the member file. Guards the or_insert (first-claim-wins)
+// id resolves into the same family. Guards the or_insert (first-claim-wins)
 // semantics shared by claude_code and codex ahead of the engine extraction.
+// Path-level detail is no longer addressable through the reader interface,
+// so resolution is asserted via the summary's transcript path (family root).
 
 #[test]
 fn claude_resolves_family_key_to_root_and_member_id_to_member() -> Result<()> {
@@ -45,8 +47,15 @@ fn claude_resolves_family_key_to_root_and_member_id_to_member() -> Result<()> {
     )?;
 
     let reader = session::reader(SourceApp::ClaudeCode);
-    assert_eq!(reader.resolve_path(root_id)?, root_path);
-    assert_eq!(reader.resolve_path(child_id)?, child_path);
+    assert_eq!(
+        reader.parse_summary(root_id)?.transcript_path,
+        root_path.display().to_string()
+    );
+    // 子会话按自身 id 直查仍归属同一 family(root 转录)。
+    assert_eq!(
+        reader.parse_summary(child_id)?.transcript_path,
+        root_path.display().to_string()
+    );
 
     fs::remove_dir_all(&temp_home).ok();
     Ok(())
@@ -101,8 +110,14 @@ fn codex_resolves_family_key_to_root_and_member_id_to_member() -> Result<()> {
     )?;
 
     let reader = session::reader(SourceApp::Codex);
-    assert_eq!(reader.resolve_path(root_id)?, root_path);
-    assert_eq!(reader.resolve_path(child_id)?, child_path);
+    assert_eq!(
+        reader.parse_summary(root_id)?.transcript_path,
+        root_path.display().to_string()
+    );
+    assert_eq!(
+        reader.parse_summary(child_id)?.transcript_path,
+        root_path.display().to_string()
+    );
 
     fs::remove_dir_all(&temp_home).ok();
     Ok(())

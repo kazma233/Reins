@@ -346,23 +346,23 @@ fn family_index() -> Result<FamilyIndex<Row>> {
     Ok(FamilyIndex::build(families))
 }
 
-fn family(path: &Path) -> Result<Family<Row>> {
-    let path = validate_path(path)?;
-    let index = family_index()?;
-    index
-        .families
+// 会话身份的唯一寻址入口:id → family 直查,未命中文案逐字保留现状契约。
+fn family_for_id(source_session_id: &str) -> Result<Family<Row>> {
+    family_index()?
+        .family_for_id(source_session_id)
+        .ok_or_else(|| anyhow!("Grok Build session not found"))
+}
+
+// events 按成员自身目录读取:id 解析到该成员的 transcript 路径(索引里的
+// 每个 id 都是某条成员的 member id)。
+fn member_path_for_id(source_session_id: &str) -> Result<PathBuf> {
+    let family = family_for_id(source_session_id)?;
+    family
+        .members
         .iter()
-        .find(|family| family.root.member_path().as_ref() == path.as_path())
-        .or_else(|| {
-            index.families.iter().find(|family| {
-                family
-                    .members
-                    .iter()
-                    .any(|row| row.member_path().as_ref() == path.as_path())
-            })
-        })
-        .cloned()
-        .context("Grok Build parent session not found")
+        .find(|row| row.member_id() == source_session_id)
+        .map(|row| PathBuf::from(row.summary.transcript_path.clone()))
+        .ok_or_else(|| anyhow!("Grok Build session not found"))
 }
 
 fn family_summary(family: &Family<Row>) -> SessionSummary {
@@ -813,6 +813,7 @@ impl SessionReader for GrokBuildBackend {
                 let summary = family_summary(&family);
                 SessionFileEntry {
                     path: PathBuf::from(&summary.transcript_path),
+                    source_session_id: family.root.member_id().to_string(),
                     sort_timestamp: summary.updated_at.unwrap_or_default(),
                     summary: Some(summary),
                 }
@@ -821,23 +822,13 @@ impl SessionReader for GrokBuildBackend {
         super::sort_entries(&mut entries);
         Ok(entries)
     }
-    fn resolve_path(&self, id: &str) -> Result<PathBuf> {
-        valid_id(id)?;
-        family_index()?
-            .families
-            .into_iter()
-            .flat_map(|family| family.members)
-            .find(|row| row.member_id() == id)
-            .map(|row| PathBuf::from(row.summary.transcript_path))
-            .context("Grok Build session not found")
-    }
-    fn parse_summary(&self, path: &Path) -> Result<SessionSummary> {
-        // 与 family 聚合语义一致：成员路径解析到所属 family 的 root 摘要。
-        let family = family(path)?;
+    fn parse_summary(&self, source_session_id: &str) -> Result<SessionSummary> {
+        // 与 family 聚合语义一致：成员 id 解析到所属 family 的 root 摘要。
+        let family = family_for_id(source_session_id)?;
         Ok(family_summary(&family))
     }
-    fn parse_overview(&self, path: &Path) -> Result<SessionOverview> {
-        let family = family(path)?;
+    fn parse_overview(&self, source_session_id: &str) -> Result<SessionOverview> {
+        let family = family_for_id(source_session_id)?;
         Ok(SessionOverview {
             summary: family_summary(&family),
             source_paths: family_source_paths(&family)?,
@@ -851,11 +842,11 @@ impl SessionReader for GrokBuildBackend {
     }
     fn parse_messages_page(
         &self,
-        path: &Path,
+        source_session_id: &str,
         offset: usize,
         limit: usize,
     ) -> Result<SessionMessagePage> {
-        let family = family(path)?;
+        let family = family_for_id(source_session_id)?;
         let (messages, offset, next_offset, total_count) =
             crate::support::paging::slice_page(&parent_messages(&family)?, offset, limit);
         Ok(SessionMessagePage {
@@ -869,19 +860,20 @@ impl SessionReader for GrokBuildBackend {
     }
     fn parse_events_page(
         &self,
-        path: &Path,
+        source_session_id: &str,
         offset: usize,
         limit: usize,
     ) -> Result<SessionEventPage> {
-        summary(path)?;
-        events_page(path, offset, limit)
+        let path = member_path_for_id(source_session_id)?;
+        summary(&path)?;
+        events_page(&path, offset, limit)
     }
     fn parse_agent_messages(
         &self,
-        path: &Path,
+        source_session_id: &str,
         agent_session_id: &str,
     ) -> Result<Vec<SessionMessage>> {
-        let family = family(path)?;
+        let family = family_for_id(source_session_id)?;
         let row = family
             .members
             .iter()
@@ -901,8 +893,8 @@ impl SessionReader for GrokBuildBackend {
 // root 会话交给官方 `grok sessions delete`（目录、搜索索引、活跃保护都由
 // grok 自己处理）；该命令只认顶层会话、够不到 subagent 子会话，子会话按
 // 本地清理：成员目录 + session_search.sqlite 索引行。
-pub(crate) fn delete_session(path: &Path) -> Result<()> {
-    let family = family(path)?;
+pub(crate) fn delete_session(source_session_id: &str) -> Result<()> {
+    let family = family_for_id(source_session_id)?;
 
     run_official_delete(family.root.member_id())?;
 

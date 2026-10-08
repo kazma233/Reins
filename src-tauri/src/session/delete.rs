@@ -12,16 +12,10 @@ pub(crate) fn delete_session_inner(
     state: &SessionIndexState,
     source_app: SourceApp,
     source_session_id: &str,
-    transcript_path: Option<&str>,
 ) -> Result<DeleteSessionResult> {
-    let path = if let Some(path) = transcript_path {
-        std::path::PathBuf::from(path)
-    } else {
-        super::reader(source_app).resolve_path(source_session_id)?
-    };
-    let overview = super::reader(source_app).parse_overview(&path)?;
+    let overview = super::reader(source_app).parse_overview(source_session_id)?;
 
-    super::delete_session(source_app, &path)?;
+    super::delete_session(source_app, source_session_id)?;
     state.clear()?;
     super::clear_all_caches()?;
 
@@ -53,20 +47,14 @@ pub(crate) fn delete_target_session_ids(overview: &SessionOverview) -> Vec<Strin
 
 // 删除预演:动作清单与说明文案都取自来源注册表,前端只渲染。不支持删除的
 // 来源不解析 overview(其 overview 对预演没有价值,跳过更稳);可删来源的
-// 路径解析与 overview 解析失败沿 delete_session_inner 同样的错误传播。
+// id 解析与 overview 解析失败沿 delete_session_inner 同样的错误传播。
 pub(crate) fn get_delete_plan_inner(
     source_app: SourceApp,
     source_session_id: &str,
-    transcript_path: Option<&str>,
 ) -> Result<DeletePlan> {
     match sources::spec(source_app).delete {
         DeletePolicy::Deleter { plan, copy, .. } => {
-            let path = if let Some(path) = transcript_path {
-                std::path::PathBuf::from(path)
-            } else {
-                super::reader(source_app).resolve_path(source_session_id)?
-            };
-            let overview = super::reader(source_app).parse_overview(&path)?;
+            let overview = super::reader(source_app).parse_overview(source_session_id)?;
             let actions = plan(&overview)?;
 
             Ok(DeletePlan {

@@ -179,9 +179,8 @@ fn dsh_decodes_multiframe_zstd_and_picks_highest_generation() -> Result<()> {
     let reader = session::reader(SourceApp::Dsh);
     let entries = reader.list_entries()?;
     assert_eq!(entries.len(), 1);
-    let path = &entries[0].path;
 
-    let summary = reader.parse_summary(path)?;
+    let summary = reader.parse_summary("session-multi")?;
     assert_eq!(summary.source_app, SourceApp::Dsh);
     assert_eq!(summary.source_session_id, "session-multi");
     // 多帧里的第二条 user 消息是标题来源;created=header.createdAt,updated=最后事件 time
@@ -200,7 +199,7 @@ fn dsh_decodes_multiframe_zstd_and_picks_highest_generation() -> Result<()> {
         (11, 7, 3, 5)
     );
 
-    let detail = read_detail(reader, path)?;
+    let detail = read_detail(reader, "session-multi")?;
     // 三个帧的内容全部解出:帧1 只有 header+permission(无消息),帧2/帧3 各一条消息
     assert!(detail.messages.iter().any(|message| {
         message
@@ -264,7 +263,7 @@ fn dsh_tolerates_truncated_zstd_tail() -> Result<()> {
     let reader = session::reader(SourceApp::Dsh);
     let entries = reader.list_entries()?;
     assert_eq!(entries.len(), 1);
-    let detail = read_detail(reader, &entries[0].path)?;
+    let detail = read_detail(reader, &entries[0].source_session_id)?;
     assert!(detail.messages.iter().any(|message| {
         message
             .blocks
@@ -436,7 +435,7 @@ fn mapping_fixture(id: &str) -> Vec<Value> {
 #[test]
 fn dsh_maps_event_types_to_messages_events_and_usage() -> Result<()> {
     let (home, _guard) = dsh_test_home()?;
-    let path = write_session(
+    write_session(
         &home,
         "session-map",
         4,
@@ -445,7 +444,7 @@ fn dsh_maps_event_types_to_messages_events_and_usage() -> Result<()> {
     )?;
 
     let reader = session::reader(SourceApp::Dsh);
-    let summary = reader.parse_summary(&path)?;
+    let summary = reader.parse_summary("session-map")?;
     // session/title latest-wins
     assert_eq!(summary.title, "Final title");
     // usage 两轮累计,字段 1:1 无换算
@@ -460,7 +459,7 @@ fn dsh_maps_event_types_to_messages_events_and_usage() -> Result<()> {
         (150, 15, 20, 5)
     );
 
-    let detail = read_detail(reader, &path)?;
+    let detail = read_detail(reader, "session-map")?;
 
     // 人类 user 消息进消息时间线;合成注入不进
     let user = detail
@@ -678,10 +677,10 @@ fn dsh_surface_replace_folds_covered_range() -> Result<()> {
             3,
         ),
     ];
-    let path = write_session(&home, "session-fold", 4, false, &lines)?;
+    write_session(&home, "session-fold", 4, false, &lines)?;
 
     let reader = session::reader(SourceApp::Dsh);
-    let detail = read_detail(reader, &path)?;
+    let detail = read_detail(reader, "session-fold")?;
     let message_texts: Vec<&str> = detail
         .messages
         .iter()
@@ -700,7 +699,10 @@ fn dsh_surface_replace_folds_covered_range() -> Result<()> {
         );
     }
     // 折叠不影响 usage 统计(消耗是计费事实)
-    let usage = reader.parse_summary(&path)?.token_usage.expect("usage");
+    let usage = reader
+        .parse_summary("session-fold")?
+        .token_usage
+        .expect("usage");
     assert_eq!((usage.input_tokens, usage.output_tokens), (10, 2));
     fs::remove_dir_all(&home).ok();
     Ok(())
@@ -768,9 +770,8 @@ fn dsh_family_folds_subagents_and_hides_orphans() -> Result<()> {
     let reader = session::reader(SourceApp::Dsh);
     let entries = reader.list_entries()?;
     assert_eq!(entries.len(), 1, "root family is the only entry");
-    let root_path = &entries[0].path;
 
-    let summary = reader.parse_summary(root_path)?;
+    let summary = reader.parse_summary("session-root")?;
     assert_eq!(summary.source_session_id, "session-root");
     assert!(summary.title.contains("主任务 (+1 subagents)"));
     // family 用量 = root + child 之和
@@ -785,7 +786,7 @@ fn dsh_family_folds_subagents_and_hides_orphans() -> Result<()> {
         (130, 28, 5, 0)
     );
 
-    let overview = reader.parse_overview(root_path)?;
+    let overview = reader.parse_overview("session-root")?;
     assert_eq!(overview.agents.len(), 2);
     assert!(
         overview
@@ -797,7 +798,7 @@ fn dsh_family_folds_subagents_and_hides_orphans() -> Result<()> {
     // catalog 的 label 优先作为 marker 标题
     assert_eq!(overview.summary.title, summary.title);
 
-    let detail = read_detail(reader, root_path)?;
+    let detail = read_detail(reader, "session-root")?;
     let marker = detail
         .messages
         .iter()
@@ -828,7 +829,7 @@ fn dsh_family_folds_subagents_and_hides_orphans() -> Result<()> {
     );
 
     // 子代理入口按 agent session id 取消息;孤儿不属于任何 family
-    let agent_messages = reader.parse_agent_messages(root_path, "session-child")?;
+    let agent_messages = reader.parse_agent_messages("session-root", "session-child")?;
     assert!(
         agent_messages
             .iter()
@@ -839,15 +840,16 @@ fn dsh_family_folds_subagents_and_hides_orphans() -> Result<()> {
     );
     assert!(
         reader
-            .parse_agent_messages(root_path, "session-orphan")
+            .parse_agent_messages("session-root", "session-orphan")
             .is_err()
     );
 
-    // resolve_path 反查子会话转录
-    let child_path = reader.resolve_path("session-child")?;
-    assert!(child_path.ends_with("session.v4.jsonl"));
-    assert!(child_path.to_string_lossy().contains("session-child"));
-    assert!(reader.resolve_path("session-orphan").is_err());
+    // 子会话按自身 id 直查仍归属父 family;孤儿不入索引,直查报错。
+    assert_eq!(
+        reader.parse_summary("session-child")?.source_session_id,
+        "session-root"
+    );
+    assert!(reader.parse_summary("session-orphan").is_err());
     fs::remove_dir_all(&home).ok();
     Ok(())
 }
@@ -922,5 +924,5 @@ fn dsh_usage_hours_bucketed_by_assistant_event_time() -> Result<()> {
 
 #[test]
 fn dsh_delete_session_is_unsupported() {
-    assert!(session::delete_session(SourceApp::Dsh, Path::new("ignored")).is_err());
+    assert!(session::delete_session(SourceApp::Dsh, "ignored").is_err());
 }

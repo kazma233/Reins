@@ -6,7 +6,7 @@ use anyhow::{Context, Result};
 use rusqlite::{Connection, OpenFlags, params_from_iter};
 use serde_json::{Value, json};
 
-use super::family_index::{Family, FamilyIndex, FamilyRow};
+use super::family_index::{Family, FamilyRow};
 use super::family_timeline::FamilyAgentLabel;
 use super::reader_engine::{
     FamilyReader, FamilySpec, Freshness, MarkerShape, MemberTimeline, OverviewCounts, SummaryKind,
@@ -101,21 +101,6 @@ impl FamilySpec for ZcodeSpec {
     // 索引失效只看 db 文件 mtime:全部行都从它 join 出来,行内时间不参与。
     fn index_freshness(&self, _scan_root: &Path) -> Result<Freshness> {
         zcode_db_timestamp().map(Freshness::Stamp)
-    }
-
-    // 不建 id→path 图:会话 id 直接由 db 派生假路径,不需要索引参与解析。
-    fn id_map(&self) -> bool {
-        false
-    }
-
-    // 解析不查索引也不找文件:合成 "db路径:id" 假路径,永不 not-found。
-    fn resolve_path(
-        &self,
-        _index: &FamilyIndex<ZcodeSessionRow>,
-        _scan_root: &Path,
-        source_session_id: &str,
-    ) -> Result<PathBuf> {
-        Ok(session_path(source_session_id))
     }
 
     fn summary_kind(&self) -> SummaryKind {

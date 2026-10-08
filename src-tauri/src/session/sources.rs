@@ -3,7 +3,7 @@
 //! usage 四条流程都由它驱动;新增来源 = 新 reader 文件 + 这里一条注册,
 //! 按来源的 match 不得在 catalog.rs / usage_stats.rs / mod.rs 复活。
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::thread;
 
 use anyhow::{Result, anyhow};
@@ -29,7 +29,7 @@ pub(crate) const DELETE_UNSUPPORTED_LABEL: &str = "不支持删除";
 #[derive(Clone, Copy)]
 pub(crate) enum DeletePolicy {
     Deleter {
-        delete: fn(&Path) -> Result<()>,
+        delete: fn(&str) -> Result<()>,
         plan: fn(&SessionOverview) -> Result<Vec<DeletePlanAction>>,
         copy: DeleteCopy,
     },

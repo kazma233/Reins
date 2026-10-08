@@ -11,11 +11,12 @@
 | `src/features/sessions/api.ts` | `src-tauri/src/session/commands.rs` | `clear_session_caches` | 清空 session index 和 reader cache |
 | `src/features/sessions/api.ts` | `src-tauri/src/session/commands.rs` | `list_sessions` | 返回 `SessionPage` |
 | `src/features/sessions/api.ts` | `src-tauri/src/session/commands.rs` | `refresh_sessions` | 返回 `SessionRefreshResult` |
-| `src/features/sessions/api.ts` | `src-tauri/src/session/commands.rs` | `get_session_overview` | 返回 `SessionOverview` |
-| `src/features/sessions/api.ts` | `src-tauri/src/session/commands.rs` | `get_session_messages` | 返回 `SessionMessagePage` |
-| `src/features/sessions/api.ts` | `src-tauri/src/session/commands.rs` | `get_session_events` | 返回 `SessionEventPage` |
-| `src/features/sessions/api.ts` | `src-tauri/src/session/commands.rs` | `get_delete_plan` | 返回 `DeletePlan`（删除预演：动作清单 + 说明文案，删除语义唯一真相在后端） |
-| `src/features/sessions/api.ts` | `src-tauri/src/session/commands.rs` | `delete_session` | 返回 `DeleteSessionResult` |
+| `src/features/sessions/api.ts` | `src-tauri/src/session/commands.rs` | `get_session_overview` | 返回 `SessionOverview`；参数只有 `(sourceApp, sourceSessionId)`，会话身份显式化后 `transcript_path` 参数已移除（展示字段仍在 DTO 上） |
+| `src/features/sessions/api.ts` | `src-tauri/src/session/commands.rs` | `get_session_messages` | 返回 `SessionMessagePage`；参数 `(sourceApp, sourceSessionId, offset, limit)`，`transcript_path` 参数已移除 |
+| `src/features/sessions/api.ts` | `src-tauri/src/session/commands.rs` | `get_session_events` | 返回 `SessionEventPage`；参数 `(sourceApp, sourceSessionId, offset, limit)`，`transcript_path` 参数已移除 |
+| `src/features/sessions/api.ts` | `src-tauri/src/session/commands.rs` | `get_session_agent_messages` | 参数 `(sourceApp, sourceSessionId, agentSessionId)`，`transcript_path` 参数已移除 |
+| `src/features/sessions/api.ts` | `src-tauri/src/session/commands.rs` | `get_delete_plan` | 返回 `DeletePlan`（删除预演：动作清单 + 说明文案，删除语义唯一真相在后端）；参数 `(sourceApp, sourceSessionId)`，`transcript_path` 参数已移除 |
+| `src/features/sessions/api.ts` | `src-tauri/src/session/commands.rs` | `delete_session` | 返回 `DeleteSessionResult`；参数 `(sourceApp, sourceSessionId)`，`transcript_path` 参数已移除 |
 
 ### Session 关键 DTO
 

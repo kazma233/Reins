@@ -190,8 +190,8 @@ pub(crate) fn root() -> Result<PathBuf> {
         .join(".codex"))
 }
 
-pub(crate) fn delete_session(path: &Path) -> Result<()> {
-    let family = BACKEND.engine()?.family_for_path(path)?;
+pub(crate) fn delete_session(source_session_id: &str) -> Result<()> {
+    let family = BACKEND.engine()?.family_for_id(source_session_id)?;
 
     for member in &family.members {
         // 官方删除 root 会级联整条 family；已被级联删除的成员（state 库

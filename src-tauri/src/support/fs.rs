@@ -2,7 +2,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 
-use anyhow::{Result, anyhow};
+use anyhow::Result;
 use walkdir::WalkDir;
 
 pub(crate) fn grok_home_path(
@@ -125,17 +125,6 @@ pub(crate) fn display_path(path: &Path) -> String {
     {
         path.display().to_string()
     }
-}
-
-pub(crate) fn find_session_file(root: &Path, source_session_id: &str) -> Result<PathBuf> {
-    enumerate_jsonl_files(root)?
-        .into_iter()
-        .find(|path| {
-            path.file_name()
-                .and_then(|name| name.to_str())
-                .is_some_and(|name| name.contains(source_session_id))
-        })
-        .ok_or_else(|| anyhow!("Could not find session file for {source_session_id}"))
 }
 
 pub(crate) fn enumerate_jsonl_files(root: &Path) -> Result<Vec<PathBuf>> {

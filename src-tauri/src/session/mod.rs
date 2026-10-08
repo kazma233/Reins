@@ -1,5 +1,3 @@
-use std::path::{Path, PathBuf};
-
 use anyhow::{Result, bail};
 
 pub(crate) mod catalog;
@@ -33,6 +31,8 @@ use self::usage_stats::{hour_key, merge_usage_bucket};
 
 // Sync:来源注册表的 spec 会跨线程共享(按来源并行探测/统计),读取器自身
 // 必须无内部可变性,并发安全靠各实现内部的 static Mutex 保证。
+// 会话身份是(来源, source_session_id)二元组:transcript_path 只是展示字段,
+// 读取器接口不认路径。
 pub(crate) trait SessionReader: Sync {
     fn list_entries(&self) -> Result<Vec<SessionFileEntry>>;
 
@@ -40,22 +40,20 @@ pub(crate) trait SessionReader: Sync {
         Ok(())
     }
 
-    fn resolve_path(&self, source_session_id: &str) -> Result<PathBuf>;
+    fn parse_summary(&self, source_session_id: &str) -> Result<SessionSummary>;
 
-    fn parse_summary(&self, path: &Path) -> Result<SessionSummary>;
-
-    fn parse_overview(&self, path: &Path) -> Result<SessionOverview>;
+    fn parse_overview(&self, source_session_id: &str) -> Result<SessionOverview>;
 
     fn parse_messages_page(
         &self,
-        path: &Path,
+        source_session_id: &str,
         offset: usize,
         limit: usize,
     ) -> Result<SessionMessagePage>;
 
     fn parse_events_page(
         &self,
-        path: &Path,
+        source_session_id: &str,
         offset: usize,
         limit: usize,
     ) -> Result<SessionEventPage>;
@@ -67,7 +65,7 @@ pub(crate) trait SessionReader: Sync {
     // 与“子会话确实没消息”保持可区分。
     fn parse_agent_messages(
         &self,
-        _path: &Path,
+        _source_session_id: &str,
         _agent_session_id: &str,
     ) -> Result<Vec<SessionMessage>> {
         bail!("该来源的子代理不以独立会话存储，无法按 agent session id 取消息")
@@ -88,9 +86,9 @@ pub(crate) fn clear_all_caches() -> Result<()> {
     Ok(())
 }
 
-pub(crate) fn delete_session(source_app: SourceApp, path: &Path) -> Result<()> {
+pub(crate) fn delete_session(source_app: SourceApp, source_session_id: &str) -> Result<()> {
     match sources::spec(source_app).delete {
-        sources::DeletePolicy::Deleter { delete, .. } => delete(path),
+        sources::DeletePolicy::Deleter { delete, .. } => delete(source_session_id),
         sources::DeletePolicy::Unsupported { reason, .. } => bail!("{reason}"),
     }
 }

@@ -2,6 +2,7 @@
 import { computed, nextTick, onMounted, ref, watch } from "vue";
 import { joinClasses } from "@shared/lib/join-classes";
 import { formatTimestamp, formatTokenCount } from "@shared/lib/format";
+import { sessionIdentityKey } from "../stores/session";
 import type { SessionSummary } from "../types";
 import "./session-list.css";
 
@@ -196,15 +197,22 @@ function handleReverseClick() {
       <template v-else>
         <button
           v-for="session in sessions"
-          :key="session.transcriptPath"
+          :key="sessionIdentityKey(session.sourceApp, session.sourceSessionId)"
           :class="
             joinClasses(
               'session-card',
-              session.transcriptPath === selectedSessionKey && 'active'
+              sessionIdentityKey(session.sourceApp, session.sourceSessionId) ===
+                selectedSessionKey &&
+                'active'
             )
           "
           type="button"
-          @click="emit('select', session.transcriptPath)"
+          @click="
+            emit(
+              'select',
+              sessionIdentityKey(session.sourceApp, session.sourceSessionId)
+            )
+          "
         >
           <span class="session-card-title" :title="session.title">{{
             session.title

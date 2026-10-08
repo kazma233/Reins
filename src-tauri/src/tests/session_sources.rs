@@ -1,5 +1,3 @@
-use std::path::Path;
-
 use anyhow::Result;
 
 use crate::session;
@@ -9,16 +7,16 @@ use crate::session::model::SourceApp;
 // 这里钉住防止悄悄漂移;两个分支不触环境与文件,无需 TestEnvGuard。
 #[test]
 fn unsupported_deletion_reports_app_reason() -> Result<()> {
-    let zcode_error = session::delete_session(SourceApp::Zcode, Path::new("unused"))
-        .expect_err("zcode 删除应整体不支持");
+    let zcode_error =
+        session::delete_session(SourceApp::Zcode, "unused").expect_err("zcode 删除应整体不支持");
     assert!(
         zcode_error
             .to_string()
             .contains("ZCode session deletion is unsupported")
     );
 
-    let dsh_error = session::delete_session(SourceApp::Dsh, Path::new("unused"))
-        .expect_err("dsh 删除应整体不支持");
+    let dsh_error =
+        session::delete_session(SourceApp::Dsh, "unused").expect_err("dsh 删除应整体不支持");
     assert!(
         dsh_error
             .to_string()

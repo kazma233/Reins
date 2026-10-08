@@ -199,8 +199,8 @@ pub(crate) fn root() -> Result<PathBuf> {
         .join(".claude"))
 }
 
-pub(crate) fn delete_session(path: &Path) -> Result<()> {
-    let family = BACKEND.engine()?.family_for_path(path)?;
+pub(crate) fn delete_session(source_session_id: &str) -> Result<()> {
+    let family = BACKEND.engine()?.family_for_id(source_session_id)?;
     let root_session_id = family.root.summary.source_session_id.clone();
 
     for member in &family.members {
@@ -219,7 +219,7 @@ pub(crate) fn delete_session(path: &Path) -> Result<()> {
     remove_dir_if_exists(&root()?.join("projects").join(&root_session_id))?;
     remove_dir_if_exists(&root()?.join("session-env").join(&root_session_id))?;
     remove_dir_if_exists(&root()?.join("file-history").join(&root_session_id))?;
-    prune_empty_parents(root()?.join("projects"), path.parent());
+    prune_empty_parents(root()?.join("projects"), family.root.member_path().parent());
     BACKEND.engine()?.clear()?;
     Ok(())
 }

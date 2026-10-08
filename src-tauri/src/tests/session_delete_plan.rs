@@ -38,11 +38,7 @@ fn claude_code_delete_plan_lists_members_meta_then_sidecars() -> Result<()> {
         })],
     )?;
 
-    let plan = session::delete::get_delete_plan_inner(
-        SourceApp::ClaudeCode,
-        root_id,
-        Some(root_path.to_string_lossy().as_ref()),
-    )?;
+    let plan = session::delete::get_delete_plan_inner(SourceApp::ClaudeCode, root_id)?;
 
     assert!(plan.supported);
     assert_eq!(
@@ -80,7 +76,7 @@ fn codex_delete_plan_runs_official_cli_per_session_id() -> Result<()> {
 
     let root_id = "44444444-4444-4444-8444-444444444444";
     let child_id = "55555555-5555-4555-8555-555555555555";
-    let root_path = seed_codex_session(&temp_home, root_id)?;
+    seed_codex_session(&temp_home, root_id)?;
     let child_path = temp_home
         .join(".codex/sessions/2026/04/21")
         .join(format!("rollout-2026-04-21T15-00-00-{child_id}.jsonl"));
@@ -97,11 +93,7 @@ fn codex_delete_plan_runs_official_cli_per_session_id() -> Result<()> {
         })],
     )?;
 
-    let plan = session::delete::get_delete_plan_inner(
-        SourceApp::Codex,
-        root_id,
-        Some(root_path.to_string_lossy().as_ref()),
-    )?;
+    let plan = session::delete::get_delete_plan_inner(SourceApp::Codex, root_id)?;
 
     assert!(plan.supported);
     assert_eq!(
@@ -139,12 +131,7 @@ fn opencode_delete_plan_runs_official_cli_per_session_id() -> Result<()> {
     let child_id = "ses_plan_child";
     seed_opencode_family(root_id, child_id)?;
 
-    let root_path = session::opencode::session_path(root_id);
-    let plan = session::delete::get_delete_plan_inner(
-        SourceApp::OpenCode,
-        root_id,
-        Some(root_path.to_string_lossy().as_ref()),
-    )?;
+    let plan = session::delete::get_delete_plan_inner(SourceApp::OpenCode, root_id)?;
 
     assert!(plan.supported);
     assert_eq!(
@@ -188,11 +175,7 @@ fn grokbuild_delete_plan_mixes_cli_dirs_and_sqlite() -> Result<()> {
         "Child answer",
     )?;
 
-    let plan = session::delete::get_delete_plan_inner(
-        SourceApp::GrokBuild,
-        "grok-parent",
-        Some(parent_path.to_string_lossy().as_ref()),
-    )?;
+    let plan = session::delete::get_delete_plan_inner(SourceApp::GrokBuild, "grok-parent")?;
 
     // sourcePaths 来自 canonicalize 后的索引扫描,期望值同样走 canonicalize。
     let child_dir =
@@ -238,11 +221,7 @@ fn pi_delete_plan_removes_the_transcript_file() -> Result<()> {
         })],
     )?;
 
-    let plan = session::delete::get_delete_plan_inner(
-        SourceApp::Pi,
-        "pi-plan",
-        Some(selected.to_string_lossy().as_ref()),
-    )?;
+    let plan = session::delete::get_delete_plan_inner(SourceApp::Pi, "pi-plan")?;
 
     assert!(plan.supported);
     assert_eq!(
@@ -258,7 +237,7 @@ fn pi_delete_plan_removes_the_transcript_file() -> Result<()> {
 // 不支持删除的来源不需要转录夹具:Unsupported 分支不解析 overview。
 #[test]
 fn unsupported_sources_plan_hides_delete_with_notice() -> Result<()> {
-    let zcode_plan = session::delete::get_delete_plan_inner(SourceApp::Zcode, "unused", None)?;
+    let zcode_plan = session::delete::get_delete_plan_inner(SourceApp::Zcode, "unused")?;
     assert!(!zcode_plan.supported);
     assert_eq!(
         zcode_plan.reason.as_deref(),
@@ -269,7 +248,7 @@ fn unsupported_sources_plan_hides_delete_with_notice() -> Result<()> {
     assert_eq!(zcode_plan.command_label, "不支持删除");
     assert!(zcode_plan.actions.is_empty());
 
-    let dsh_plan = session::delete::get_delete_plan_inner(SourceApp::Dsh, "unused", None)?;
+    let dsh_plan = session::delete::get_delete_plan_inner(SourceApp::Dsh, "unused")?;
     assert!(!dsh_plan.supported);
     assert_eq!(
         dsh_plan.reason.as_deref(),

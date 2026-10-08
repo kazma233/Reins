@@ -189,12 +189,14 @@ struct DetailView {
     events: Vec<SessionEvent>,
 }
 
-fn read_detail(reader: &dyn session::SessionReader, path: &Path) -> Result<DetailView> {
+fn read_detail(reader: &dyn session::SessionReader, source_session_id: &str) -> Result<DetailView> {
     const ALL: usize = 10_000;
 
-    let overview = reader.parse_overview(path)?;
-    let messages = reader.parse_messages_page(path, 0, ALL)?.messages;
-    let events = reader.parse_events_page(path, 0, ALL)?.events;
+    let overview = reader.parse_overview(source_session_id)?;
+    let messages = reader
+        .parse_messages_page(source_session_id, 0, ALL)?
+        .messages;
+    let events = reader.parse_events_page(source_session_id, 0, ALL)?.events;
 
     Ok(DetailView {
         summary: overview.summary,

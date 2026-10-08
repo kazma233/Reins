@@ -293,10 +293,9 @@ fn zcode_root_session_aggregates_subagent_sessions() -> Result<()> {
     let (temp_home, _guard) = zcode_test_home()?;
     let seed = seed_zcode_family("sess_root", "sess_child")?;
 
-    let root_path = session::zcode::session_path(&seed.root_id);
     let reader = session::reader(SourceApp::Zcode);
 
-    let summary = reader.parse_summary(&root_path)?;
+    let summary = reader.parse_summary(&seed.root_id)?;
     assert_eq!(summary.source_session_id, seed.root_id);
     assert!(summary.title.contains("Root task (+1 subagents)"));
     assert_eq!(summary.cwd.as_deref(), Some("/tmp/root"));
@@ -308,7 +307,7 @@ fn zcode_root_session_aggregates_subagent_sessions() -> Result<()> {
     assert_eq!(usage.cache_read_tokens, 65);
     assert_eq!(usage.cache_write_tokens, 14);
 
-    let detail = read_detail(reader, &root_path)?;
+    let detail = read_detail(reader, &seed.root_id)?;
 
     assert!(
         detail
@@ -335,7 +334,7 @@ fn zcode_root_session_aggregates_subagent_sessions() -> Result<()> {
     );
 
     // 子代理入口按 agent session id 取子会话消息
-    let agent_messages = reader.parse_agent_messages(&root_path, &seed.child_id)?;
+    let agent_messages = reader.parse_agent_messages(&seed.root_id, &seed.child_id)?;
     assert!(
         agent_messages
             .iter()
@@ -354,10 +353,9 @@ fn zcode_overview_counts_match_loaded_timeline() -> Result<()> {
     let (temp_home, _guard) = zcode_test_home()?;
     let seed = seed_zcode_family("sess_root", "sess_child")?;
 
-    let root_path = session::zcode::session_path(&seed.root_id);
     let reader = session::reader(SourceApp::Zcode);
-    let overview = reader.parse_overview(&root_path)?;
-    let detail = read_detail(reader, &root_path)?;
+    let overview = reader.parse_overview(&seed.root_id)?;
+    let detail = read_detail(reader, &seed.root_id)?;
 
     assert_eq!(overview.message_count, Some(detail.messages.len()));
     assert_eq!(overview.event_count, Some(detail.events.len()));
@@ -371,8 +369,7 @@ fn zcode_classifies_timeline_by_semantics_and_parses_parts() -> Result<()> {
     let (temp_home, _guard) = zcode_test_home()?;
     let seed = seed_zcode_family("sess_root", "sess_child")?;
 
-    let root_path = session::zcode::session_path(&seed.root_id);
-    let detail = read_detail(session::reader(SourceApp::Zcode), &root_path)?;
+    let detail = read_detail(session::reader(SourceApp::Zcode), &seed.root_id)?;
 
     // user_prompt:text 与 file 附件都可见
     let user_message = detail

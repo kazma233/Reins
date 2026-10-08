@@ -229,8 +229,7 @@ async function openSubagentDialog(sessionId: string, label: string) {
     const agentMessages = await getSessionAgentMessages(
       detail.summary.sourceApp,
       detail.summary.sourceSessionId,
-      sessionId,
-      detail.summary.transcriptPath
+      sessionId
     );
 
     if (!subagentRequestGuard.isLatest(requestId)) {

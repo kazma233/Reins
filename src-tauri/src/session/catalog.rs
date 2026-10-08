@@ -349,7 +349,7 @@ fn load_session_summary(
         .summary
         .clone()
         .map(Ok)
-        .unwrap_or_else(|| super::reader(source_app).parse_summary(&entry.path))
+        .unwrap_or_else(|| super::reader(source_app).parse_summary(&entry.source_session_id))
 }
 
 fn normalize_session_query(query: &str) -> Option<String> {

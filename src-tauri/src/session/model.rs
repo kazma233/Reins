@@ -323,6 +323,9 @@ pub(crate) struct SessionRefreshResult {
 #[derive(Clone, Debug)]
 pub(crate) struct SessionFileEntry {
     pub(crate) path: PathBuf,
+    /// 条目自身的会话身份;列表层用它按 id 取 summary(pi 的条目不带
+    /// summary,身份只能来自扫描时的 header)。
+    pub(crate) source_session_id: String,
     pub(crate) sort_timestamp: i64,
     pub(crate) summary: Option<SessionSummary>,
 }

@@ -8,7 +8,7 @@ use anyhow::{Context, Result, anyhow, bail};
 use ruzstd::decoding::{BlockDecodingStrategy, FrameDecoder};
 use serde_json::{Value, json};
 
-use super::family_index::{Family, FamilyIndex, FamilyRow};
+use super::family_index::{Family, FamilyRow};
 use super::family_timeline::FamilyAgentLabel;
 use super::reader_engine::{
     FamilyReader, FamilySpec, Freshness, MarkerShape, MemberTimeline, RowErrorPolicy, SummaryKind,
@@ -738,18 +738,6 @@ impl FamilySpec for DshSpec {
 
     fn row_usage(&self, row: &DshFamilyRow) -> Option<SessionTokenUsage> {
         row.row.token_usage.clone()
-    }
-
-    // 仅索引反查,不做文件系统兜底:孤儿子会话不入索引,本就不可解析。
-    fn resolve_path(
-        &self,
-        index: &FamilyIndex<DshFamilyRow>,
-        _scan_root: &Path,
-        source_session_id: &str,
-    ) -> Result<PathBuf> {
-        index
-            .path_for_id(source_session_id)
-            .ok_or_else(|| anyhow!("Could not find DSH session {source_session_id}"))
     }
 
     // 双半共用一次解码:转录是多帧 zstd,原先 messages/events 两个 loader

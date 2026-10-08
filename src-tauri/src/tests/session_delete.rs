@@ -56,7 +56,6 @@ fn deleting_codex_family_invokes_official_cli() -> Result<()> {
         &state::session_index::SessionIndexState::default(),
         SourceApp::Codex,
         root_id,
-        Some(root_path.to_string_lossy().as_ref()),
     )?;
 
     let deleted = fs::read_to_string(fake_cli_log_path(&bin_dir))?;
@@ -113,7 +112,6 @@ fn deleting_codex_skips_members_missing_from_state_db() -> Result<()> {
         &state::session_index::SessionIndexState::default(),
         SourceApp::Codex,
         root_id,
-        Some(root_path.to_string_lossy().as_ref()),
     )?;
 
     unsafe { env::set_var("PATH", original_path) };
@@ -180,7 +178,6 @@ fn deleting_claude_family_removes_transcripts_and_side_dirs() -> Result<()> {
         &state::session_index::SessionIndexState::default(),
         SourceApp::ClaudeCode,
         root_id,
-        Some(root_path.to_string_lossy().as_ref()),
     )?;
 
     assert_eq!(result.deleted_session_id, root_id);
@@ -218,7 +215,6 @@ fn deleting_pi_session_removes_only_the_selected_file() -> Result<()> {
         &state::session_index::SessionIndexState::default(),
         SourceApp::Pi,
         "pi-delete",
-        Some(selected.to_string_lossy().as_ref()),
     )?;
     assert_eq!(result.deleted_session_id, "pi-delete");
     assert!(!selected.exists());
@@ -242,13 +238,10 @@ fn deleting_opencode_family_uses_cli() -> Result<()> {
     install_fake_cli(&bin_dir, "opencode")?;
     let original_path = prepend_to_path(&bin_dir);
 
-    let root_path = session::opencode::session_path(root_id);
-
     let result = session::delete::delete_session_inner(
         &state::session_index::SessionIndexState::default(),
         SourceApp::OpenCode,
         root_id,
-        Some(root_path.to_string_lossy().as_ref()),
     )?;
 
     let deleted = fs::read_to_string(fake_cli_log_path(&bin_dir))?;
@@ -383,7 +376,6 @@ fn deleting_grokbuild_family_removes_member_dirs_and_search_rows() -> Result<()>
         &state::session_index::SessionIndexState::default(),
         SourceApp::GrokBuild,
         "grok-parent",
-        Some(parent_path.to_string_lossy().as_ref()),
     )?;
 
     // root 交给官方命令:假 CLI 忠实模拟官方行为(记录参数 + 删除 root 目录)。
@@ -423,7 +415,6 @@ fn deleting_grokbuild_session_prunes_empty_cwd_bucket() -> Result<()> {
         &state::session_index::SessionIndexState::default(),
         SourceApp::GrokBuild,
         "grok-solo",
-        Some(parent_path.to_string_lossy().as_ref()),
     )?;
 
     assert!(!bucket.join("grok-solo").exists());

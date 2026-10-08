@@ -258,14 +258,18 @@ fn pi_summary_cache_survives_memory_clear_and_invalidates_on_mtime_change() -> R
     )?;
 
     assert_eq!(
-        session::reader(SourceApp::Pi).parse_summary(&path)?.title,
+        session::reader(SourceApp::Pi)
+            .parse_summary("pi-cache")?
+            .title,
         "First Pi question"
     );
     assert_eq!(cache_row_count(&temp_home)?, 1);
     tamper_cached_title(&temp_home, "First Pi question", "Cached Pi title")?;
     session::reader(SourceApp::Pi).clear_cache()?;
     assert_eq!(
-        session::reader(SourceApp::Pi).parse_summary(&path)?.title,
+        session::reader(SourceApp::Pi)
+            .parse_summary("pi-cache")?
+            .title,
         "Cached Pi title"
     );
 
@@ -296,7 +300,9 @@ fn pi_summary_cache_survives_memory_clear_and_invalidates_on_mtime_change() -> R
     );
     session::reader(SourceApp::Pi).clear_cache()?;
     assert_eq!(
-        session::reader(SourceApp::Pi).parse_summary(&path)?.title,
+        session::reader(SourceApp::Pi)
+            .parse_summary("pi-cache")?
+            .title,
         "Second Pi question"
     );
     Ok(())
@@ -341,7 +347,7 @@ fn pi_timeline_cache_uses_file_mtime_as_its_freshness_boundary() -> Result<()> {
         .open(&path)?
         .set_times(fs::FileTimes::new().set_modified(original_mtime))?;
 
-    let first = read_detail(session::reader(SourceApp::Pi), &path)?;
+    let first = read_detail(session::reader(SourceApp::Pi), "pi-timeline-cache")?;
     assert!(first.messages.iter().any(|message| {
         message
             .blocks
@@ -355,7 +361,7 @@ fn pi_timeline_cache_uses_file_mtime_as_its_freshness_boundary() -> Result<()> {
         .open(&path)?
         .set_times(fs::FileTimes::new().set_modified(original_mtime))?;
 
-    let cached = read_detail(session::reader(SourceApp::Pi), &path)?;
+    let cached = read_detail(session::reader(SourceApp::Pi), "pi-timeline-cache")?;
     assert!(cached.messages.iter().any(|message| {
         message
             .blocks
@@ -375,7 +381,7 @@ fn pi_timeline_cache_uses_file_mtime_as_its_freshness_boundary() -> Result<()> {
         .open(&path)?
         .set_times(fs::FileTimes::new().set_modified(changed_mtime))?;
 
-    let refreshed = read_detail(session::reader(SourceApp::Pi), &path)?;
+    let refreshed = read_detail(session::reader(SourceApp::Pi), "pi-timeline-cache")?;
     assert!(refreshed.messages.iter().any(|message| {
         message
             .blocks
@@ -431,7 +437,7 @@ fn clear_session_caches_empties_pi_persistent_cache() -> Result<()> {
             }),
         ],
     )?;
-    session::reader(SourceApp::Pi).parse_summary(&path)?;
+    session::reader(SourceApp::Pi).parse_summary("pi-global-clear")?;
     assert_eq!(cache_row_count(&temp_home)?, 1);
     session::catalog::clear_session_caches_inner(
         &state::session_index::SessionIndexState::default(),

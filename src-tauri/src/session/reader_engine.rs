@@ -123,22 +123,6 @@ pub(crate) trait FamilySpec: Clone + Send + Sync + 'static {
     fn index_freshness(&self, scan_root: &Path) -> Result<Freshness> {
         subtree_mtime_max(scan_root).map(Freshness::Stamp)
     }
-    /// 是否构建 id→path 双写 map。
-    fn id_map(&self) -> bool {
-        true
-    }
-    /// id → 路径。默认:索引命中即返回,未命中线性找文件。
-    fn resolve_path(
-        &self,
-        index: &FamilyIndex<Self::Row>,
-        scan_root: &Path,
-        source_session_id: &str,
-    ) -> Result<PathBuf> {
-        if let Some(path) = index.path_for_id(source_session_id) {
-            return Ok(path);
-        }
-        crate::support::fs::find_session_file(scan_root, source_session_id)
-    }
 
     fn summary_kind(&self) -> SummaryKind {
         SummaryKind::RootTranscript
@@ -419,11 +403,7 @@ impl<R: FamilySpec> ReaderEngine<R> {
 
         let rows = self.spec.list_rows(&self.scan_root)?;
         let families = self.spec.group_families(rows)?;
-        let index = if self.spec.id_map() {
-            FamilyIndex::build_with_ids(families)
-        } else {
-            FamilyIndex::build(families)
-        };
+        let index = FamilyIndex::build(families);
 
         *self.lock_index()? = Some(CachedIndex {
             freshness,
@@ -433,16 +413,15 @@ impl<R: FamilySpec> ReaderEngine<R> {
         Ok(index)
     }
 
-    pub(crate) fn family_for_path(&self, path: &Path) -> Result<Family<R::Row>> {
+    /// 会话身份的唯一寻址入口:id → family 直查,未命中文案逐字保留各家
+    /// not-found 契约(dsh 的无 "for" 变体由本公式原样还原)。
+    pub(crate) fn family_for_id(&self, source_session_id: &str) -> Result<Family<R::Row>> {
         self.family_index()?
-            .sessions_by_path
-            .get(&crate::support::fs::path_key(path))
-            .cloned()
+            .family_for_id(source_session_id)
             .ok_or_else(|| {
                 anyhow!(
-                    "Could not find {} session for {}",
-                    self.spec.display_label(),
-                    path.display()
+                    "Could not find {} session {source_session_id}",
+                    self.spec.display_label()
                 )
             })
     }
@@ -585,6 +564,7 @@ impl<R: FamilySpec> SessionReader for ReaderEngine<R> {
             .map(|family| -> Result<SessionFileEntry> {
                 Ok(SessionFileEntry {
                     path: family.root.member_path().into_owned(),
+                    source_session_id: family.root.family_root_id().to_string(),
                     sort_timestamp: family.updated_at().unwrap_or_default(),
                     summary: Some(self.family_summary(&family)?),
                 })
@@ -599,17 +579,12 @@ impl<R: FamilySpec> SessionReader for ReaderEngine<R> {
         self.clear()
     }
 
-    fn resolve_path(&self, source_session_id: &str) -> Result<PathBuf> {
-        self.spec
-            .resolve_path(&self.family_index()?, &self.scan_root, source_session_id)
+    fn parse_summary(&self, source_session_id: &str) -> Result<SessionSummary> {
+        self.family_summary(&self.family_for_id(source_session_id)?)
     }
 
-    fn parse_summary(&self, path: &Path) -> Result<SessionSummary> {
-        self.family_summary(&self.family_for_path(path)?)
-    }
-
-    fn parse_overview(&self, path: &Path) -> Result<SessionOverview> {
-        let family = self.family_for_path(path)?;
+    fn parse_overview(&self, source_session_id: &str) -> Result<SessionOverview> {
+        let family = self.family_for_id(source_session_id)?;
         let summary = self.family_summary(&family)?;
 
         let (message_count, event_count) = match self.spec.overview_counts() {
@@ -636,30 +611,30 @@ impl<R: FamilySpec> SessionReader for ReaderEngine<R> {
 
     fn parse_messages_page(
         &self,
-        path: &Path,
+        source_session_id: &str,
         offset: usize,
         limit: usize,
     ) -> Result<SessionMessagePage> {
-        let timeline = self.family_timeline(&self.family_for_path(path)?)?;
+        let timeline = self.family_timeline(&self.family_for_id(source_session_id)?)?;
         Ok(message_page(&timeline.messages, offset, limit))
     }
 
     fn parse_events_page(
         &self,
-        path: &Path,
+        source_session_id: &str,
         offset: usize,
         limit: usize,
     ) -> Result<SessionEventPage> {
-        let timeline = self.family_timeline(&self.family_for_path(path)?)?;
+        let timeline = self.family_timeline(&self.family_for_id(source_session_id)?)?;
         Ok(event_page(&timeline.events, offset, limit))
     }
 
     fn parse_agent_messages(
         &self,
-        path: &Path,
+        source_session_id: &str,
         agent_session_id: &str,
     ) -> Result<Vec<SessionMessage>> {
-        let family = self.family_for_path(path)?;
+        let family = self.family_for_id(source_session_id)?;
         self.spec.check_agent_member(&family, agent_session_id)?;
         let timeline = self.family_timeline(&family)?;
         Ok(agent_messages(
@@ -725,42 +700,41 @@ impl<R: FamilySpec> SessionReader for FamilyReader<R> {
         self.engine()?.clear_cache()
     }
 
-    fn resolve_path(&self, source_session_id: &str) -> Result<PathBuf> {
-        self.engine()?.resolve_path(source_session_id)
+    fn parse_summary(&self, source_session_id: &str) -> Result<SessionSummary> {
+        self.engine()?.parse_summary(source_session_id)
     }
 
-    fn parse_summary(&self, path: &Path) -> Result<SessionSummary> {
-        self.engine()?.parse_summary(path)
-    }
-
-    fn parse_overview(&self, path: &Path) -> Result<SessionOverview> {
-        self.engine()?.parse_overview(path)
+    fn parse_overview(&self, source_session_id: &str) -> Result<SessionOverview> {
+        self.engine()?.parse_overview(source_session_id)
     }
 
     fn parse_messages_page(
         &self,
-        path: &Path,
+        source_session_id: &str,
         offset: usize,
         limit: usize,
     ) -> Result<SessionMessagePage> {
-        self.engine()?.parse_messages_page(path, offset, limit)
+        self.engine()?
+            .parse_messages_page(source_session_id, offset, limit)
     }
 
     fn parse_events_page(
         &self,
-        path: &Path,
+        source_session_id: &str,
         offset: usize,
         limit: usize,
     ) -> Result<SessionEventPage> {
-        self.engine()?.parse_events_page(path, offset, limit)
+        self.engine()?
+            .parse_events_page(source_session_id, offset, limit)
     }
 
     fn parse_agent_messages(
         &self,
-        path: &Path,
+        source_session_id: &str,
         agent_session_id: &str,
     ) -> Result<Vec<SessionMessage>> {
-        self.engine()?.parse_agent_messages(path, agent_session_id)
+        self.engine()?
+            .parse_agent_messages(source_session_id, agent_session_id)
     }
 }
 
@@ -1092,10 +1066,6 @@ mod tests {
         ReaderEngine::new(spec, root, store_dir())
     }
 
-    fn root_path(dir: &Path) -> PathBuf {
-        dir.join("scan").join("root.jsonl")
-    }
-
     #[test]
     fn index_cache_hit_skips_rescan() -> Result<()> {
         let dir = fixture(&["root.jsonl", "child.jsonl"]);
@@ -1135,22 +1105,16 @@ mod tests {
         Ok(())
     }
 
+    // id 未命中的文案契约:formula 无 "for"(dsh 现状文案由该公式原样还原),
+    // display_label 覆写(claude 的带空格拼写)直达错误消息。
     #[test]
-    fn unknown_path_reports_display_label() {
+    fn unknown_id_reports_display_label() {
         let dir = fixture(&["root.jsonl"]);
         let reader = engine(TestSpec::default_spec(), dir.clone());
 
-        let error = reader
-            .parse_summary(&dir.join("missing.jsonl"))
-            .expect_err("not found");
+        let error = reader.parse_summary("missing").expect_err("not found");
 
-        assert_eq!(
-            error.to_string(),
-            format!(
-                "Could not find Test session for {}",
-                dir.join("missing.jsonl").display()
-            )
-        );
+        assert_eq!(error.to_string(), "Could not find Test session missing");
 
         fs::remove_dir_all(&dir).ok();
     }
@@ -1160,7 +1124,7 @@ mod tests {
         let dir = fixture(&["root.jsonl", "child.jsonl"]);
         let reader = engine(TestSpec::default_spec(), dir.clone());
 
-        let page = reader.parse_messages_page(&root_path(&dir), 0, 10)?;
+        let page = reader.parse_messages_page("root", 0, 10)?;
         let ids: Vec<&str> = page.messages.iter().map(|m| m.id.as_str()).collect();
         // marker(created_at=1) 先于成员消息(timestamp=10),id 唯一定序。
         assert_eq!(ids, ["test-subagent-start-child", "m-child", "m-root"]);
@@ -1176,7 +1140,7 @@ mod tests {
             Some("Sub-agent session: agent child\nchild")
         );
 
-        let events = reader.parse_events_page(&root_path(&dir), 0, 10)?;
+        let events = reader.parse_events_page("root", 0, 10)?;
         let event_ids: Vec<&str> = events.events.iter().map(|e| e.id.as_str()).collect();
         assert_eq!(
             event_ids,
@@ -1208,11 +1172,11 @@ mod tests {
             },
             dir.clone(),
         );
-        let overview = omitted.parse_overview(&root_path(&dir))?;
+        let overview = omitted.parse_overview("root")?;
         assert_eq!((overview.message_count, overview.event_count), (None, None));
 
         let timeline = engine(TestSpec::default_spec(), dir.clone());
-        let overview = timeline.parse_overview(&root_path(&dir))?;
+        let overview = timeline.parse_overview("root")?;
         // timeline 派:成员双半 + marker(3 条消息、3 个事件)。
         assert_eq!(
             (overview.message_count, overview.event_count),
@@ -1226,7 +1190,7 @@ mod tests {
             },
             dir.clone(),
         );
-        let overview = declared.parse_overview(&root_path(&dir))?;
+        let overview = declared.parse_overview("root")?;
         // Declared 派:原始计数 1 + marker 数 1。
         assert_eq!(
             (overview.message_count, overview.event_count),
@@ -1248,11 +1212,11 @@ mod tests {
             },
             dir.clone(),
         );
-        let summary = rows.parse_summary(&root_path(&dir))?;
+        let summary = rows.parse_summary("root")?;
         assert_eq!(summary.title, "rows root");
 
         let transcript = engine(TestSpec::default_spec(), dir.clone());
-        let summary = transcript.parse_summary(&root_path(&dir))?;
+        let summary = transcript.parse_summary("root")?;
         assert!(summary.title.starts_with("parsed "));
         assert_eq!(transcript.spec.parse_calls.load(Ordering::SeqCst), 1);
 
@@ -1267,12 +1231,12 @@ mod tests {
         let spec = TestSpec::default_spec();
 
         let first = ReaderEngine::new(spec.clone(), dir.clone(), store.clone());
-        first.parse_summary(&root_path(&dir))?;
+        first.parse_summary("root")?;
         assert_eq!(spec.parse_calls.load(Ordering::SeqCst), 1);
 
         // 新实例内存缓存为空,应命中持久层而不是重新解析。
         let second = ReaderEngine::new(spec.clone(), dir.clone(), store.clone());
-        second.parse_summary(&root_path(&dir))?;
+        second.parse_summary("root")?;
         assert_eq!(spec.parse_calls.load(Ordering::SeqCst), 1);
 
         fs::remove_dir_all(&dir).ok();
