@@ -3,8 +3,11 @@ import type { ProviderAppState, ProviderView } from "./generated";
 import {
   applyBlockers,
   applyCandidates,
+  emptyModelForm,
   entriesForProvider,
+  hasModelId,
   initialApplySelection,
+  mergeFetchedModels,
   normalizeProviderIdInput,
   protocolCompatible,
   reasoningEffortMappingText,
@@ -353,3 +356,49 @@ describe("applyCandidates", () => {
     expect(candidates).toHaveLength(1);
   });
 });
+
+describe("hasModelId", () => {
+  it("matches ids after trimming both sides", () => {
+    expect(hasModelId(["glm-4.5", "deepseek-chat"], " glm-4.5 ")).toBe(true);
+    expect(hasModelId(["glm-4.5"], "glm-4.6")).toBe(false);
+  });
+
+  it("stays case sensitive like the backend", () => {
+    expect(hasModelId(["glm-4.5"], "GLM-4.5")).toBe(false);
+  });
+});
+
+describe("mergeFetchedModels", () => {
+  it("adds new models and skips ids already in the catalog", () => {
+    const existing = [{ ...emptyModelForm("glm-4.5"), id: "glm-4.5", label: "GLM 4.5" }];
+    const { added, skipped } = mergeFetchedModels(existing, [
+      { id: "glm-4.5", name: "GLM 4.5" },
+      { id: "glm-4.6", name: "GLM 4.6" },
+    ]);
+    expect(skipped.map((model) => model.id)).toEqual(["glm-4.5"]);
+    expect(added).toHaveLength(1);
+    expect(added[0]).toMatchObject({ id: "glm-4.6", label: "GLM 4.6" });
+  });
+
+  it("falls back to the id when the fetched model has no name", () => {
+    const { added } = mergeFetchedModels([], [{ id: "glm-4.6" }]);
+    expect(added[0].label).toBe("glm-4.6");
+  });
+
+  it("skips repeated ids inside the fetched list", () => {
+    const { added, skipped } = mergeFetchedModels([], [
+      { id: "glm-4.6" },
+      { id: "glm-4.6" },
+    ]);
+    expect(added).toHaveLength(1);
+    expect(skipped.map((model) => model.id)).toEqual(["glm-4.6"]);
+  });
+
+  it("compares ids with the same trimming as the backend", () => {
+    const existing = [{ ...emptyModelForm("glm-4.5 "), id: "glm-4.5 " }];
+    const { added, skipped } = mergeFetchedModels(existing, [{ id: "glm-4.5" }]);
+    expect(added).toHaveLength(0);
+    expect(skipped).toHaveLength(1);
+  });
+});
+

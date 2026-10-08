@@ -1,8 +1,10 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
+import ConfirmDialog from "@shared/ui/ConfirmDialog.vue";
 import DialogShell from "@shared/ui/DialogShell.vue";
 import { extractErrorMessage } from "@shared/lib/errors";
 import { fetchProviderModels, fetchProviderModelsDirect } from "../../api";
+import { hasModelId } from "../../model";
 import type { FetchedModel, ProviderProtocol } from "../../generated";
 
 type ProviderFetchModelsDialogProps = {
@@ -16,6 +18,9 @@ type ProviderFetchModelsDialogProps = {
   baseUrl: string;
   // 直连拉取使用的当次输入密钥。
   apiKey: string;
+  // 当前模型目录里已有的模型 ID：命中者以勾选状态展示且不可取消，默认不加入；
+  // 点击时弹窗提示已存在。
+  existingIds: string[];
 };
 
 const props = defineProps<ProviderFetchModelsDialogProps>();
@@ -30,6 +35,8 @@ const errorText = ref("");
 const models = ref<FetchedModel[]>([]);
 const fetchedUrl = ref("");
 const selected = ref<Record<string, boolean>>({});
+// 点击已加入条目时展示的提示，内容是命中的模型 ID。
+const duplicatePromptId = ref("");
 
 watch(
   () => props.open,
@@ -39,6 +46,7 @@ watch(
       fetchedUrl.value = "";
       selected.value = {};
       errorText.value = "";
+      duplicatePromptId.value = "";
       void runFetch();
     }
   }
@@ -70,6 +78,10 @@ async function runFetch() {
 }
 
 const selectedModels = computed(() => models.value.filter((model) => selected.value[model.id]));
+
+function isExistingId(modelId: string): boolean {
+  return hasModelId(props.existingIds, modelId);
+}
 
 function confirm() {
   // 按声明 emit FetchedModel[]（含 name），显示名的取舍交给父层。
@@ -111,14 +123,32 @@ function confirm() {
 
     <div v-else class="providers-fetched-list">
       <p class="providers-section-hint">拉取地址：{{ fetchedUrl }}</p>
-      <label
-        v-for="model in models"
-        :key="model.id"
-        class="providers-fetched-item"
-      >
-        <input v-model="selected[model.id]" type="checkbox" />
-        <span>{{ model.id }}<template v-if="model.name"> · {{ model.name }}</template></span>
-      </label>
+      <template v-for="model in models" :key="model.id">
+        <label v-if="!isExistingId(model.id)" class="providers-fetched-item">
+          <input v-model="selected[model.id]" type="checkbox" />
+          <span>{{ model.id }}<template v-if="model.name"> · {{ model.name }}</template></span>
+        </label>
+        <label v-else class="providers-fetched-item providers-fetched-item--existing">
+          <input
+            type="checkbox"
+            :checked="true"
+            @click.prevent="duplicatePromptId = model.id"
+          />
+          <span>{{ model.id }}<template v-if="model.name"> · {{ model.name }}</template></span>
+        </label>
+      </template>
     </div>
+
+    <ConfirmDialog
+      :open="duplicatePromptId !== ''"
+      title-id="provider-fetch-duplicate-title"
+      eyebrow="模型目录"
+      title="模型已在目录中"
+      :description="`「${duplicatePromptId}」已在当前模型目录里，无需重复加入。`"
+      confirm-label="知道了"
+      confirm-button-class-name="primary-button"
+      @close="duplicatePromptId = ''"
+      @confirm="duplicatePromptId = ''"
+    />
   </DialogShell>
 </template>

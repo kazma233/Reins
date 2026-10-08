@@ -1,11 +1,13 @@
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from "vue";
+import ConfirmDialog from "@shared/ui/ConfirmDialog.vue";
 import DialogShell from "@shared/ui/DialogShell.vue";
 import AppInput from "@shared/ui/AppInput.vue";
 import AppSelect from "@shared/ui/AppSelect.vue";
 import type { ModelsDevMeta, ProviderModelInput } from "../../generated";
 import {
   applyModelsDevMeta,
+  hasModelId,
   parseReasoningLevels,
   reasoningLevelsText,
   toggleReasoning,
@@ -17,6 +19,8 @@ type ProviderModelDialogProps = {
   open: boolean;
   // models.dev 补全按提供商名 + 模型 ID 查公共目录，新增/编辑态都用表单里的提供商 ID。
   providerId: string;
+  // 当前模型目录里已有的模型 ID：命中时拒绝加入并弹窗提示。
+  existingIds: string[];
 };
 
 const props = defineProps<ProviderModelDialogProps>();
@@ -43,6 +47,8 @@ function emptyDraft() {
 const draft = reactive(emptyDraft());
 // models.dev 补全查询由弹窗自持，这里只保留开关。
 const modelsDevOpen = ref(false);
+// 提交的重名提示，内容是命中的模型 ID。
+const duplicatePromptId = ref("");
 
 // 可空布尔三态在 AppSelect 的 string 契约下用 '' 表示未设置。
 const TRI_STATE_OPTIONS = [
@@ -75,6 +81,7 @@ watch(
     if (open) {
       Object.assign(draft, emptyDraft());
       modelsDevOpen.value = false;
+      duplicatePromptId.value = "";
     }
   }
 );
@@ -90,6 +97,10 @@ function confirm() {
   const id = draft.id.trim();
   if (!id) {
     showNotice("请先填写模型 ID。", "error");
+    return;
+  }
+  if (hasModelId(props.existingIds, id)) {
+    duplicatePromptId.value = id;
     return;
   }
   emit("confirm", {
@@ -186,6 +197,18 @@ function confirm() {
       :model-id="draft.id.trim()"
       @close="modelsDevOpen = false"
       @apply="applyModelsDevCompletion"
+    />
+
+    <ConfirmDialog
+      :open="duplicatePromptId !== ''"
+      title-id="provider-model-duplicate-title"
+      eyebrow="模型目录"
+      title="模型 ID 已存在"
+      :description="`「${duplicatePromptId}」已在当前模型目录里，请换一个 ID，或直接编辑已有条目。`"
+      confirm-label="知道了"
+      confirm-button-class-name="primary-button"
+      @close="duplicatePromptId = ''"
+      @confirm="duplicatePromptId = ''"
     />
   </DialogShell>
 </template>

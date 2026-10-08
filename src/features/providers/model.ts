@@ -1,4 +1,5 @@
 import type {
+  FetchedModel,
   ModelsDevMatchResult,
   ProviderAppEntry,
   ProviderAppEntryStatus,
@@ -387,5 +388,40 @@ export function formToInput(form: ProviderFormState): ProviderUpsertInput {
       reasoningLevels: model.reasoningLevels ?? null,
     })),
   };
+}
+
+// ---------------------------------------------------------------------------
+// 模型目录加入
+// ---------------------------------------------------------------------------
+
+// 模型 ID 比较口径与后端 normalize_model_record 一致：trim 后精确匹配。
+function modelIdKey(id: string): string {
+  return id.trim();
+}
+
+export function hasModelId(ids: readonly string[], id: string): boolean {
+  const key = modelIdKey(id);
+  return ids.some((existing) => modelIdKey(existing) === key);
+}
+
+// 拉取结果并入模型目录：与目录已有 ID（含本次先加入的）重复的模型默认忽略，
+// 忽略项返回给调用方做弹窗提示。
+export function mergeFetchedModels(
+  existing: ProviderModelForm[],
+  fetched: FetchedModel[]
+): { added: ProviderModelForm[]; skipped: FetchedModel[] } {
+  const seen = new Set(existing.map((model) => modelIdKey(model.id)));
+  const added: ProviderModelForm[] = [];
+  const skipped: FetchedModel[] = [];
+  for (const model of fetched) {
+    const key = modelIdKey(model.id);
+    if (seen.has(key)) {
+      skipped.push(model);
+      continue;
+    }
+    seen.add(key);
+    added.push({ ...emptyModelForm(model.id), id: model.id, label: model.name ?? model.id });
+  }
+  return { added, skipped };
 }
 

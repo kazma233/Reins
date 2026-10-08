@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from "vue";
+import ConfirmDialog from "@shared/ui/ConfirmDialog.vue";
 import DialogShell from "@shared/ui/DialogShell.vue";
 import AppInput from "@shared/ui/AppInput.vue";
 import AppSelect from "@shared/ui/AppSelect.vue";
@@ -8,6 +9,7 @@ import type { FetchedModel, ModelsDevMeta, ProviderModelInput } from "../../gene
 import {
   applyModelsDevMeta,
   emptyModelForm,
+  mergeFetchedModels,
   normalizeProviderIdInput,
   PROTOCOL_OPTIONS,
   toggleReasoning,
@@ -50,6 +52,8 @@ const modelsDevDialog = reactive({
 // 可选密钥：随表单状态一并落盘，弹窗不再单独拉取。
 const fetchDialogOpen = ref(false);
 const modelDialogOpen = ref(false);
+// 加入时被跳过的重名模型 ID，非空时弹窗提示。
+const skippedPromptIds = ref<string[]>([]);
 
 // 新增 step 1 只展示服务商元数据；step 2（及编辑态）展示模型目录。
 const showMeta = computed(() => !props.creating || props.step === 1);
@@ -94,6 +98,7 @@ function resetTransient() {
   modelsDevDialog.modelId = "";
   fetchDialogOpen.value = false;
   modelDialogOpen.value = false;
+  skippedPromptIds.value = [];
 }
 
 // Key 可选：留空时面板只保存提供商元数据，同时清除已存 Key。
@@ -103,14 +108,11 @@ function confirm() {
 
 // 拉取/新增都在子弹窗内完成，确认后把结果落回模型目录。
 function addFetchedModels(models: FetchedModel[]) {
-  for (const model of models) {
-    props.form.models.push({
-      ...emptyModelForm(model.id),
-      id: model.id,
-      label: model.name ?? model.id,
-    });
-  }
+  const { added, skipped } = mergeFetchedModels(props.form.models, models);
+  props.form.models.push(...added);
   fetchDialogOpen.value = false;
+  // 拉取结果内部重名（弹窗标记覆盖不到）时，被忽略项也弹窗提示。
+  skippedPromptIds.value = skipped.map((model) => model.id);
 }
 
 function addModelRow(model: ProviderModelInput) {
@@ -341,6 +343,7 @@ function applyModelsDevCompletion(meta: ModelsDevMeta) {
       :protocol="form.protocol"
       :base-url="form.baseUrl"
       :api-key="form.apiKey"
+      :existing-ids="form.models.map((model) => model.id)"
       @close="fetchDialogOpen = false"
       @confirm="addFetchedModels"
     />
@@ -349,6 +352,7 @@ function applyModelsDevCompletion(meta: ModelsDevMeta) {
       v-if="showModels"
       :open="modelDialogOpen"
       :provider-id="form.originalProviderId ?? form.providerId"
+      :existing-ids="form.models.map((model) => model.id)"
       @close="modelDialogOpen = false"
       @confirm="addModelRow"
     />
@@ -359,6 +363,18 @@ function applyModelsDevCompletion(meta: ModelsDevMeta) {
       :model-id="modelsDevDialog.modelId"
       @close="modelsDevDialog.open = false"
       @apply="applyModelsDevCompletion"
+    />
+
+    <ConfirmDialog
+      :open="skippedPromptIds.length > 0"
+      title-id="provider-fetched-skipped-title"
+      eyebrow="模型目录"
+      title="部分模型未加入"
+      :description="`以下模型已在模型目录中，已自动忽略：${skippedPromptIds.join('、')}。`"
+      confirm-label="知道了"
+      confirm-button-class-name="primary-button"
+      @close="skippedPromptIds = []"
+      @confirm="skippedPromptIds = []"
     />
   </DialogShell>
 </template>
