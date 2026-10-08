@@ -359,12 +359,21 @@ fn zcode_classifies_timeline_by_semantics_and_parses_parts() -> Result<()> {
         .find(|event| event.id == "msg_todo")
         .expect("todo reminder becomes an event");
     assert!(todo_event.summary.contains("todo reminder"));
+    // raw payload 给整行 + part 表内容：正文在 parts 里，data 是 message 行原文
     assert!(todo_event
         .payload
         .as_ref()
-        .and_then(|payload| payload.get("text"))
-        .and_then(Value::as_str)
-        .is_some_and(|text| text.contains("分析存储")));
+        .and_then(|payload| payload.get("parts"))
+        .and_then(Value::as_array)
+        .is_some_and(|parts| parts.iter().any(|part| part
+            .get("text")
+            .and_then(Value::as_str)
+            .is_some_and(|text| text.contains("分析存储")))));
+    assert!(todo_event
+        .payload
+        .as_ref()
+        .and_then(|payload| payload.get("data"))
+        .is_some_and(|data| data.get("role").is_some()));
     let timeline_event = detail
         .events
         .iter()

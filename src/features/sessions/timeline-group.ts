@@ -26,12 +26,24 @@ export function isMarkdownBlock(kind: string): boolean {
   return CONVERSATION_TEXT_KINDS.has(kind);
 }
 
+// 杂项折叠行的行首标签：块名是协议词汇，能说成人话的在这里收口，
+// 其余保持块名（未支持的块要能看出是什么）。
+const COLLAPSED_BLOCK_LABELS: Record<string, string> = {
+  context_injection: "上下文",
+  local_command: "命令",
+  local_command_output: "命令输出",
+  system_prompt: "系统提示"
+};
+
 export type ToolRowStatus = "ok" | "error" | "no-result";
 
 export type ToolRowItem = {
   kind: "tool";
   key: string;
   toolName: string;
+  // 行首 tag 文案：这次调用做的是什么（运行命令 / 已读取 / 已编辑…）
+  label: string;
+  // tag 右侧的摘要：命令、路径等具体对象；没有参数时为空
   summary: string;
   detailText: string | null;
   status: ToolRowStatus;
@@ -68,6 +80,25 @@ export type CollapsedBlockItem = {
   markdown: boolean;
 };
 
+// 消息没有正文、只有来源给的错误（如 Pi 的 stopReason=error）：错误文案直接
+// 可读，原始报文收在展开区，不再当成杂项块丢一行 JSON 预览。
+export type MessageErrorItem = {
+  kind: "message-error";
+  key: string;
+  text: string;
+  detailText: string;
+};
+
+// 消息里的图片：reference 是可直接用于 src 的引用（data: URL 或外链）。
+// payload 留给外链行展开看原始报文，不在分组阶段序列化——data: URL 的 payload
+// 就是那份 base64，提前 stringify 只会白占内存。
+export type ImageItem = {
+  kind: "image";
+  key: string;
+  reference: string;
+  payload: unknown;
+};
+
 export type TextItem = {
   kind: "text";
   key: string;
@@ -81,7 +112,9 @@ export type TimelineItem =
   | ToolRowItem
   | SubagentEntryItem
   | SubagentGroupItem
-  | CollapsedBlockItem;
+  | CollapsedBlockItem
+  | MessageErrorItem
+  | ImageItem;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
@@ -99,6 +132,11 @@ function stringifyValue(value: unknown): string | null {
   } catch {
     return String(value);
   }
+}
+
+// 原始报文序列化：图片行的原始数据可能很大，只在需要时（展开）才转换。
+export function formatPayloadText(value: unknown): string {
+  return stringifyValue(value) ?? "";
 }
 
 function firstLine(text: string, maxLength = 80): string {
@@ -206,10 +244,7 @@ function toolVerb(toolName: string): string {
   return toolName;
 }
 
-function toolRowSummary(toolName: string, objectText: string | null): string {
-  const verb = toolVerb(toolName);
-  return objectText ? `${verb} · ${objectText}` : verb;
-}
+
 
 function makeToolRow(
   message: SessionMessage,
@@ -221,7 +256,8 @@ function makeToolRow(
     kind: "tool",
     key: `${message.id}:${blockIndex}`,
     toolName,
-    summary: toolRowSummary(toolName, argumentTextFromBlock(block)),
+    label: toolVerb(toolName),
+    summary: argumentTextFromBlock(block) ?? "",
     detailText: callInputText(block),
     status: "no-result"
   };
@@ -398,12 +434,41 @@ function processMessage(
           kind: "tool",
           key: `${message.id}:${blockIndex}`,
           toolName,
-          summary: toolRowSummary(toolName, null),
+          label: toolVerb(toolName),
+          summary: "",
           detailText: resultOutputText(block),
           status: resultIsError(block) ? "error" : "ok"
         });
       }
       return;
+    }
+
+    if (block.kind === "image") {
+      const reference = block.text?.trim();
+      if (reference) {
+        flushText();
+        items.push({
+          kind: "image",
+          key: `${message.id}:${blockIndex}`,
+          reference,
+          payload: block.payload
+        });
+        return;
+      }
+    }
+
+    if (block.kind === "message_error") {
+      const errorText = block.text?.trim();
+      if (errorText) {
+        flushText();
+        items.push({
+          kind: "message-error",
+          key: `${message.id}:${blockIndex}`,
+          text: errorText,
+          detailText: stringifyValue(block.payload) ?? ""
+        });
+        return;
+      }
     }
 
     // 其余块（compactionSummary、patch、file、unsupported…）按原文折叠行渲染
@@ -414,7 +479,7 @@ function processMessage(
         kind: "collapsed-block",
         key: `${message.id}:${blockIndex}`,
         text,
-        label: block.kind,
+        label: COLLAPSED_BLOCK_LABELS[block.kind] ?? block.kind,
         markdown: false
       });
     }
@@ -486,10 +551,17 @@ export function itemSearchText(item: TimelineItem): string {
       parts.push(item.role, ...item.blocks.map((block) => block.text ?? ""));
       break;
     case "tool":
-      parts.push(item.toolName, item.summary, item.detailText ?? "");
+      parts.push(item.toolName, item.label, item.summary, item.detailText ?? "");
       break;
     case "collapsed-block":
       parts.push(item.text);
+      break;
+    case "message-error":
+      parts.push(item.text, item.detailText);
+      break;
+    // 原始 payload 不进搜索索引：内联图片的那份 base64 搜了也没用
+    case "image":
+      parts.push(item.reference);
       break;
     case "subagent": {
       const { nestedMessages, task, stderr, errorMessage } = item.run;

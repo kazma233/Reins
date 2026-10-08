@@ -213,7 +213,17 @@ fn dsh_decodes_multiframe_zstd_and_picks_highest_generation() -> Result<()> {
         .iter()
         .any(|block| block.kind == "text" && block.text.as_deref() == Some("frame three answer")));
     // permission/preset 走事件时间线
+    let permission = detail
+        .events
+        .iter()
+        .find(|event| event.kind == "permission/preset")
+        .expect("permission event");
     assert!(detail.events.iter().any(|event| event.kind == "permission/preset"));
+    // raw payload 给整条记录（含 seq/type 信封），不是只给 data
+    let payload = permission.payload.as_ref().expect("raw payload");
+    assert_eq!(payload.get("type").and_then(Value::as_str), Some("permission/preset"));
+    assert!(payload.get("seq").is_some());
+    assert!(payload.get("data").is_some());
     fs::remove_dir_all(&home).ok();
     Ok(())
 }

@@ -701,11 +701,17 @@ fn parse_timeline_record(index: usize, value: &Value, session_id: &str) -> Optio
             }
 
             if blocks.is_empty() {
-                blocks.push(super::empty_message_block(
-                    "Claude Code",
-                    "content was empty after sanitization",
-                    Some(message.clone()),
-                ));
+                // 整条都是宿主注入的上下文时保留原文，其余空消息仍退化成原始报文诊断块
+                blocks.push(
+                    super::injected_context_block(message.get("content"), message)
+                        .unwrap_or_else(|| {
+                            super::empty_message_block(
+                                "Claude Code",
+                                "content was empty after sanitization",
+                                Some(message.clone()),
+                            )
+                        }),
+                );
             }
 
             return Some(TimelineRecord::Message(SessionMessage {
@@ -802,11 +808,49 @@ fn load_events_for_family(family: &ClaudeSessionFamily) -> Result<Vec<SessionEve
     Ok(events)
 }
 
+// Claude Code 的本地命令记录：斜杠命令自身与它的输出分别成块，
+// 提取可读文本给前端渲染（原始报文在会话文件里，界面不需要再看 JSON）。
+fn local_command_block(text: &str) -> Option<ContentBlock> {
+    if let Some(name) = tag_text(text, "command-name") {
+        let args = tag_text(text, "command-args").unwrap_or_default();
+        let summary = if args.is_empty() {
+            name
+        } else {
+            format!("{name} {args}")
+        };
+        return Some(super::diagnostic_block("local_command", summary, None));
+    }
+
+    for tag in ["local-command-stdout", "local-command-stderr"] {
+        if let Some(output) = tag_text(text, tag).filter(|output| !output.trim().is_empty()) {
+            return Some(super::diagnostic_block("local_command_output", output, None));
+        }
+    }
+
+    None
+}
+
+// 取 <tag>…</tag> 之间的文本；标签不成对时返回 None，不猜。
+fn tag_text(text: &str, tag: &str) -> Option<String> {
+    let open = format!("<{tag}>");
+    let close = format!("</{tag}>");
+    let start = text.find(&open)? + open.len();
+    let end = start + text[start..].find(&close)?;
+    Some(text[start..end].trim().to_string())
+}
+
 fn parse_message_blocks(content: Option<&Value>, role: &str) -> Vec<ContentBlock> {
     match content {
         Some(Value::String(text)) => {
-            if role == "user" && super::is_transport_message(text) {
-                return Vec::new();
+            if role == "user" {
+                // 本地命令记录（/exit 这类斜杠命令与其输出）既不是对话，也不该当噪音丢掉
+                if let Some(block) = local_command_block(text) {
+                    return vec![block];
+                }
+
+                if super::is_transport_message(text) {
+                    return Vec::new();
+                }
             }
 
             vec![ContentBlock {
@@ -823,9 +867,18 @@ fn parse_message_blocks(content: Option<&Value>, role: &str) -> Vec<ContentBlock
             .filter_map(|item| {
                 let kind =
                     super::json_string(item, &["type"]).unwrap_or_else(|| "unknown".to_string());
+                // 图片块没有文本：把 source.data / media_type 还原成 data URL 当正文，
+                // 前端才能直接渲染
                 let text = super::json_string(item, &["text"])
                     .or_else(|| super::json_string(item, &["thinking"]))
-                    .or_else(|| super::json_string(item, &["content"]));
+                    .or_else(|| super::json_string(item, &["content"]))
+                    .or_else(|| {
+                        if matches!(kind.as_str(), "image" | "input_image") {
+                            super::image_reference(item)
+                        } else {
+                            None
+                        }
+                    });
 
                 Some(ContentBlock {
                     kind,

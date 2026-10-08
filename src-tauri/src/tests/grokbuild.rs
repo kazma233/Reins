@@ -485,6 +485,11 @@ fn grokbuild_normalizes_messages_without_stream_duplicates_or_encrypted_content(
     let detail = read_detail(reader, &path)?;
     assert_eq!(detail.messages.len(), 6);
     assert_eq!(detail.messages[1].blocks[1].kind, "image");
+    // 图片块正文是引用：前端据此渲染，而不是回退成一行 JSON
+    assert_eq!(
+        detail.messages[1].blocks[1].text.as_deref(),
+        Some("https://example.invalid/image.png")
+    );
     assert_eq!(
         detail.messages[2].blocks[0].text.as_deref(),
         Some("Synthetic thought")
@@ -686,6 +691,13 @@ fn grokbuild_large_events_page_and_auxiliary_changes_are_fresh() -> Result<()> {
     let page = reader.parse_events_page(&path, 0, 40)?;
     assert_eq!(page.total_count, 1);
     assert_eq!(page.events[0].kind, "future_event");
+    // raw 页给整条记录：白名单外的字段也要在
+    let payload = page.events[0]
+        .payload
+        .as_ref()
+        .expect("raw payload is the whole record");
+    assert_eq!(payload.get("outcome").and_then(Value::as_str), Some("completed"));
+    // 加密字段是唯一例外，不下发
     assert!(!serde_json::to_string(&page)?.contains("encrypted_content"));
     write_jsonl(
         &path.with_file_name("chat_history.jsonl"),

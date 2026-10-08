@@ -903,7 +903,7 @@ fn subagent_lifecycle_events(root_path: &Path, members: &[CodexSessionRow]) -> V
                                 kind: "subagent_spawned".to_string(),
                                 timestamp,
                                 summary: format!("Sub-agent spawned: {}", subagent_label(row)),
-                                payload: Some(payload.clone()),
+                                payload: Some(super::record_payload(&value)),
                                 session_id: Some(row.summary.source_session_id.clone()),
                             });
                         }
@@ -918,7 +918,7 @@ fn subagent_lifecycle_events(root_path: &Path, members: &[CodexSessionRow]) -> V
                                 kind: "subagent_closed".to_string(),
                                 timestamp,
                                 summary: format!("Sub-agent closed: {}", subagent_label(row)),
-                                payload: Some(payload.clone()),
+                                payload: Some(super::record_payload(&value)),
                                 session_id: Some(row.summary.source_session_id.clone()),
                             });
                         }
@@ -971,7 +971,7 @@ fn subagent_lifecycle_events(root_path: &Path, members: &[CodexSessionRow]) -> V
                         kind: "subagent_notification".to_string(),
                         timestamp,
                         summary: format!("Sub-agent notification: {}", subagent_label(row)),
-                        payload: Some(notification),
+                        payload: Some(super::record_payload(&value)),
                         session_id: Some(row.summary.source_session_id.clone()),
                     });
                 }
@@ -983,6 +983,7 @@ fn subagent_lifecycle_events(root_path: &Path, members: &[CodexSessionRow]) -> V
     events
 }
 
+// raw 页展示的是原始记录：事件的 payload 一律给整条记录，摘要仍按内层字段生成。
 fn parse_timeline_record(index: usize, value: &Value) -> Option<TimelineRecord> {
     let timestamp = value
         .get("timestamp")
@@ -1009,17 +1010,25 @@ fn parse_timeline_record(index: usize, value: &Value) -> Option<TimelineRecord> 
                         kind: "developer_message".to_string(),
                         timestamp,
                         summary: super::summarize_event("developer_message", payload),
-                        payload: Some(payload.clone()),
+                        payload: Some(super::record_payload(value)),
                         session_id: super::json_string(value, &["session_id"]),
                     }));
                 }
 
                 if blocks.is_empty() {
-                    blocks.push(super::empty_message_block(
-                        "Codex",
-                        "content was empty after sanitization",
-                        Some(payload.clone()),
-                    ));
+                    // 整条消息都是宿主注入的上下文（AGENTS.md 指令、environment_context）
+                    // 时保留原文：这类消息没有对话内容，但内容本身要能看；其余空消息
+                    // 仍退化成一行原始报文诊断块。
+                    blocks.push(
+                        super::injected_context_block(payload.get("content"), payload)
+                            .unwrap_or_else(|| {
+                                super::empty_message_block(
+                                    "Codex",
+                                    "content was empty after sanitization",
+                                    Some(payload.clone()),
+                                )
+                            }),
+                    );
                 }
 
                 return Some(TimelineRecord::Message(SessionMessage {
@@ -1051,7 +1060,7 @@ fn parse_timeline_record(index: usize, value: &Value) -> Option<TimelineRecord> 
                     kind: payload_type.clone(),
                     timestamp,
                     summary: super::summarize_event(payload_type.as_str(), payload),
-                    payload: Some(payload.clone()),
+                    payload: Some(super::record_payload(value)),
                     session_id: super::json_string(value, &["session_id"]),
                 }));
             }
@@ -1065,7 +1074,7 @@ fn parse_timeline_record(index: usize, value: &Value) -> Option<TimelineRecord> 
                 kind: event_kind.clone(),
                 timestamp,
                 summary: super::summarize_event(event_kind.as_str(), payload),
-                payload: Some(payload.clone()),
+                payload: Some(super::record_payload(value)),
                 session_id: super::json_string(value, &["session_id"]),
             }));
         }
@@ -1076,7 +1085,7 @@ fn parse_timeline_record(index: usize, value: &Value) -> Option<TimelineRecord> 
                 kind: kind.clone(),
                 timestamp,
                 summary: super::summarize_event(kind.as_str(), value),
-                payload: Some(value.clone()),
+                payload: Some(super::record_payload(value)),
                 session_id: super::json_string(value, &["session_id"]),
             }));
         }
@@ -1087,7 +1096,7 @@ fn parse_timeline_record(index: usize, value: &Value) -> Option<TimelineRecord> 
                 kind: kind.clone(),
                 timestamp,
                 summary: super::summarize_event(kind.as_str(), value),
-                payload: Some(value.clone()),
+                payload: Some(super::record_payload(value)),
                 session_id: super::json_string(value, &["session_id"]),
             }));
         }
@@ -1098,7 +1107,7 @@ fn parse_timeline_record(index: usize, value: &Value) -> Option<TimelineRecord> 
                 kind,
                 timestamp,
                 summary: super::summarize_event("unknown", value),
-                payload: Some(value.clone()),
+                payload: Some(super::record_payload(value)),
                 session_id: super::json_string(value, &["session_id"]),
             }));
         }
@@ -1118,6 +1127,21 @@ fn parse_message_blocks(content: Option<&Value>, role: &str) -> Vec<ContentBlock
 
                 if role == "user" && text.as_deref().is_some_and(super::is_transport_message) {
                     return None;
+                }
+
+                // 粘贴进来的图片（input_image / image）没有文本字段：把引用提成正文，
+                // 否则会被当成未支持块，只能看 JSON
+                if matches!(kind.as_str(), "input_image" | "image") {
+                    if let Some(reference) = super::image_reference(item) {
+                        return Some(ContentBlock {
+                            kind: "image".to_string(),
+                            text: Some(reference),
+                            tool_name: None,
+                            tool_call_id: None,
+                            is_error: None,
+                            payload: Some(item.clone()),
+                        });
+                    }
                 }
 
                 if text.is_none() && !matches!(kind.as_str(), "tool_use" | "tool_result") {

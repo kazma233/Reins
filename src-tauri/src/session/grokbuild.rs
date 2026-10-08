@@ -680,9 +680,10 @@ fn messages(path: &Path) -> Result<Vec<SessionMessage>> {
                     match required(item, "type")? {
                         "text" => blocks.push(block("text", Some(required(item, "text")?.into()))),
                         "image" => {
-                            let mut image = block("image", None);
+                            let url = required(item, "url")?;
+                            let mut image = block("image", Some(url.into()));
                             image.payload =
-                                Some(json!({"type":"image", "url": required(item, "url")?}));
+                                Some(json!({"type":"image", "url": url}));
                             blocks.push(image);
                         }
                         _ => bail!("Unsupported Grok Build user content type"),
@@ -765,23 +766,6 @@ fn events_page(path: &Path, offset: usize, limit: usize) -> Result<SessionEventP
     scan(path, "events.jsonl", |index, value| {
         let kind = required(&value, "type")?;
         if total >= offset && total < offset.saturating_add(limit) {
-            let payload = [
-                "tool_name",
-                "duration_ms",
-                "outcome",
-                "tool_call_id",
-                "turn_number",
-                "model_id",
-                "session_relationship",
-            ]
-            .into_iter()
-            .filter_map(|key| {
-                value
-                    .get(key)
-                    .filter(|v| v.is_string() || v.is_number() || v.is_boolean())
-                    .map(|v| (key.to_owned(), v.clone()))
-            })
-            .collect::<serde_json::Map<_, _>>();
             events.push(SessionEvent {
                 id: format!("grok-event-{index}"),
                 kind: kind.into(),
@@ -789,7 +773,8 @@ fn events_page(path: &Path, offset: usize, limit: usize) -> Result<SessionEventP
                     .as_str()
                     .and_then(crate::support::time::parse_timestamp),
                 summary: kind.into(),
-                payload: (!payload.is_empty()).then_some(Value::Object(payload)),
+                // raw 页展示原始记录：不裁剪字段（加密字段仍不下发）
+                payload: Some(super::record_payload(&value)),
                 session_id: None,
             });
         }

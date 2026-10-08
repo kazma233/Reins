@@ -904,9 +904,10 @@ fn load_events_for_family(family: &ZcodeSessionFamily) -> Result<Vec<SessionEven
 
 // 非 timeline 语义的消息(todo_reminder、timeline_event 等)转事件;正文不
 // 在 message.data 里而在 part 表,summary 与 payload 都要借 part 文本补全。
+// raw 页要看到原始记录：message 行 + part 表内容一起给出去（事件类型的正文
+// 在 part 表里）。摘要仍按 part 文本生成可读文案。
 fn event_from_message_row(row: ZcodeMessageRow, parts: &[Value]) -> SessionEvent {
     let timestamp = message_row_timestamp(&row);
-    let mut payload = row.value.clone();
     let mut summary = super::summarize_event(&row.kind, &row.value);
 
     match row.kind.as_str() {
@@ -919,10 +920,7 @@ fn event_from_message_row(row: ZcodeMessageRow, parts: &[Value]) -> SessionEvent
                 .join("\n");
 
             if !text.is_empty() {
-                summary = format!("todo reminder: {}", super::normalize_title(text.clone()));
-                if let Some(object) = payload.as_object_mut() {
-                    object.insert("text".to_string(), Value::String(text));
-                }
+                summary = format!("todo reminder: {}", super::normalize_title(text));
             }
         }
         "timeline_event" => {
@@ -933,23 +931,25 @@ fn event_from_message_row(row: ZcodeMessageRow, parts: &[Value]) -> SessionEvent
 
             if let Some(timeline_type) = timeline_type {
                 summary = format!("timeline: {timeline_type}");
-                if let Some(object) = payload.as_object_mut() {
-                    object.insert(
-                        "timelineType".to_string(),
-                        Value::String(timeline_type.clone()),
-                    );
-                }
             }
         }
         _ => {}
     }
+
+    let payload = json!({
+        "id": row.id,
+        "session_id": row.session_id,
+        "time_created": row.time_created,
+        "data": row.value,
+        "parts": parts,
+    });
 
     SessionEvent {
         id: row.id,
         kind: row.kind.clone(),
         timestamp,
         summary,
-        payload: Some(payload),
+        payload: Some(super::record_payload(&payload)),
         session_id: Some(row.session_id),
     }
 }

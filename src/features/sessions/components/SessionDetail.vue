@@ -267,7 +267,7 @@ function handleAgentTabClick(agent: SessionAgent) {
 const timelineFilterPlaceholder = computed(() =>
   timelineTab.value === "messages"
     ? "按消息内容、工具名、块类型筛选"
-    : "按事件类型、摘要、载荷筛选"
+    : "按记录类型、摘要、载荷筛选"
 );
 
 // --- auto-load more when the timeline needs more data ---
@@ -512,7 +512,7 @@ watch(
             type="button"
             @click="timelineTab = 'events'"
           >
-            事件
+            raw
           </button>
           <input
             v-model="timelineFilter"

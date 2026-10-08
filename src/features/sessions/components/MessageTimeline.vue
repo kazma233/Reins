@@ -3,6 +3,8 @@ import type { SessionOverview } from "../types";
 import type { TimelineItem } from "../timeline-group";
 import MessageBlockContent from "./MessageBlockContent.vue";
 import CollapsedBlockRow from "./CollapsedBlockRow.vue";
+import ImageRow from "./ImageRow.vue";
+import MessageErrorRow from "./MessageErrorRow.vue";
 import ToolRow from "./ToolRow.vue";
 import SubagentEntryRow from "./SubagentEntryRow.vue";
 import SubagentGroupRow from "./SubagentGroupRow.vue";
@@ -59,6 +61,8 @@ defineEmits<{ openSubagent: [sessionId: string, label: string] }>();
       </template>
       <ToolRow v-else-if="item.kind === 'tool'" :item="item" />
       <CollapsedBlockRow v-else-if="item.kind === 'collapsed-block'" :item="item" />
+      <MessageErrorRow v-else-if="item.kind === 'message-error'" :item="item" />
+      <ImageRow v-else-if="item.kind === 'image'" :item="item" />
       <SubagentEntryRow v-else-if="item.kind === 'subagent'" :item="item" />
       <SubagentGroupRow
         v-else-if="item.kind === 'subagent-group'"

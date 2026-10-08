@@ -235,7 +235,7 @@ fn build_timeline(header: DshHeader, events: &[Value]) -> DshTranscript {
                         &source_kind,
                         time,
                         summary,
-                        data,
+                        value.clone(),
                         &session_id,
                     );
                     push_surface_item(&mut items, seq, surface_op, None, Some(event));
@@ -298,8 +298,14 @@ fn build_timeline(header: DshHeader, events: &[Value]) -> DshTranscript {
                 let summary = message_first_text(&data)
                     .map(super::normalize_title)
                     .unwrap_or_else(|| kind.to_string());
-                let event =
-                    surface_event(&item_id("event"), kind, time, summary, data, &session_id);
+                let event = surface_event(
+                    &item_id("event"),
+                    kind,
+                    time,
+                    summary,
+                    value.clone(),
+                    &session_id,
+                );
                 push_surface_item(&mut items, seq, surface_op, None, Some(event));
             }
             "session/title" => {
@@ -324,7 +330,7 @@ fn build_timeline(header: DshHeader, events: &[Value]) -> DshTranscript {
                     kind,
                     time,
                     super::summarize_event(kind, &data),
-                    data,
+                    value.clone(),
                     &session_id,
                 );
                 items.events.push((None, event));
@@ -338,7 +344,7 @@ fn build_timeline(header: DshHeader, events: &[Value]) -> DshTranscript {
                         kind,
                         time,
                         super::summarize_event(kind, &data),
-                        data,
+                        value.clone(),
                         &session_id,
                     );
                     items.events.push((None, event));
@@ -391,12 +397,14 @@ fn push_surface_item(
     }
 }
 
+// record 是原始记录本身（含 seq/type 信封）：raw 页要能看全，摘要由调用方从
+// record.data 里提取后传入。
 fn surface_event(
     id: &str,
     kind: &str,
     time: i64,
     summary: String,
-    data: Value,
+    record: Value,
     session_id: &str,
 ) -> SessionEvent {
     SessionEvent {
@@ -404,7 +412,7 @@ fn surface_event(
         kind: kind.to_string(),
         timestamp: Some(time),
         summary,
-        payload: Some(data),
+        payload: Some(super::record_payload(&record)),
         session_id: Some(session_id.to_string()),
     }
 }

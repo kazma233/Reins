@@ -765,6 +765,10 @@ fn parse_message_entry(entry: &PiEntry, session_id: &str) -> SessionMessage {
     };
     let role = super::json_string(message, &["role"]).unwrap_or_else(|| "unknown".to_string());
     let mut blocks = match role.as_str() {
+        // 系统提示：正文为空，提示词按 sections 分块存
+        "system" => system_prompt_block(message)
+            .map(|block| vec![block])
+            .unwrap_or_else(|| vec![super::unsupported_content_block("Pi", Some(message))]),
         "bashExecution" => vec![ContentBlock {
             kind: "bash_execution".to_string(),
             text: Some(
@@ -823,11 +827,23 @@ fn parse_message_entry(entry: &PiEntry, session_id: &str) -> SessionMessage {
     }
 
     if blocks.is_empty() {
-        blocks.push(super::empty_message_block(
-            "Pi",
-            "content was empty after sanitization",
-            Some(message.clone()),
-        ));
+        // 无可见内容的消息按语义分流：助手侧错误显示错误文案，整条都是宿主注入的
+        // 上下文则保留原文，其余才退化成一行原始报文诊断块。
+        let error_message = super::json_string(message, &["errorMessage"])
+            .filter(|text| !text.trim().is_empty());
+        blocks.push(
+            error_message
+                .as_deref()
+                .map(|error| super::message_error_block(error, Some(message.clone())))
+                .or_else(|| super::injected_context_block(message.get("content"), message))
+                .unwrap_or_else(|| {
+                    super::empty_message_block(
+                        "Pi",
+                        "content was empty after sanitization",
+                        Some(message.clone()),
+                    )
+                }),
+        );
     }
 
     SessionMessage {
@@ -954,6 +970,80 @@ fn parse_message_content(role: &str, content: Option<&Value>) -> Vec<ContentBloc
     }
 }
 
+// 系统提示消息：正文为空，提示词按 sections 分块存，另带本次新增/移除的工具。
+// 拼回一段可读文本（段名 + 正文 + 工具名与说明）；工具的 parameters 是机械的
+// JSON schema，不进正文，完整报文仍留在 payload 里。
+fn system_prompt_block(message: &Value) -> Option<ContentBlock> {
+    let sections = message.get("sections").and_then(Value::as_object);
+    let added = tool_entries(message.get("toolsAdded"));
+    let removed = tool_names(message.get("toolsRemoved"));
+
+    if sections.is_none() && added.is_empty() && removed.is_empty() {
+        return None;
+    }
+
+    let mut parts = Vec::new();
+
+    if let Some(sections) = sections {
+        // 首行当折叠行的摘要：这段提示词包含哪些段
+        let names = sections.keys().map(String::as_str).collect::<Vec<_>>().join("、");
+        parts.push(format!("{} 段：{}", sections.len(), names));
+        parts.extend(
+            sections
+                .iter()
+                .map(|(name, value)| format!("## {name}\n{}", value.as_str().unwrap_or_default())),
+        );
+    }
+
+    if !added.is_empty() {
+        parts.push(format!("## 本次加入的工具\n{}", added.join("\n")));
+    }
+
+    if !removed.is_empty() {
+        let lines = removed
+            .iter()
+            .map(|name| format!("- {name}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        parts.push(format!("## 本次移除的工具\n{lines}"));
+    }
+
+    Some(super::diagnostic_block(
+        "system_prompt",
+        parts.join("\n\n"),
+        Some(message.clone()),
+    ))
+}
+
+fn tool_entries(tools: Option<&Value>) -> Vec<String> {
+    tools
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| {
+                    let name = super::json_string(item, &["name"])?;
+                    let description =
+                        super::json_string(item, &["description"]).unwrap_or_default();
+                    Some(format!("- {name}: {description}"))
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn tool_names(tools: Option<&Value>) -> Vec<String> {
+    tools
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| super::json_string(item, &["name"]))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 fn parse_content_block(role: &str, value: &Value) -> Option<ContentBlock> {
     let raw_kind = super::json_string(value, &["type"]).unwrap_or_else(|| "unknown".to_string());
     let kind = match (role, raw_kind.as_str()) {
@@ -985,6 +1075,16 @@ fn parse_content_block(role: &str, value: &Value) -> Option<ContentBlock> {
     } else {
         "unsupported_block".to_string()
     };
+
+    // 图片项没有 text 字段：把 data + mimeType 还原成 data URL 当正文，
+    // 前端才能直接渲染，而不是退成一行 JSON
+    let text = text.or_else(|| {
+        if kind == "image" {
+            super::image_reference(value)
+        } else {
+            None
+        }
+    });
 
     Some(ContentBlock {
         kind,

@@ -235,6 +235,156 @@ fn claude_ignores_agents_banner_when_picking_title() -> Result<()> {
 }
 
 #[test]
+fn claude_keeps_injected_context_as_readable_block() -> Result<()> {
+    let temp_home = env::temp_dir().join(format!("reins-test-{}", Uuid::new_v4()));
+    fs::create_dir_all(&temp_home)?;
+    let _guard = TestEnvGuard::set_home(&temp_home);
+
+    let session_file = temp_home
+        .join(".claude/projects/demo-project")
+        .join("session-context.jsonl");
+    write_jsonl(
+        &session_file,
+        &[
+            // 字符串正文的注入上下文（Claude Code 的典型形态）：清洗后没有对话内容
+            json!({
+                "type": "user",
+                "message": {
+                    "content": "# AGENTS.md instructions for /tmp/reins/workspace\n<system-reminder>\nYour operational mode has changed from plan to build.\n</system-reminder>"
+                }
+            }),
+        ],
+    )?;
+
+    let detail = read_detail(session::reader(SourceApp::ClaudeCode), &session_file)?;
+    let block = detail
+        .messages
+        .iter()
+        .flat_map(|message| message.blocks.iter())
+        .find(|block| block.kind == "context_injection")
+        .expect("context injection block");
+    let text = block.text.as_deref().unwrap_or_default();
+    assert!(text.contains("AGENTS.md instructions for /tmp/reins/workspace"));
+    assert!(text.contains("<system-reminder>"));
+    assert!(!detail
+        .messages
+        .iter()
+        .any(|message| message.blocks.iter().any(|block| block.kind == "empty_message")));
+
+    fs::remove_dir_all(&temp_home).ok();
+    Ok(())
+}
+
+#[test]
+fn claude_turns_image_blocks_into_renderable_image_blocks() -> Result<()> {
+    let temp_home = env::temp_dir().join(format!("reins-test-{}", Uuid::new_v4()));
+    fs::create_dir_all(&temp_home)?;
+    let _guard = TestEnvGuard::set_home(&temp_home);
+
+    let session_file = temp_home
+        .join(".claude/projects/demo-project")
+        .join("session-image.jsonl");
+    write_jsonl(
+        &session_file,
+        &[
+            json!({
+                "type": "user",
+                "message": {
+                    "content": [
+                        { "type": "text", "text": "看下这两张图" },
+                        {
+                            "type": "image",
+                            "source": { "type": "base64", "media_type": "image/jpeg", "data": "/9j/4AAQ" }
+                        },
+                        {
+                            "type": "image",
+                            "source": { "type": "url", "url": "https://example.invalid/a.png" }
+                        }
+                    ]
+                }
+            }),
+        ],
+    )?;
+
+    let detail = read_detail(session::reader(SourceApp::ClaudeCode), &session_file)?;
+    let references: Vec<&str> = detail
+        .messages
+        .iter()
+        .flat_map(|message| message.blocks.iter())
+        .filter(|block| block.kind == "image")
+        .filter_map(|block| block.text.as_deref())
+        .collect();
+    assert_eq!(
+        references,
+        vec![
+            "data:image/jpeg;base64,/9j/4AAQ",
+            "https://example.invalid/a.png"
+        ]
+    );
+
+    fs::remove_dir_all(&temp_home).ok();
+    Ok(())
+}
+
+#[test]
+fn claude_renders_local_command_records_as_readable_blocks() -> Result<()> {
+    let temp_home = env::temp_dir().join(format!("reins-test-{}", Uuid::new_v4()));
+    fs::create_dir_all(&temp_home)?;
+    let _guard = TestEnvGuard::set_home(&temp_home);
+
+    let session_file = temp_home
+        .join(".claude/projects/demo-project")
+        .join("session-local-command.jsonl");
+    write_jsonl(
+        &session_file,
+        &[
+            json!({
+                "type": "user",
+                "message": {
+                    "role": "user",
+                    "content": "<local-command-caveat>The command below was run directly in Claude Code, not sent to you as a request, and its output goes straight to the user. It's recorded here as context for later messages.</local-command-caveat>"
+                }
+            }),
+            json!({
+                "type": "user",
+                "message": {
+                    "role": "user",
+                    "content": "<command-name>/exit</command-name>\n            <command-message>exit</command-message>\n            <command-args></command-args>"
+                }
+            }),
+            json!({
+                "type": "user",
+                "message": {
+                    "role": "user",
+                    "content": "<local-command-stdout>See ya!</local-command-stdout>"
+                }
+            }),
+        ],
+    )?;
+
+    let detail = read_detail(session::reader(SourceApp::ClaudeCode), &session_file)?;
+    let blocks: Vec<(&str, Option<&str>)> = detail
+        .messages
+        .iter()
+        .flat_map(|message| message.blocks.iter())
+        .map(|block| (block.kind.as_str(), block.text.as_deref()))
+        .collect();
+
+    assert!(blocks.contains(&("local_command", Some("/exit"))));
+    assert!(blocks.contains(&("local_command_output", Some("See ya!"))));
+    // caveat 是记录用上下文，归到上下文块
+    assert!(blocks
+        .iter()
+        .any(|(kind, text)| *kind == "context_injection"
+            && text.is_some_and(|text| text.starts_with("<local-command-caveat>"))));
+    // 三条都不是对话内容，但都不再退化成原始报文兜底块
+    assert!(!blocks.iter().any(|(kind, _)| *kind == "empty_message"));
+
+    fs::remove_dir_all(&temp_home).ok();
+    Ok(())
+}
+
+#[test]
 fn claude_skips_unreadable_files_when_indexing() -> Result<()> {
     let temp_home = env::temp_dir().join(format!("reins-test-{}", Uuid::new_v4()));
     fs::create_dir_all(&temp_home)?;
@@ -301,6 +451,153 @@ fn claude_exposes_unsupported_message_content() -> Result<()> {
                     .is_some_and(|text| text.contains("\"unexpected\": true"))
         })
     }));
+
+    fs::remove_dir_all(&temp_home).ok();
+    Ok(())
+}
+
+#[test]
+fn codex_turns_input_image_into_renderable_image_block() -> Result<()> {
+    let temp_home = env::temp_dir().join(format!("reins-test-{}", Uuid::new_v4()));
+    fs::create_dir_all(&temp_home)?;
+    let _guard = TestEnvGuard::set_home(&temp_home);
+
+    let session_id = "88888888-8888-4888-8888-888888888888";
+    let transcript_path = temp_home
+        .join(".codex/sessions/2026/04/21")
+        .join(format!("rollout-2026-04-21T12-00-00-{session_id}.jsonl"));
+    write_jsonl(
+        &transcript_path,
+        &[
+            json!({
+                "timestamp": "2026-04-21T12:00:00.000Z",
+                "type": "session_meta",
+                "payload": { "id": session_id, "cwd": "/tmp/reins/workspace" }
+            }),
+            // 粘贴的图片：没有 text 字段，引用要提成正文而不是当成未支持块
+            json!({
+                "timestamp": "2026-04-21T12:00:01.000Z",
+                "type": "response_item",
+                "payload": {
+                    "type": "message",
+                    "role": "user",
+                    "content": [
+                        { "type": "input_text", "text": "看下这张图" },
+                        {
+                            "type": "input_image",
+                            "detail": "high",
+                            "image_url": "data:image/png;base64,iVBORw0KGgo="
+                        }
+                    ]
+                }
+            }),
+            json!({
+                "timestamp": "2026-04-21T12:00:02.000Z",
+                "type": "response_item",
+                "payload": {
+                    "type": "reasoning",
+                    "content": null,
+                    "encrypted_content": "SYNTHETIC_BLOB"
+                }
+            }),
+        ],
+    )?;
+
+    let detail = read_detail(session::reader(SourceApp::Codex), &transcript_path)?;
+    let block = detail
+        .messages
+        .iter()
+        .flat_map(|message| message.blocks.iter())
+        .find(|block| block.kind == "image")
+        .expect("image block");
+    assert_eq!(
+        block.text.as_deref(),
+        Some("data:image/png;base64,iVBORw0KGgo=")
+    );
+    assert!(!detail
+        .messages
+        .iter()
+        .any(|message| message.blocks.iter().any(|block| block.kind == "unsupported_block")));
+    // raw 事件给整条记录：reasoning 的 payload 也带 timestamp/type 信封
+    let reasoning = detail
+        .events
+        .iter()
+        .find(|event| event.kind == "reasoning")
+        .expect("reasoning event");
+    let payload = reasoning.payload.as_ref().expect("raw payload");
+    assert_eq!(payload.get("type").and_then(Value::as_str), Some("response_item"));
+    assert_eq!(
+        payload.get("timestamp").and_then(Value::as_str),
+        Some("2026-04-21T12:00:02.000Z")
+    );
+    // 加密字段是唯一例外
+    assert!(!serde_json::to_string(payload)?.contains("SYNTHETIC_BLOB"));
+
+    fs::remove_dir_all(&temp_home).ok();
+    Ok(())
+}
+
+#[test]
+fn codex_keeps_injected_context_as_readable_block() -> Result<()> {
+    let temp_home = env::temp_dir().join(format!("reins-test-{}", Uuid::new_v4()));
+    fs::create_dir_all(&temp_home)?;
+    let _guard = TestEnvGuard::set_home(&temp_home);
+
+    let session_id = "77777777-7777-4777-8777-777777777777";
+    let transcript_path = temp_home
+        .join(".codex/sessions/2026/04/21")
+        .join(format!("rollout-2026-04-21T12-00-00-{session_id}.jsonl"));
+    write_jsonl(
+        &transcript_path,
+        &[
+            json!({
+                "timestamp": "2026-04-21T12:00:00.000Z",
+                "type": "session_meta",
+                "payload": { "id": session_id, "cwd": "/tmp/reins/workspace" }
+            }),
+            // 宿主注入的上下文消息：清洗后没有对话内容，但整段原文要能看
+            json!({
+                "timestamp": "2026-04-21T12:00:01.000Z",
+                "type": "response_item",
+                "payload": {
+                    "type": "message",
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "input_text",
+                            "text": "# AGENTS.md instructions for /tmp/reins/workspace\n\n<INSTRUCTIONS>\n使用中文回复。\n</INSTRUCTIONS>"
+                        },
+                        {
+                            "type": "input_text",
+                            "text": "<environment_context>\n  <cwd>/tmp/reins/workspace</cwd>\n</environment_context>"
+                        }
+                    ],
+                    "internal_chat_message_metadata_passthrough": {
+                        "content_item_kinds": [
+                            "agents_md.instructions",
+                            "environments.environment_context"
+                        ]
+                    }
+                }
+            }),
+        ],
+    )?;
+
+    let detail = read_detail(session::reader(SourceApp::Codex), &transcript_path)?;
+    let block = detail
+        .messages
+        .iter()
+        .flat_map(|message| message.blocks.iter())
+        .find(|block| block.kind == "context_injection")
+        .expect("context injection block");
+    let text = block.text.as_deref().unwrap_or_default();
+    assert!(text.contains("AGENTS.md instructions for /tmp/reins/workspace"));
+    assert!(text.contains("<environment_context>"));
+    // 不再退化成一行原始报文诊断块
+    assert!(!detail
+        .messages
+        .iter()
+        .any(|message| message.blocks.iter().any(|block| block.kind == "empty_message")));
 
     fs::remove_dir_all(&temp_home).ok();
     Ok(())
@@ -624,6 +921,12 @@ fn opencode_v2_parses_tool_content_and_non_message_events() -> Result<()> {
         .find(|event| event.kind == "idle")
         .expect("idle event");
     assert_eq!(idle.summary, "idle: succeeded");
+    // raw payload 给整行：id/type/time_created + data 列原文
+    let idle_payload = idle.payload.as_ref().expect("raw payload is the row");
+    assert_eq!(idle_payload.get("type").and_then(Value::as_str), Some("idle"));
+    assert_eq!(idle_payload.get("id").and_then(Value::as_str), Some("msg-idle"));
+    assert!(idle_payload.get("time_created").is_some());
+    assert!(idle_payload.get("data").is_some());
     let compaction = detail
         .events
         .iter()

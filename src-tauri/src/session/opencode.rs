@@ -852,14 +852,23 @@ fn load_events_for_family(family: &OpenCodeSessionFamily) -> Result<Vec<SessionE
     Ok(events)
 }
 
+// raw 页要看到原始记录：DB 行整行给出去（data 列是应用写入的原始 JSON）。
 fn event_from_message_row(row: OpenCodeMessageRow) -> SessionEvent {
     let timestamp = message_row_timestamp(&row);
+    let payload = json!({
+        "id": row.id,
+        "session_id": row.session_id,
+        "type": row.kind,
+        "time_created": row.time_created,
+        "data": row.value,
+    });
+
     SessionEvent {
         id: row.id,
         kind: row.kind.clone(),
         timestamp,
         summary: v2_event_summary(&row.kind, &row.value),
-        payload: Some(row.value),
+        payload: Some(super::record_payload(&payload)),
         session_id: Some(row.session_id),
     }
 }

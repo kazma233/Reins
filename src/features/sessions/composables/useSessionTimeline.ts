@@ -125,7 +125,7 @@ export function useSessionTimeline(
     );
   });
 
-  // 切换会话后，未完成的消息/事件请求都要作废
+  // 切换会话后，未完成的消息/记录请求都要作废
   const requestGuard = createKeyGuard(() => detailKey.value);
 
   const messagesLoader = createTimelineLoader<SessionMessage>(
@@ -161,11 +161,11 @@ export function useSessionTimeline(
       );
       return { items: page.events, nextOffset: page.nextOffset };
     },
-    "加载更多事件失败。"
+    "加载更多记录失败。"
   );
 
   // overview 变化:两个 loader 全部重置,消息首页立即加载;
-  // 事件页懒加载,首页消息结束(成功或失败)后才置 0 允许拉取。
+  // raw 页懒加载,首页消息结束(成功或失败)后才置 0 允许拉取。
   watch(
     overview,
     currentOverview => {

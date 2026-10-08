@@ -23,7 +23,7 @@ const preview = computed(() => {
       type="button"
       @click="expanded = !expanded"
     >
-      <span class="flow-thinking-label">{{ item.label }}</span>
+      <span class="flow-row-tag">{{ item.label }}</span>
       <span class="flow-tool-summary">{{ preview }}</span>
       <span class="flow-tool-chevron">{{ expanded ? "▾" : "▸" }}</span>
     </button>
