@@ -36,10 +36,19 @@ export function formatMcpConfigType(type: McpConfigType): string {
       return "OpenCode 配置格式（带 $schema 标头）";
     case "grokbuild":
       return "Grok Build TOML 配置格式（远端 headers）";
+    case "dsh":
+      return "DeepSeek Harness 配置格式（Cordis patch YAML）";
   }
 }
 
-export type BuiltinTargetPresetId = "codex" | "claude" | "opencode" | "zcode" | "pi" | "grokbuild";
+export type BuiltinTargetPresetId =
+  | "codex"
+  | "claude"
+  | "opencode"
+  | "zcode"
+  | "pi"
+  | "grokbuild"
+  | "dsh";
 
 export const BUILTIN_TARGET_PRESETS: Record<
   BuiltinTargetPresetId,
@@ -82,6 +91,15 @@ export const BUILTIN_TARGET_PRESETS: Record<
   // pi 的 skills 与 MCP 路径由后端解析 PI_CODING_AGENT_DIR（默认 ~/.pi/agent），
   // 不能用静态路径覆盖运行时默认值。
   pi: null,
+  // dsh 固定使用 ~/.dsh（无环境变量重定向），Cordis patch 没有 configPrefix。
+  dsh: {
+    targetId: "dsh",
+    enabled: true,
+    skillDir: "~/.dsh/skills",
+    configPath: "~/.dsh/cordis.patch.yml",
+    mcpConfigPrefix: "",
+    mcpConfigType: "dsh",
+  },
 };
 
 export type SkillSourceFilter = "all" | "new" | `source:${string}`;
@@ -254,7 +272,7 @@ export const DEFAULT_MCP_APPLY_PREVIEW_DIALOG: McpApplyPreviewDialogState = {
 };
 
 
-export const AVAILABLE_PROJECT_AGENTS = ["claude", "codex", "opencode", "zcode", "pi", "grokbuild"] as const;
+export const AVAILABLE_PROJECT_AGENTS = ["claude", "codex", "opencode", "zcode", "pi", "grokbuild", "dsh"] as const;
 
 export type ProjectFormState = {
   originalProjectId: string | null;

@@ -23,6 +23,10 @@ defineEmits<{
 const dialogTitle = computed(() => (props.form.originalTargetId ? "修改 target" : "新增 target"));
 const confirmLabel = computed(() => (props.form.originalTargetId ? "保存" : "添加"));
 const presetIds = computed(() => Object.keys(BUILTIN_TARGET_PRESETS) as BuiltinTargetPresetId[]);
+const presetLabels: Partial<Record<BuiltinTargetPresetId, string>> = {
+  grokbuild: "Grok Build",
+  dsh: "DeepSeek Harness",
+};
 </script>
 
 <template>
@@ -58,7 +62,7 @@ const presetIds = computed(() => Object.keys(BUILTIN_TARGET_PRESETS) as BuiltinT
             type="button"
             @click="$emit('applyBuiltinPreset', presetId)"
           >
-            {{ presetId === 'grokbuild' ? 'Grok Build' : presetId }}
+            {{ presetLabels[presetId] ?? presetId }}
           </button>
         </div>
       </div>
@@ -123,7 +127,8 @@ const presetIds = computed(() => Object.keys(BUILTIN_TARGET_PRESETS) as BuiltinT
         <div class="manager-stack">
           <span class="manager-field__label">configType</span>
           <small class="manager-field__hint">
-            Common：command + args + env；OpenCode：command（数组，含参数）+ environment
+            Common：command + args + env；OpenCode：command（数组，含参数）+
+            environment；DeepSeek Harness：Cordis patch YAML 条目（无 configPrefix）
           </small>
           <div class="manager-segmented">
             <button
@@ -146,6 +151,13 @@ const presetIds = computed(() => Object.keys(BUILTIN_TARGET_PRESETS) as BuiltinT
               @click="form.mcpConfigType = 'grokbuild'"
             >
               Grok Build
+            </button>
+            <button
+              :class="`manager-segmented__button${form.mcpConfigType === 'dsh' ? ' is-active' : ''}`"
+              type="button"
+              @click="form.mcpConfigType = 'dsh'"
+            >
+              DeepSeek Harness
             </button>
           </div>
         </div>

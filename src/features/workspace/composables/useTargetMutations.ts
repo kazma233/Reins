@@ -154,10 +154,11 @@ export function useTargetMutations() {
       return;
     }
     // MCP 配置文件和 configPrefix 成对填写；不需要 MCP 分发的
-    // target 允许两者都为空，此时只做 skill 分发。
+    // target 允许两者都为空，此时只做 skill 分发。dsh 的 Cordis patch
+    // 按条目定位 server，没有 configPrefix，允许“有路径 + 空 prefix”。
     const configPath = form.configPath.trim();
     const mcpConfigPrefix = form.mcpConfigPrefix.trim();
-    if (configPath && !mcpConfigPrefix) {
+    if (configPath && !mcpConfigPrefix && form.mcpConfigType !== "dsh") {
       showNotice("请填写 configPrefix。", "error");
       return;
     }

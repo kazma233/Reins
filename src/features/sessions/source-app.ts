@@ -7,6 +7,7 @@ const SOURCE_APP_LABELS: Record<SourceApp, string> = {
   pi: "Pi",
   grokbuild: "Grok Build",
   zcode: "ZCode",
+  dsh: "DeepSeek Harness",
 };
 
 export function formatSourceAppName(app: SourceApp): string {

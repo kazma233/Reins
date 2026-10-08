@@ -9,7 +9,7 @@ export type DeleteMethodCopy = {
 };
 
 export function canDeleteSession(app: SourceApp): boolean {
-  return app !== "zcode";
+  return app !== "zcode" && app !== "dsh";
 }
 
 export const DELETE_METHOD_COPY: Record<SourceApp, DeleteMethodCopy> = {
@@ -25,6 +25,11 @@ export const DELETE_METHOD_COPY: Record<SourceApp, DeleteMethodCopy> = {
   },
   zcode: {
     description: "暂不支持删除 ZCode 会话。",
+    details: [],
+    commandLabel: "不支持删除"
+  },
+  dsh: {
+    description: "暂不支持删除 DeepSeek Harness 会话。",
     details: [],
     commandLabel: "不支持删除"
   },
@@ -113,6 +118,7 @@ export function deleteCommandPreview(detail: SessionOverview): string[] {
 
   switch (detail.summary.sourceApp) {
     case "zcode":
+    case "dsh":
       return [];
     case "grokbuild": {
       // sourcePaths 指向各会话目录内的文件，取父目录去重即为子会话目录。

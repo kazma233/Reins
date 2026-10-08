@@ -1,5 +1,6 @@
 // MCP domain: config.yaml MCP server CRUD plus format-agnostic (JSON / TOML /
-// OpenCode) reads and writes of per-target MCP config files.
+// OpenCode / dsh Cordis patch YAML) reads and writes of per-target MCP config
+// files.
 
 use std::collections::BTreeMap;
 use std::ffi::OsStr;
@@ -8,7 +9,10 @@ use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
 use anyhow::{Context, Result, anyhow, bail};
+use dirs::home_dir;
+use serde::Serialize;
 use serde_json::{Map as JsonMap, Value as JsonValue};
+use serde_yaml::Value as YamlValue;
 use toml::Value as TomlValue;
 
 use super::WorkspaceConfigStore;
@@ -51,7 +55,7 @@ pub(crate) fn apply_mcp_to_target_inner(
         target_id: AgentTargetId(target_id.to_string()),
         updated_path: Some(display_path(&updated_path)),
         action: "apply".to_string(),
-        detail: format!("已写入 {}", display_path(&updated_path)),
+            detail: format!("已写入 {}", display_path(&updated_path)),
     })
 }
 
@@ -77,7 +81,7 @@ pub(crate) fn preview_mcp_target_inner(
     let config_path = target
         .config_path
         .as_ref()
-        .ok_or_else(|| anyhow!("目标 {target_id} 没有 MCP 配置路径。"))?;
+            .ok_or_else(|| anyhow!("目标 {target_id} 没有 MCP 配置路径"))?;
 
     let (format, content) = preview_mcp_entry(target, server)?;
 
@@ -123,6 +127,9 @@ pub(super) fn read_existing_mcp_entries(
     target: &ResolvedTargetConfig,
     config_path: &Path,
 ) -> Result<BTreeMap<String, JsonValue>> {
+    if target.mcp_config_type == McpConfigType::Dsh {
+        return read_existing_dsh_patch_entries(config_path);
+    }
     let target = resolve_read_target_for_config(target, config_path)?;
     read_existing_mcp_entries_for_target(&target, config_path)
 }
@@ -234,7 +241,7 @@ fn infer_mcp_file_format_from_path(config_path: &Path) -> Result<McpConfigFileFo
         Some(extension) if extension == "json" => Ok(McpConfigFileFormat::Json),
         Some(extension) if extension == "toml" => Ok(McpConfigFileFormat::Toml),
         _ => bail!(
-            "无法从文件名推断 MCP 配置格式：{}，仅支持 json 和 toml。",
+            "无法从文件名推断 MCP 配置格式：{}，仅支持 json 与 toml",
             config_path.display()
         ),
     }
@@ -248,6 +255,7 @@ fn desired_toml_mcp_entry(
         McpConfigType::Common => desired_openai_toml_mcp(server),
         McpConfigType::GrokBuild => desired_grok_toml_mcp(server),
         McpConfigType::OpenCode => bail!("OpenCode config type 不支持 TOML。"),
+        McpConfigType::Dsh => bail!("Dsh config type 仅支持 Cordis patch YAML。"),
     }
 }
 
@@ -259,6 +267,7 @@ fn desired_json_mcp_entry(
         McpConfigType::Common => desired_openai_json_mcp(server),
         McpConfigType::OpenCode => desired_opencode_mcp(server),
         McpConfigType::GrokBuild => bail!("Grok Build config type 仅支持 TOML。"),
+        McpConfigType::Dsh => bail!("Dsh config type 仅支持 Cordis patch YAML。"),
     }
 }
 
@@ -266,22 +275,29 @@ fn preview_mcp_entry(
     target: &ResolvedTargetConfig,
     server: &ResolvedMcpConfig,
 ) -> Result<(String, String)> {
-    match detect_target_mcp_file_format(
-        target,
-        target
-            .config_path
-            .as_ref()
-            .ok_or_else(|| anyhow!("目标 {} 没有 MCP 配置路径。", target.id.as_str()))?,
-    )? {
+    let config_path = target
+        .config_path
+        .as_ref()
+        .ok_or_else(|| anyhow!("目标 {} 没有 MCP 配置路径", target.id.as_str()))?;
+
+    if target.mcp_config_type == McpConfigType::Dsh {
+        // 与 JSON/TOML target 一致：preview 先确认文件可解析，再展示条目。
+        read_dsh_patch_ops(config_path)?;
+        let op = desired_dsh_insert_op(&server.name, server)?;
+    let content = serde_yaml::to_string(&vec![op]).context("MCP 预览序列化失败")?;
+        return Ok(("yaml".to_string(), content));
+    }
+
+    match detect_target_mcp_file_format(target, config_path)? {
         McpConfigFileFormat::Toml => Ok((
             "toml".to_string(),
             toml::to_string_pretty(&desired_toml_mcp_entry(target, server)?)
-                .context("MCP 预览序列化失败。")?,
+                .context("MCP 预览序列化失败")?,
         )),
         McpConfigFileFormat::Json => Ok((
             "json".to_string(),
             serde_json::to_string_pretty(&desired_json_mcp_entry(target, server)?)
-                .context("MCP 预览序列化失败。")?,
+                .context("MCP 预览序列化失败")?,
         )),
     }
 }
@@ -289,6 +305,8 @@ fn preview_mcp_entry(
 fn default_json_root_for_target(target: &ResolvedTargetConfig) -> JsonValue {
     match target.mcp_config_type {
         McpConfigType::Common | McpConfigType::GrokBuild => JsonValue::Object(JsonMap::new()),
+        // dsh 的配置根是操作列表；dsh 写入路径不走 JSON 根，该分支仅为穷尽。
+        McpConfigType::Dsh => JsonValue::Array(Vec::new()),
         McpConfigType::OpenCode => JsonValue::Object(JsonMap::from_iter([(
             "$schema".to_string(),
             JsonValue::String("https://opencode.ai/config.json".to_string()),
@@ -516,6 +534,219 @@ pub(super) fn desired_opencode_mcp(server: &ResolvedMcpConfig) -> Result<JsonVal
     Ok(JsonValue::Object(object))
 }
 
+// ---------------------------------------------------------------------------
+// dsh (DeepSeek Harness): Cordis patch YAML (~/.dsh/cordis.patch.yml)
+// ---------------------------------------------------------------------------
+
+// dsh 的 MCP server 是 Cordis 插件树里的 dsh-mcp-client 条目。Reins 只认
+// name 为该插件且 config.serverName 匹配的 insert 条目；定位与其它 target
+// 按 server key 定位的语义一致，条目 id 不参与定位。patch 文件其余内容
+// （无关插件、未知操作）原样保留，绝不整文件覆盖。
+const DSH_MCP_CLIENT_PLUGIN: &str = "@deepseek-ai/dsh-mcp-client";
+const DSH_DEFAULT_TOOL_CALL_TIMEOUT_MS: u64 = 60_000;
+
+
+// dsh 要求 serverName 匹配 [A-Za-z0-9_-]{1,32}：非法字符折叠为 -，超长截断。
+pub(super) fn dsh_server_name(server_name: &str) -> String {
+    let mut sanitized: String = server_name
+        .trim()
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || ch == '_' || ch == '-' {
+                ch
+            } else {
+                '-'
+            }
+        })
+        .collect();
+    // 映射后只有 ASCII，truncate 不会落在多字节边界上。
+    sanitized.truncate(32);
+    sanitized
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DshMcpClientConfig {
+    server_name: String,
+    transport: String,
+    command: String,
+    args: Vec<String>,
+    env: BTreeMap<String, String>,
+    cwd: String,
+    tool_call_timeout_ms: u64,
+    fail_on_startup_error: bool,
+}
+
+#[derive(Serialize)]
+struct DshInsertEntry {
+    id: String,
+    name: String,
+    config: DshMcpClientConfig,
+}
+
+fn desired_dsh_insert_entry(server_name: &str, server: &ResolvedMcpConfig) -> Result<YamlValue> {
+    // streamable-http 形态的必填字段契约未定稿，v1 只分发 stdio。
+    // 与其写出 dsh 无法启动的条目不如直接失败。
+    match server.transport {
+        McpTransport::Stdio => {}
+        McpTransport::Http | McpTransport::Sse => {
+            bail!("dsh 的 MCP 分发仅支持 stdio transport。")
+        }
+    }
+
+    let entry = DshInsertEntry {
+        id: format!("reins-mcp-{server_name}"),
+        name: DSH_MCP_CLIENT_PLUGIN.to_string(),
+        config: DshMcpClientConfig {
+            server_name: server_name.to_string(),
+            transport: "stdio".to_string(),
+            command: server
+                .command
+                .clone()
+                .ok_or_else(|| anyhow!("stdio MCP 缺少 command"))?,
+            args: server.args.clone(),
+            env: server.env.clone(),
+            cwd: home_dir()
+                .ok_or_else(|| anyhow!("无法解析 HOME 目录。"))?
+                .display()
+                .to_string(),
+            tool_call_timeout_ms: server
+                .timeout
+                .unwrap_or(DSH_DEFAULT_TOOL_CALL_TIMEOUT_MS),
+            fail_on_startup_error: false,
+        },
+    };
+
+    Ok(serde_yaml::to_value(entry).context("dsh MCP 条目序列化失败")?)
+}
+
+fn desired_dsh_insert_op(server_name: &str, server: &ResolvedMcpConfig) -> Result<YamlValue> {
+    let mut op = serde_yaml::Mapping::new();
+    op.insert(
+        YamlValue::String("insert".to_string()),
+        YamlValue::Sequence(vec![desired_dsh_insert_entry(server_name, server)?]),
+    );
+    Ok(YamlValue::Mapping(op))
+}
+
+fn read_dsh_patch_ops(config_path: &Path) -> Result<Vec<YamlValue>> {
+    crate::support::dsh_patch::read_ops(config_path)
+}
+
+fn write_dsh_patch_ops(config_path: &Path, ops: &[YamlValue]) -> Result<()> {
+    crate::support::dsh_patch::write_ops(config_path, ops)
+}
+
+
+fn is_dsh_claimed_entry(entry: &YamlValue, server_name: &str) -> bool {
+    entry.get("name").and_then(YamlValue::as_str) == Some(DSH_MCP_CLIENT_PLUGIN)
+        && entry
+            .get("config")
+            .and_then(|config| config.get("serverName"))
+            .and_then(YamlValue::as_str)
+            == Some(server_name)
+}
+
+fn locate_dsh_claimed_entry(ops: &[YamlValue], server_name: &str) -> Option<(usize, usize)> {
+    for (op_index, op) in ops.iter().enumerate() {
+        let Some(entries) = op.get("insert").and_then(YamlValue::as_sequence) else {
+            continue;
+        };
+        for (entry_index, entry) in entries.iter().enumerate() {
+            if is_dsh_claimed_entry(entry, server_name) {
+                return Some((op_index, entry_index));
+            }
+        }
+    }
+    None
+}
+
+fn dsh_insert_list_mut(ops: &mut [YamlValue], op_index: usize) -> Result<&mut Vec<YamlValue>> {
+    ops.get_mut(op_index)
+        .and_then(|op| op.get_mut("insert"))
+        .and_then(YamlValue::as_sequence_mut)
+        .ok_or_else(|| anyhow!("Cordis patch 的 insert 操作必须是条目列表。"))
+}
+
+fn read_existing_dsh_patch_entries(config_path: &Path) -> Result<BTreeMap<String, JsonValue>> {
+    let ops = read_dsh_patch_ops(config_path)?;
+    let mut entries = BTreeMap::new();
+
+    for op in &ops {
+        let Some(list) = op.get("insert").and_then(YamlValue::as_sequence) else {
+            continue;
+        };
+        for entry in list {
+            if entry.get("name").and_then(YamlValue::as_str) != Some(DSH_MCP_CLIENT_PLUGIN) {
+                continue;
+            }
+            let Some(server_name) = entry
+                .get("config")
+                .and_then(|config| config.get("serverName"))
+                .and_then(YamlValue::as_str)
+            else {
+                continue;
+            };
+            let config = entry.get("config").cloned().unwrap_or(YamlValue::Null);
+            let json = serde_json::to_value(crate::support::dsh_patch::untag(&config))
+                .with_context(|| format!("Cordis patch 条目转换失败：{server_name}"))?;
+            entries.insert(server_name.to_string(), json);
+        }
+    }
+
+    Ok(entries)
+}
+
+fn apply_dsh_patch_entry(config_path: &Path, server: &ResolvedMcpConfig) -> Result<()> {
+    let server_name = dsh_server_name(&server.name);
+    let mut ops = read_dsh_patch_ops(config_path)?;
+
+    match locate_dsh_claimed_entry(&ops, &server_name) {
+        Some((op_index, entry_index)) => {
+            let entry = desired_dsh_insert_entry(&server_name, server)?;
+            dsh_insert_list_mut(&mut ops, op_index)?[entry_index] = entry;
+        }
+        None => ops.push(desired_dsh_insert_op(&server_name, server)?),
+    }
+
+    write_dsh_patch_ops(config_path, &ops)
+}
+
+fn remove_dsh_patch_entry(
+    target: &ResolvedTargetConfig,
+    config_path: &Path,
+    server_name: &str,
+) -> Result<McpTargetMutationResult> {
+    let claimed_name = dsh_server_name(server_name);
+    let mut ops = read_dsh_patch_ops(config_path)?;
+
+    let Some((op_index, entry_index)) = locate_dsh_claimed_entry(&ops, &claimed_name) else {
+        return Ok(McpTargetMutationResult {
+            server_name: server_name.to_string(),
+            target_id: target.id.clone(),
+            updated_path: None,
+            action: "noop".to_string(),
+            detail: "目标配置里不存在该 MCP。".to_string(),
+        });
+    };
+
+    let insert_list = dsh_insert_list_mut(&mut ops, op_index)?;
+    insert_list.remove(entry_index);
+    if insert_list.is_empty() {
+        ops.remove(op_index);
+    }
+    // 删空后保留空列表文件（`[]`），与“不整文件覆盖”的合并语义一致。
+    write_dsh_patch_ops(config_path, &ops)?;
+
+    Ok(McpTargetMutationResult {
+        server_name: server_name.to_string(),
+        target_id: target.id.clone(),
+        updated_path: Some(display_path(config_path)),
+        action: "remove".to_string(),
+        detail: format!("已从 {} 移除 {}", target.id.as_str(), server_name),
+    })
+}
+
 fn apply_mcp_to_target_config(
     target: &ResolvedTargetConfig,
     server: &ResolvedMcpConfig,
@@ -523,7 +754,12 @@ fn apply_mcp_to_target_config(
     let config_path = target
         .config_path
         .as_ref()
-        .ok_or_else(|| anyhow!("目标 {} 没有 MCP 配置路径。", target.id.as_str()))?;
+        .ok_or_else(|| anyhow!("目标 {} 没有 MCP 配置路径", target.id.as_str()))?;
+
+    if target.mcp_config_type == McpConfigType::Dsh {
+        apply_dsh_patch_entry(config_path, server)?;
+        return Ok(config_path.clone());
+    }
 
     match detect_target_mcp_file_format(target, config_path)? {
         McpConfigFileFormat::Toml => {
@@ -552,7 +788,7 @@ fn remove_mcp_from_target_config(
     target: &ResolvedTargetConfig,
     server_name: &str,
 ) -> Result<McpTargetMutationResult> {
-    // 未配置 MCP 的 target 无配置可清理；必须返回 noop 而非报错，
+    // 未配置 MCP 的 target 无配置可清理；必须返回 noop 而非报错。
     // 否则删除 MCP 时遍历全部 target 会被这类 target 中断。
     let Some(config_path) = target.config_path.as_ref() else {
         return Ok(McpTargetMutationResult {
@@ -563,6 +799,10 @@ fn remove_mcp_from_target_config(
             detail: "目标未配置 MCP，跳过。".to_string(),
         });
     };
+
+    if target.mcp_config_type == McpConfigType::Dsh {
+        return remove_dsh_patch_entry(target, config_path, server_name);
+    }
 
     let removed = match detect_target_mcp_file_format(target, config_path)? {
         McpConfigFileFormat::Toml => {

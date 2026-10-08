@@ -28,6 +28,7 @@ export const APP_LABELS: Record<ProviderAppId, string> = {
   opencode: "OpenCode",
   pi: "Pi",
   grokbuild: "Grok Build",
+  dsh: "DeepSeek Harness",
 };
 
 export const PROTOCOL_LABELS: Record<ProviderProtocol, string> = {

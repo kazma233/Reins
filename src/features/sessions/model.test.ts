@@ -15,3 +15,10 @@ describe("Pi session contract", () => {
     expect(canDeleteSession("pi")).toBe(true);
   });
 });
+
+describe("DSH session contract", () => {
+  it("labels the source and disables deletion", () => {
+    expect(formatSourceAppName("dsh")).toBe("DeepSeek Harness");
+    expect(canDeleteSession("dsh")).toBe(false);
+  });
+});

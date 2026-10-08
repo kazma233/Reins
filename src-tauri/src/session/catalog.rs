@@ -18,6 +18,7 @@ pub(crate) fn detect_sources_inner(state: &SessionIndexState) -> Result<Vec<Sour
     let pi_root = super::pi::sessions_root()?;
     let grok_root = super::grokbuild::root()?;
     let zcode_root = super::zcode::root()?;
+    let dsh_root = super::dsh::sessions_root()?;
 
     let inspections = thread::scope(|scope| {
         let codex_state = state.clone();
@@ -71,6 +72,16 @@ pub(crate) fn detect_sources_inner(state: &SessionIndexState) -> Result<Vec<Sour
             )
         });
 
+        let dsh_state = state.clone();
+        let dsh_handle = scope.spawn(move || {
+            inspect_source(
+                &dsh_state,
+                SourceApp::Dsh,
+                dsh_root,
+                Some("Reading ~/.dsh/sessions transcript files.".to_string()),
+            )
+        });
+
         vec![
             codex_handle.join(),
             claude_handle.join(),
@@ -78,6 +89,7 @@ pub(crate) fn detect_sources_inner(state: &SessionIndexState) -> Result<Vec<Sour
             pi_handle.join(),
             grok_handle.join(),
             zcode_handle.join(),
+            dsh_handle.join(),
         ]
     });
 
@@ -145,6 +157,7 @@ fn available_sources() -> Vec<SourceApp> {
         (SourceApp::Pi, super::pi::sessions_root()),
         (SourceApp::GrokBuild, super::grokbuild::root()),
         (SourceApp::Zcode, super::zcode::root()),
+        (SourceApp::Dsh, super::dsh::sessions_root()),
     ]
     .into_iter()
     .filter_map(|(app, root)| root.ok().filter(|root| root.exists()).map(|_| app))

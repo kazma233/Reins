@@ -237,6 +237,10 @@ fn app_config_paths(env: &ToolEnv, app: ProviderAppId) -> Vec<PathBuf> {
                 super::apps::pi_settings_path(env)?,
             ],
             ProviderAppId::Grokbuild => vec![super::apps::grok_config_path(env)?],
+            ProviderAppId::Dsh => vec![
+                super::apps::dsh_profile_patch_path(env)?,
+                super::apps::dsh_credentials_path(env)?,
+            ],
         })
     };
     resolve().unwrap_or_default()

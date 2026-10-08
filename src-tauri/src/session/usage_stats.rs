@@ -16,7 +16,7 @@ use super::model::{
     SessionTokenUsage, SourceApp, UsageDayPoint, UsageHourBuckets, UsageHourPoint,
     UsageSourceStats, UsageStats,
 };
-use super::{claude_code, codex, grokbuild, opencode, pi, zcode};
+use super::{claude_code, codex, dsh, grokbuild, opencode, pi, zcode};
 
 pub(crate) fn usage_stats_inner() -> Result<UsageStats> {
     let outcomes = thread::scope(|scope| {
@@ -40,6 +40,7 @@ pub(crate) fn usage_stats_inner() -> Result<UsageStats> {
         let opencode_handle =
             scope.spawn(|| sql_source_days(SourceApp::OpenCode, opencode::usage_hours));
         let zcode_handle = scope.spawn(|| sql_source_days(SourceApp::Zcode, zcode::usage_hours));
+        let dsh_handle = scope.spawn(dsh_days);
 
         vec![
             codex_handle.join(),
@@ -48,6 +49,7 @@ pub(crate) fn usage_stats_inner() -> Result<UsageStats> {
             grokbuild_handle.join(),
             opencode_handle.join(),
             zcode_handle.join(),
+            dsh_handle.join(),
         ]
     });
 
@@ -162,6 +164,49 @@ fn grokbuild_days() -> Result<Option<UsageSourceStats>> {
 
     Ok(Some(source_stats(
         SourceApp::GrokBuild,
+        buckets,
+        session_count,
+        today_session_count,
+    )))
+}
+
+// dsh 的 usage 内嵌在转录里,读取要先解压多帧 zstd,直接逐文件解析,不走
+// 持久缓存;单文件失败只记日志跳过,与列表扫描同一发现规则。
+fn dsh_days() -> Result<Option<UsageSourceStats>> {
+    if !dsh::sessions_root()?.exists() {
+        return Ok(None);
+    }
+
+    let today = today_prefix();
+    let mut buckets = UsageHourBuckets::new();
+    let mut session_count = 0usize;
+    let mut today_session_count = 0usize;
+
+    for path in dsh::session_transcript_paths()? {
+        let file_hours = match dsh::usage_hours(&path) {
+            Ok(hours) => hours,
+            Err(error) => {
+                crate::logger::log_error(format!(
+                    "usage stats skipped {}: {error}",
+                    path.display()
+                ));
+                continue;
+            }
+        };
+
+        if file_hours.is_empty() {
+            continue;
+        }
+
+        session_count += 1;
+        if file_has_today(&file_hours, &today) {
+            today_session_count += 1;
+        }
+        merge_buckets(&mut buckets, &file_hours);
+    }
+
+    Ok(Some(source_stats(
+        SourceApp::Dsh,
         buckets,
         session_count,
         today_session_count,

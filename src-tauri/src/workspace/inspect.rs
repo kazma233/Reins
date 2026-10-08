@@ -139,9 +139,15 @@ fn inspect_mcp_target(
     } else if let Some(config_path) = config_path {
         match read_existing_mcp_entries_cached(mcp_entry_cache, target, config_path) {
             Ok(existing) => {
+                // dsh 条目的 key 是清洗后的 serverName，其余类型与 Reins 的
+                // mcp name 一致。
+                let lookup_name = match target.mcp_config_type {
+                    McpConfigType::Dsh => super::dsh_server_name(&mcp.name),
+                    _ => mcp.name.clone(),
+                };
                 let state = if !mcp.enabled {
                     "disabled".to_string()
-                } else if existing.contains_key(&mcp.name) {
+                } else if existing.contains_key(&lookup_name) {
                     "present".to_string()
                 } else {
                     "missing".to_string()

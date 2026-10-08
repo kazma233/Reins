@@ -12,6 +12,7 @@ pub(crate) mod timeline;
 
 pub(crate) mod claude_code;
 pub(crate) mod codex;
+pub(crate) mod dsh;
 pub(crate) mod family_index;
 pub(crate) mod family_timeline;
 pub(crate) mod grokbuild;
@@ -78,6 +79,7 @@ pub(crate) fn reader(source_app: SourceApp) -> &'static dyn SessionReader {
         SourceApp::Pi => &pi::BACKEND,
         SourceApp::GrokBuild => &grokbuild::BACKEND,
         SourceApp::Zcode => &zcode::BACKEND,
+        SourceApp::Dsh => &dsh::BACKEND,
     }
 }
 
@@ -88,6 +90,7 @@ pub(crate) fn clear_all_caches() -> Result<()> {
     reader(SourceApp::Pi).clear_cache()?;
     reader(SourceApp::GrokBuild).clear_cache()?;
     reader(SourceApp::Zcode).clear_cache()?;
+    reader(SourceApp::Dsh).clear_cache()?;
     // 持久缓存一并清空：用户触发的刷新是"全量重建"的逃生通道。
     summary_cache::clear_all();
     usage_day_cache::clear_all();
@@ -104,6 +107,9 @@ pub(crate) fn delete_session(source_app: SourceApp, path: &Path) -> Result<()> {
         // zcode CLI 不随桌面版安装、无官方单会话删除命令,直接删库又与常驻
         // 进程的写入冲突,所以整体不提供删除。
         SourceApp::Zcode => bail!("ZCode session deletion is unsupported"),
+        // dsh 无官方单会话删除命令(桌面版删除只是 workspace.json 的 archive
+        // 标记),删除转录文件会与常驻进程的写入冲突。
+        SourceApp::Dsh => bail!("DSH session deletion is unsupported"),
     }
 }
 

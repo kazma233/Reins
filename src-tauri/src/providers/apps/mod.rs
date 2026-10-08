@@ -18,6 +18,7 @@ use crate::support::fs::{display_path, grok_home_path, user_home_dir, write_atom
 
 pub(crate) mod claude;
 pub(crate) mod codex;
+pub(crate) mod dsh;
 pub(crate) mod grokbuild;
 pub(crate) mod opencode;
 pub(crate) mod pi;
@@ -40,6 +41,7 @@ pub(crate) struct ToolEnv {
     pub(crate) pi_agent_dir: Option<PathBuf>,
     pub(crate) grok_home: Option<PathBuf>,
     pub(crate) claude_config_dir: Option<PathBuf>,
+    pub(crate) dsh_home: Option<PathBuf>,
 }
 
 impl ToolEnv {
@@ -49,6 +51,7 @@ impl ToolEnv {
             pi_agent_dir: std::env::var("PI_CODING_AGENT_DIR").ok().map(PathBuf::from),
             grok_home: std::env::var("GROK_HOME").ok().map(PathBuf::from),
             claude_config_dir: std::env::var("CLAUDE_CONFIG_DIR").ok().map(PathBuf::from),
+            dsh_home: std::env::var("DSH_HOME").ok().map(PathBuf::from),
         }
     }
 }
@@ -155,6 +158,7 @@ pub(crate) fn adapter_for(app: ProviderAppId) -> &'static dyn AppAdapter {
         ProviderAppId::Opencode => &opencode::OpencodeAdapter,
         ProviderAppId::Pi => &pi::PiAdapter,
         ProviderAppId::Grokbuild => &grokbuild::GrokbuildAdapter,
+        ProviderAppId::Dsh => &dsh::DshAdapter,
     }
 }
 
@@ -586,6 +590,10 @@ pub(crate) fn grok_config_path(env: &ToolEnv) -> Result<PathBuf> {
     .ok_or_else(|| anyhow::anyhow!("无法解析 GROK_HOME 目录。"))?;
     Ok(base.join("config.toml"))
 }
+
+// dsh 的 settings.yaml 与 GROK_HOME / PI_CODING_AGENT_DIR 同一重定向模式：
+// 优先 $DSH_HOME，默认 ~/.dsh。
+pub(crate) use dsh::{dsh_credentials_path, dsh_profile_patch_path};
 
 // ---------------------------------------------------------------------------
 // 共享写入助手

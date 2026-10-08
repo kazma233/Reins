@@ -1,9 +1,7 @@
 use super::*;
 use super::grokbuild::{fixture as grok_fixture, history as grok_history, subagent_fixture};
 
-// The fake `codex` executable is a shell script and the PATH splice uses
-// the Unix ':' separator, so the real CLI would run on Windows instead.
-#[cfg(unix)]
+// 官方删除 CLI 用跨平台假可执行文件顶替(见 fake_cli_source 注释)。
 #[test]
 fn deleting_codex_family_invokes_official_cli() -> Result<()> {
     let temp_home = env::temp_dir().join(format!("reins-test-{}", Uuid::new_v4()));
@@ -51,25 +49,8 @@ fn deleting_codex_family_invokes_official_cli() -> Result<()> {
 
     let bin_dir = temp_home.join("bin");
     fs::create_dir_all(&bin_dir)?;
-    let log_path = temp_home.join("codex-delete.log");
-    let script_path = bin_dir.join("codex");
-    fs::write(
-        &script_path,
-        format!(
-            "#!/bin/sh\nif [ \"$1\" = \"delete\" ] && [ \"$2\" = \"--force\" ]; then\n  printf '%s\\n' \"$3\" >> '{}'\n  exit 0\nfi\nexit 1\n",
-            log_path.display()
-        ),
-    )?;
-    {
-        use std::os::unix::fs::PermissionsExt;
-
-        let mut permissions = fs::metadata(&script_path)?.permissions();
-        permissions.set_mode(0o755);
-        fs::set_permissions(&script_path, permissions)?;
-    }
-
-    let original_path = env::var("PATH").unwrap_or_default();
-    unsafe { env::set_var("PATH", format!("{}:{}", bin_dir.display(), original_path)) };
+    install_fake_cli(&bin_dir, "codex")?;
+    let original_path = prepend_to_path(&bin_dir);
 
     let result = session::delete::delete_session_inner(
         &state::session_index::SessionIndexState::default(),
@@ -78,10 +59,10 @@ fn deleting_codex_family_invokes_official_cli() -> Result<()> {
         Some(root_path.to_string_lossy().as_ref()),
     )?;
 
-    let deleted = fs::read_to_string(&log_path)?;
+    let deleted = fs::read_to_string(fake_cli_log_path(&bin_dir))?;
     let deleted_ids = deleted.lines().collect::<HashSet<_>>();
 
-    unsafe { env::set_var("PATH", original_path) };
+    unsafe { env::set_var("PATH", &original_path) };
 
     assert_eq!(result.deleted_session_id, root_id);
     assert!(
@@ -245,9 +226,7 @@ fn deleting_pi_session_removes_only_the_selected_file() -> Result<()> {
     Ok(())
 }
 
-// The fake `opencode` executable is a shell script and the PATH splice uses
-// the Unix ':' separator, so the real CLI would run on Windows instead.
-#[cfg(unix)]
+// 同 codex:假可执行文件 + PATH 前插顶替官方 CLI。
 #[test]
 fn deleting_opencode_family_uses_cli() -> Result<()> {
     let temp_home = env::temp_dir().join(format!("reins-test-{}", Uuid::new_v4()));
@@ -260,26 +239,8 @@ fn deleting_opencode_family_uses_cli() -> Result<()> {
 
     let bin_dir = temp_home.join("bin");
     fs::create_dir_all(&bin_dir)?;
-    let log_path = temp_home.join("opencode-delete.log");
-    let script_path = bin_dir.join("opencode");
-    fs::write(
-        &script_path,
-        format!(
-            "#!/bin/sh\nif [ \"$1\" = \"session\" ] && [ \"$2\" = \"delete\" ]; then\n  printf '%s\\n' \"$3\" >> '{}'\n  exit 0\nfi\nexit 1\n",
-            log_path.display()
-        ),
-    )?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-
-        let mut permissions = fs::metadata(&script_path)?.permissions();
-        permissions.set_mode(0o755);
-        fs::set_permissions(&script_path, permissions)?;
-    }
-
-    let original_path = env::var("PATH").unwrap_or_default();
-    unsafe { env::set_var("PATH", format!("{}:{}", bin_dir.display(), original_path)) };
+    install_fake_cli(&bin_dir, "opencode")?;
+    let original_path = prepend_to_path(&bin_dir);
 
     let root_path = session::opencode::session_path(root_id);
 
@@ -290,7 +251,7 @@ fn deleting_opencode_family_uses_cli() -> Result<()> {
         Some(root_path.to_string_lossy().as_ref()),
     )?;
 
-    let deleted = fs::read_to_string(&log_path)?;
+    let deleted = fs::read_to_string(fake_cli_log_path(&bin_dir))?;
     let deleted_ids = deleted.lines().collect::<HashSet<_>>();
 
     assert_eq!(result.deleted_session_id, root_id);
@@ -302,7 +263,7 @@ fn deleting_opencode_family_uses_cli() -> Result<()> {
     assert!(deleted_ids.contains(root_id));
     assert!(deleted_ids.contains(child_id));
 
-    unsafe { env::set_var("PATH", original_path) };
+    unsafe { env::set_var("PATH", &original_path) };
     fs::remove_dir_all(&temp_home).ok();
     Ok(())
 }
@@ -340,29 +301,54 @@ fn grok_search_rows(home: &Path, session_id: &str) -> Result<i64> {
     )?)
 }
 
-// root 会话走官方 `grok sessions delete`，测试在 temp home 里放一个记录
-// 调用参数的假 CLI；同时把 root 目录交由它"删除"，模拟官方行为。
-fn fake_grok_cli(home: &Path) -> Result<PathBuf> {
-    let bin_dir = home.join(".grok/bin");
-    fs::create_dir_all(&bin_dir)?;
-    let script_path = bin_dir.join("grok");
-    fs::write(
-        &script_path,
-        format!(
-            "#!/bin/sh\nif [ \"$1\" = \"sessions\" ] && [ \"$2\" = \"delete\" ]; then\n  printf '%s\\n' \"$3\" >> '{}'\n  exit 0\nfi\nexit 1\n",
-            home.join("grok-delete.log").display()
-        ),
-    )?;
-    {
-        use std::os::unix::fs::PermissionsExt;
-
-        let mut permissions = fs::metadata(&script_path)?.permissions();
-        permissions.set_mode(0o755);
-        fs::set_permissions(&script_path, permissions)?;
+// 官方删除 CLI(codex/grok/opencode)统一用假可执行文件顶替:src/bin/reins-fake-cli.rs
+// 是跨平台的替身,拷进各测试自己的 bin 目录并按平台命名(unix 上 fs::copy 保留
+// 可执行位;Windows 上 CreateProcess 只按 .exe 解析 PATH,sh 脚本与 .cmd 都顶替不了)。
+fn fake_cli_source() -> Result<PathBuf> {
+    if let Some(path) = option_env!("CARGO_BIN_EXE_reins-fake-cli") {
+        return Ok(PathBuf::from(path));
     }
-    Ok(script_path)
+    // 单元测试没有 CARGO_BIN_EXE_* 时按标准 cargo 布局从自身位置推导:
+    // 测试进程在 <target>/<profile>/deps/ 下,bin 产物在上一级。
+    // 注意 `cargo test --lib` 不构建 bin 目标,项目脚本均为全量 `cargo test`。
+    let exe_name = if cfg!(windows) {
+        "reins-fake-cli.exe"
+    } else {
+        "reins-fake-cli"
+    };
+    std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().and_then(Path::parent).map(|dir| dir.join(exe_name)))
+        .ok_or_else(|| anyhow::anyhow!("定位 reins-fake-cli 构建产物失败"))
 }
 
+fn install_fake_cli(bin_dir: &Path, name: &str) -> Result<()> {
+    let file_name = if cfg!(windows) {
+        format!("{name}.exe")
+    } else {
+        name.to_string()
+    };
+    fs::copy(fake_cli_source()?, bin_dir.join(file_name))?;
+    Ok(())
+}
+
+// 假 CLI 把删除的会话 id 记在自身所在目录。
+fn fake_cli_log_path(bin_dir: &Path) -> PathBuf {
+    bin_dir.join("fake-cli.log")
+}
+
+// PATH 前插(分隔符跨平台),返回原值供恢复。
+fn prepend_to_path(bin_dir: &Path) -> std::ffi::OsString {
+    let original = env::var_os("PATH").unwrap_or_default();
+    let joined = env::join_paths(
+        std::iter::once(bin_dir.to_path_buf()).chain(env::split_paths(&original)),
+    )
+    .expect("PATH 拼接失败");
+    unsafe { env::set_var("PATH", &joined) };
+    original
+}
+
+// 官方删除 CLI 用假可执行文件顶替(见 fake_cli_source 注释)。
 #[test]
 fn deleting_grokbuild_family_removes_member_dirs_and_search_rows() -> Result<()> {
     let temp_home = env::temp_dir().join(format!("reins-test-{}", Uuid::new_v4()));
@@ -379,7 +365,10 @@ fn deleting_grokbuild_family_removes_member_dirs_and_search_rows() -> Result<()>
         &temp_home,
         &["grok-parent", "grok-child", "unrelated-session"],
     )?;
-    fake_grok_cli(&temp_home)?;
+    let bin_dir = temp_home.join("bin");
+    fs::create_dir_all(&bin_dir)?;
+    install_fake_cli(&bin_dir, "grok")?;
+    let original_path = prepend_to_path(&bin_dir);
 
     let result = session::delete::delete_session_inner(
         &state::session_index::SessionIndexState::default(),
@@ -388,22 +377,24 @@ fn deleting_grokbuild_family_removes_member_dirs_and_search_rows() -> Result<()>
         Some(parent_path.to_string_lossy().as_ref()),
     )?;
 
-    // root 交给官方命令（真实环境中目录也由官方删除，测试里只验证调用参数）。
-    let official_calls = fs::read_to_string(temp_home.join("grok-delete.log"))?;
+    // root 交给官方命令:假 CLI 忠实模拟官方行为(记录参数 + 删除 root 目录)。
+    let official_calls = fs::read_to_string(fake_cli_log_path(&bin_dir))?;
     assert_eq!(official_calls.lines().collect::<Vec<_>>(), ["grok-parent"]);
 
     assert_eq!(result.deleted_session_id, "grok-parent");
-    assert!(bucket.join("grok-parent").exists());
+    assert!(!bucket.join("grok-parent").exists());
     assert!(!bucket.join("grok-child").exists());
     assert!(bucket.join("prompt_history.jsonl").exists());
     assert_eq!(grok_search_rows(&temp_home, "grok-parent")?, 1);
     assert_eq!(grok_search_rows(&temp_home, "grok-child")?, 0);
     assert_eq!(grok_search_rows(&temp_home, "unrelated-session")?, 1);
 
+    unsafe { env::set_var("PATH", &original_path) };
     fs::remove_dir_all(&temp_home).ok();
     Ok(())
 }
 
+// 同上:假可执行文件顶替官方 CLI。
 #[test]
 fn deleting_grokbuild_session_prunes_empty_cwd_bucket() -> Result<()> {
     let temp_home = env::temp_dir().join(format!("reins-test-{}", Uuid::new_v4()));
@@ -413,24 +404,11 @@ fn deleting_grokbuild_session_prunes_empty_cwd_bucket() -> Result<()> {
     let parent_path = grok_fixture(&temp_home, "grok-solo")?;
     grok_history(&parent_path)?;
     let bucket = temp_home.join(".grok/sessions/not-a-cwd");
-    // 官方命令删除 root 目录，测试用假 CLI 模拟同样的文件效果。
-    fs::create_dir_all(temp_home.join(".grok/bin"))?;
-    fs::write(
-        temp_home.join(".grok/bin/grok"),
-        format!(
-            "#!/bin/sh\nif [ \"$1\" = \"sessions\" ] && [ \"$2\" = \"delete\" ]; then\n  printf '%s\\n' \"$3\" >> '{}'\n  rm -rf '{}/grok-solo'\n  exit 0\nfi\nexit 1\n",
-            temp_home.join("grok-delete.log").display(),
-            bucket.display()
-        ),
-    )?;
-    {
-        use std::os::unix::fs::PermissionsExt;
-
-        let mut permissions =
-            fs::metadata(temp_home.join(".grok/bin/grok"))?.permissions();
-        permissions.set_mode(0o755);
-        fs::set_permissions(temp_home.join(".grok/bin/grok"), permissions)?;
-    }
+    // 官方命令删除 root 目录，假 CLI 模拟同样的文件效果。
+    let bin_dir = temp_home.join("bin");
+    fs::create_dir_all(&bin_dir)?;
+    install_fake_cli(&bin_dir, "grok")?;
+    let original_path = prepend_to_path(&bin_dir);
 
     session::delete::delete_session_inner(
         &state::session_index::SessionIndexState::default(),
@@ -443,6 +421,7 @@ fn deleting_grokbuild_session_prunes_empty_cwd_bucket() -> Result<()> {
     // bucket 内已无共享文件，空目录应被清理。
     assert!(!bucket.exists());
 
+    unsafe { env::set_var("PATH", &original_path) };
     fs::remove_dir_all(&temp_home).ok();
     Ok(())
 }

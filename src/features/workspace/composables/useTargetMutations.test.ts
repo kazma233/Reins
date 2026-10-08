@@ -59,3 +59,24 @@ it("registers Grok project and format options without changing existing static p
   expect(mutations.targetCreateDialog.form).toMatchObject(BUILTIN_TARGET_PRESETS.codex!);
   expect(getBuiltinTargetPreset).not.toHaveBeenCalled();
 });
+
+it("registers dsh as a user-level preset that skips configPrefix pairing", async () => {
+  // dsh 用户级 target 含全局 Cordis patch;项目层只有 skills,列表同样提供。
+  expect(AVAILABLE_PROJECT_AGENTS).toContain("dsh");
+  expect(formatMcpConfigType("dsh")).toContain("DeepSeek Harness");
+  vi.mocked(createWorkspaceTarget).mockResolvedValue({ targetId: "dsh", updatedPaths: [] });
+  const mutations = useTargetMutations();
+  mutations.openTargetCreateDialog();
+  await mutations.handleApplyBuiltinTargetPreset("dsh");
+  expect(mutations.targetCreateDialog.form).toMatchObject(BUILTIN_TARGET_PRESETS.dsh!);
+  expect(getBuiltinTargetPreset).not.toHaveBeenCalled();
+  await mutations.handleSubmitTarget();
+  expect(createWorkspaceTarget).toHaveBeenCalledWith({
+    targetId: "dsh",
+    enabled: true,
+    skillDir: "~/.dsh/skills",
+    configPath: "~/.dsh/cordis.patch.yml",
+    mcpConfigPrefix: "",
+    mcpConfigType: "dsh",
+  });
+});

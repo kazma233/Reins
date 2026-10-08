@@ -293,9 +293,11 @@ fn normalize_raw_target_input(
 
     // MCP 配置文件和 configPrefix 必须成对出现：只有前缀没有路径无处可写，
     // 只有路径没有前缀无法定位写入节点。不需要 MCP 分发的 target
-    // 允许两者都为空，此时只做 skill 分发。
+    // 允许两者都为空，此时只做 skill 分发。dsh 的 Cordis patch 按
+    // name+serverName 定位条目，没有 prefix 概念，允许“有路径 + 空 prefix”。
+    let prefix_required = input.mcp_config_type != McpConfigType::Dsh;
     match normalized_config_path.as_deref() {
-        Some(_) if config_prefix.is_empty() => {
+        Some(_) if config_prefix.is_empty() && prefix_required => {
             bail!("target {} 的 MCP configPrefix 不能为空。", target_id);
         }
         None if !config_prefix.is_empty() => {
@@ -438,6 +440,17 @@ fn builtin_target_defaults() -> Vec<TargetDefaults> {
             config_prefix: "mcpServers",
             config_type: McpConfigType::Common,
         },
+        // dsh 的 MCP 配置是 Cordis patch 操作列表（~/.dsh/cordis.patch.yml），
+        // 按 name+serverName 定位条目，没有 configPrefix 概念。
+        TargetDefaults {
+            id: AgentTargetId("dsh".to_string()),
+            skill_dir: home_dir()
+                .map(|h| h.join(".dsh/skills"))
+                .unwrap_or_default(),
+            config_path: home_dir().map(|h| h.join(".dsh/cordis.patch.yml")),
+            config_prefix: "",
+            config_type: McpConfigType::Dsh,
+        },
     ]
 }
 
@@ -493,6 +506,15 @@ pub(super) fn project_agent_defaults(project_path: &Path) -> Vec<TargetDefaults>
             config_path: Some(project_path.join(".pi/mcp.json")),
             config_prefix: "mcpServers",
             config_type: McpConfigType::Common,
+        },
+        // dsh 项目层只读 skills(<项目>/.dsh/skills,项目 rank 优先于用户级);
+        // MCP 走全局 Cordis patch,项目级没有配置文件,是"仅 skill 分发"形态。
+        TargetDefaults {
+            id: AgentTargetId("dsh".to_string()),
+            skill_dir: project_path.join(".dsh/skills"),
+            config_path: None,
+            config_prefix: "",
+            config_type: McpConfigType::Dsh,
         },
     ]
 }

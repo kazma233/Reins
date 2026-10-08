@@ -40,7 +40,7 @@ pub(crate) use self::targets::{
     delete_workspace_target_inner, update_workspace_project_inner, update_workspace_target_inner,
 };
 
-use self::mcps::read_existing_mcp_entries;
+use self::mcps::{dsh_server_name, read_existing_mcp_entries};
 use self::skills::git_cache_last_fetched_at_ms;
 #[cfg(windows)]
 use self::targets::read_directory_link_target;
@@ -432,10 +432,19 @@ fn parse_manager_config(raw_content: &str, config_path: &Path) -> Result<Resolve
             .unwrap_or_default()
             .trim()
             .to_string();
+        let config_type = raw_target
+            .mcp
+            .config_type
+            .or_else(|| defaults.map(|item| item.config_type))
+            .unwrap_or(McpConfigType::Common);
 
         // 与 normalize_raw_target_input 的契约一致：configPrefix 只在
         // 真正有 MCP 配置文件可写时才必填（不需要 MCP 的 target 两者皆空）。
-        if config_file_path.is_some() && config_prefix.is_empty() {
+        // dsh 的 Cordis patch 按条目定位 server，没有 prefix，允许留空。
+        if config_file_path.is_some()
+            && config_prefix.is_empty()
+            && config_type != McpConfigType::Dsh
+        {
             bail!("目标 {} 的 mcp.config_prefix 不能为空。", id);
         }
 
@@ -448,11 +457,7 @@ fn parse_manager_config(raw_content: &str, config_path: &Path) -> Result<Resolve
                 skill_dir,
                 config_path: config_file_path,
                 mcp_config_prefix: config_prefix,
-                mcp_config_type: raw_target.mcp.config_type.unwrap_or_else(|| {
-                    defaults
-                        .map(|item| item.config_type)
-                        .unwrap_or(McpConfigType::Common)
-                }),
+                mcp_config_type: config_type,
             },
         );
     }
@@ -813,3 +818,7 @@ mod tests;
 #[cfg(test)]
 #[path = "../tests/workspace_config.rs"]
 mod config_tests;
+
+#[cfg(test)]
+#[path = "../tests/workspace_dsh.rs"]
+mod dsh_tests;
