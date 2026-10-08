@@ -4,8 +4,3 @@
   font-size: var(--font-size-sm);
   line-height: 1.4;
 }
-
-/* 操作成功回执与错误共用同一个位置槽，颜色区分语义 */
-.app-field-error--success {
-  color: var(--color-success);
-}
