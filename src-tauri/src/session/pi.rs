@@ -9,10 +9,11 @@ use anyhow::{Context, Result, anyhow, bail};
 use serde_json::{Value, json};
 use uuid::Uuid;
 
+use super::reader_engine::{self, MemberTimeline, event_page, message_page};
 use super::{
     ContentBlock, SessionAgent, SessionEvent, SessionEventPage, SessionFileEntry, SessionMessage,
     SessionMessagePage, SessionOverview, SessionReader, SessionSummary, SessionTokenUsage,
-    SourceApp, SummaryAccumulator, TimelineCacheEntry, UsageHourBuckets,
+    SourceApp, SummaryAccumulator, UsageHourBuckets,
 };
 
 pub(crate) struct PiBackend;
@@ -50,19 +51,12 @@ struct PiEntry {
     value: Value,
 }
 
-static PI_TIMELINE_CACHE: LazyLock<Mutex<HashMap<String, TimelineCacheEntry>>> =
-    LazyLock::new(|| Mutex::new(HashMap::new()));
+static PI_TIMELINE_CACHE: LazyLock<reader_engine::DualHalfCache> =
+    LazyLock::new(|| reader_engine::DualHalfCache::new("Pi timeline".to_string()));
 static PI_INDEX_CACHE: LazyLock<Mutex<Option<PiIndexCacheEntry>>> =
     LazyLock::new(|| Mutex::new(None));
 static PI_SUMMARY_CACHE: LazyLock<Mutex<HashMap<String, PiSummaryCacheEntry>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
-
-fn lock_timeline_cache()
--> Result<std::sync::MutexGuard<'static, HashMap<String, TimelineCacheEntry>>> {
-    PI_TIMELINE_CACHE
-        .lock()
-        .map_err(|_| anyhow!("Pi timeline cache lock was poisoned"))
-}
 
 fn lock_index_cache() -> Result<std::sync::MutexGuard<'static, Option<PiIndexCacheEntry>>> {
     PI_INDEX_CACHE
@@ -83,7 +77,7 @@ impl SessionReader for PiBackend {
     }
 
     fn clear_cache(&self) -> Result<()> {
-        lock_timeline_cache()?.clear();
+        PI_TIMELINE_CACHE.clear()?;
         lock_summary_cache()?.clear();
         *lock_index_cache()? = None;
         Ok(())
@@ -112,14 +106,14 @@ impl SessionReader for PiBackend {
 
     fn parse_overview(&self, path: &Path) -> Result<SessionOverview> {
         let summary = cached_summary(path)?;
-        let (messages, events) = cached_timeline(path)?;
+        let timeline = cached_timeline(path)?;
         let header = read_header(path)?;
 
         Ok(SessionOverview {
             summary,
             source_paths: vec![path.display().to_string()],
-            message_count: Some(messages.len()),
-            event_count: Some(events.len()),
+            message_count: Some(timeline.messages.len()),
+            event_count: Some(timeline.events.len()),
             agents: vec![SessionAgent {
                 session_id: header.id,
                 label: "主 Agent".to_string(),
@@ -143,34 +137,14 @@ impl SessionReader for PiBackend {
         offset: usize,
         limit: usize,
     ) -> Result<SessionEventPage> {
-        let (_, events) = cached_timeline(path)?;
-        let (events, start, next_offset, total_count) =
-            crate::support::paging::slice_page(&events, offset, limit);
-
-        Ok(SessionEventPage {
-            events,
-            offset: start,
-            limit,
-            next_offset,
-            total_count,
-            has_more: next_offset.is_some(),
-        })
+        let timeline = cached_timeline(path)?;
+        Ok(event_page(&timeline.events, offset, limit))
     }
 }
 
 fn parse_messages_page(path: &Path, offset: usize, limit: usize) -> Result<SessionMessagePage> {
-    let (messages, _) = cached_timeline(path)?;
-    let (messages, start, next_offset, total_count) =
-        crate::support::paging::slice_page(&messages, offset, limit);
-
-    Ok(SessionMessagePage {
-        messages,
-        offset: start,
-        limit,
-        next_offset,
-        total_count,
-        has_more: next_offset.is_some(),
-    })
+    let timeline = cached_timeline(path)?;
+    Ok(message_page(&timeline.messages, offset, limit))
 }
 
 pub(crate) fn root() -> Result<PathBuf> {
@@ -1133,39 +1107,15 @@ fn sanitize_pi_user_blocks(blocks: Vec<ContentBlock>) -> Vec<ContentBlock> {
         .collect()
 }
 
-fn cached_timeline(path: &Path) -> Result<(Vec<SessionMessage>, Vec<SessionEvent>)> {
-    let key = crate::support::fs::path_key(path);
-    let updated_at = file_mtime(path)?;
-
-    {
-        let cache = lock_timeline_cache()?;
-        let cached = cache
-            .get(&key)
-            .filter(|entry| entry.updated_at == updated_at)
-            .and_then(|entry| {
-                let (Some(messages), Some(events)) = (&entry.messages, &entry.events) else {
-                    return None;
-                };
-                Some((messages.clone(), events.clone()))
-            });
-        if let Some((messages, events)) = cached {
-            return Ok((messages, events));
-        }
-    }
-
-    let document = read_document(path)?;
-    let (messages, events) = build_timeline(&document.header, &document.entries);
-    super::family_timeline::store_timeline_items(
-        &PI_TIMELINE_CACHE,
-        "Pi timeline",
-        key,
-        updated_at,
-        |entry| {
-            entry.messages = Some(messages.clone());
-            entry.events = Some(events.clone());
+fn cached_timeline(path: &Path) -> Result<MemberTimeline> {
+    PI_TIMELINE_CACHE.load(
+        crate::support::fs::path_key(path),
+        file_mtime(path)?,
+        || {
+            let document = read_document(path)?;
+            Ok(build_timeline(&document.header, &document.entries))
         },
-    )?;
-    Ok((messages, events))
+    )
 }
 
 fn resolve_configured_path(value: &str, cwd: &Path, home: &Path) -> PathBuf {
