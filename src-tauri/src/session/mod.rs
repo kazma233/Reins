@@ -26,7 +26,6 @@ pub(crate) mod usage_stats;
 pub(crate) mod zcode;
 
 use self::catalog::*;
-use self::family_timeline::*;
 use self::jsonl::*;
 use self::model::*;
 use self::text::*;

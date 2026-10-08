@@ -159,19 +159,6 @@ fn sort_families<Row: FamilyRow>(families: &mut [Family<Row>]) {
     });
 }
 
-#[derive(Clone)]
-pub(crate) struct FamilyIndexCacheEntry<Row> {
-    pub(crate) source_key: String,
-    pub(crate) updated_at: i64,
-    pub(crate) index: FamilyIndex<Row>,
-}
-
-impl<Row> FamilyIndexCacheEntry<Row> {
-    pub(crate) fn is_valid(&self, source_key: &str, updated_at: i64) -> bool {
-        self.source_key == source_key && self.updated_at == updated_at
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -347,18 +334,5 @@ mod tests {
                 "/tmp/a/child-2.jsonl".to_string(),
             ]
         );
-    }
-
-    #[test]
-    fn cache_entry_validity_requires_key_and_timestamp_match() {
-        let entry = FamilyIndexCacheEntry::<TestRow> {
-            source_key: "/tmp/sessions".to_string(),
-            updated_at: 42,
-            index: FamilyIndex::build(Vec::new()),
-        };
-
-        assert!(entry.is_valid("/tmp/sessions", 42));
-        assert!(!entry.is_valid("/tmp/other", 42));
-        assert!(!entry.is_valid("/tmp/sessions", 43));
     }
 }

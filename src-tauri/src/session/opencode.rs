@@ -93,10 +93,7 @@ impl FamilySpec for OpenCodeSpec {
         list_session_rows()
     }
 
-    fn group_families(
-        &self,
-        rows: Vec<OpenCodeSessionRow>,
-    ) -> Result<Vec<OpenCodeSessionFamily>> {
+    fn group_families(&self, rows: Vec<OpenCodeSessionRow>) -> Result<Vec<OpenCodeSessionFamily>> {
         Ok(build_session_families(rows))
     }
 

@@ -31,9 +31,6 @@ pub(crate) struct MemberTimeline {
 
 /// 目录索引的失效口径。engine 只做相等比较、不假设单调性:指纹串把文件
 /// 集合变化也计入失效,与 mtime 是两种语义。
-// 逐 reader 迁移期间的过渡:尚未迁入的来源(dsh/opencode/zcode)会构造
-// 这些变体,全部迁完后删除本 allow。
-#[allow(dead_code)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum Freshness {
     Stamp(i64),
@@ -41,7 +38,6 @@ pub(crate) enum Freshness {
 }
 
 /// overview 计数三派。
-#[allow(dead_code)]
 #[derive(Clone, Copy)]
 pub(crate) enum OverviewCounts {
     /// 加载双半时间线取 len(有填缓存副作用,时序由 engine 保持)。
@@ -53,7 +49,6 @@ pub(crate) enum OverviewCounts {
 }
 
 /// family 摘要的合成方式。
-#[allow(dead_code)]
 #[derive(Clone, Copy)]
 pub(crate) enum SummaryKind {
     /// root 转录整文件解析,经三级缓存(内存 → 持久层 → 解析)。
@@ -63,7 +58,6 @@ pub(crate) enum SummaryKind {
 }
 
 /// 行装载的坏文件策略。
-#[allow(dead_code)]
 #[derive(Clone, Copy)]
 pub(crate) enum RowErrorPolicy {
     /// 静默跳过。
