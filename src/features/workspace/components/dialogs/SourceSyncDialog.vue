@@ -76,7 +76,19 @@ function getSelectableTargetIds(list: SyncTargetOption[]): string[] {
 // 递增令牌作废旧请求：关闭弹窗或切换来源后，在途响应不得再写回状态。
 let loadToken = 0;
 
-async function refreshOptions({ keepTargetSelection = false }: { keepTargetSelection?: boolean } = {}) {
+// 列表、勾选与来源路径一起清空，调用方保证之后会重新读一遍。
+function clearOptions() {
+  targets.value = [];
+  skills.value = [];
+  sourceRoot.value = "";
+  selectedSkillPaths.value = new Set();
+  selectedTargetIds.value = new Set();
+}
+
+// keepExistingOptions 只给「强制拉取」用：拉取后重扫时保留当前列表，
+// 避免整块弹窗闪成加载态；打开弹窗必须走清空路径（组件不随弹窗关闭卸载，
+// 上一轮的列表还在内存里，不清就会先显示上一个来源的数据再被替换）。
+async function refreshOptions({ keepExistingOptions = false }: { keepExistingOptions?: boolean } = {}) {
   const source = props.source;
   if (!source) return;
   const token = ++loadToken;
@@ -84,6 +96,9 @@ async function refreshOptions({ keepTargetSelection = false }: { keepTargetSelec
   loading.value = true;
   loadError.value = null;
   resultMessage.value = null;
+  if (!keepExistingOptions) {
+    clearOptions();
+  }
 
   try {
     const [targetOptions, skillResult] = await Promise.all([
@@ -101,14 +116,10 @@ async function refreshOptions({ keepTargetSelection = false }: { keepTargetSelec
     selectedSkillPaths.value = new Set(
       skillResult.skills.filter((s) => s.matched !== false).map((s) => s.relativePath),
     );
-    if (!keepTargetSelection) selectedTargetIds.value = new Set();
+    if (!keepExistingOptions) selectedTargetIds.value = new Set();
   } catch (error) {
     if (token !== loadToken) return;
-    targets.value = [];
-    skills.value = [];
-    sourceRoot.value = "";
-    selectedSkillPaths.value = new Set();
-    selectedTargetIds.value = new Set();
+    clearOptions();
     loadError.value = extractErrorMessage(error, "读取同步选项失败。");
   } finally {
     if (token === loadToken) loading.value = false;
@@ -286,7 +297,7 @@ async function handleRemoveLink(targetId: string, destinationPath: string) {
 }
 
 // 强制拉取忽略 24 小时自动更新间隔。拉完重扫来源，让左列直接反映远端最新
-// 内容；目标勾选与来源无关，予以保留。
+// 内容；重扫期间保留当前列表与目标勾选，避免整块弹窗闪成加载态。
 async function handleRefreshSource() {
   const source = props.source;
   if (!source || source.type !== "git") return;
@@ -297,7 +308,7 @@ async function handleRefreshSource() {
     error: `拉取 ${source.label} 失败。`,
     onSuccess: () => {
       reportResult({ text: `已从远端拉取 ${source.label}。`, failed: false });
-      void refreshOptions({ keepTargetSelection: true });
+      void refreshOptions({ keepExistingOptions: true });
     },
     onError: (message) => {
       reportResult({ text: message, failed: true });
@@ -340,8 +351,8 @@ async function handleRefreshSource() {
       </button>
     </template>
 
-    <!-- 已有数据时保留列表（交互由 busy 锁住），重新扫描完成后再整体替换，
-         避免拉取来源后整块弹窗闪成加载态 -->
+    <!-- 打开弹窗时列表已清空，这里显示的是当次读取的加载态；只有强制拉取
+         保留列表（交互由 busy 锁住），重扫完成后整体替换 -->
     <template v-if="loading && skills.length === 0">
       <div class="empty-state">正在加载同步选项...</div>
     </template>
