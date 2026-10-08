@@ -2,30 +2,24 @@ use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::{LazyLock, Mutex};
+use std::sync::Arc;
 
 use anyhow::{Context, Result, anyhow, bail};
 use ruzstd::decoding::{BlockDecodingStrategy, FrameDecoder};
 use serde_json::{Value, json};
 
+use super::family_index::{Family, FamilyIndex, FamilyRow};
+use super::family_timeline::FamilyAgentLabel;
+use super::reader_engine::{
+    FamilyReader, FamilySpec, Freshness, MarkerShape, MemberTimeline, RowErrorPolicy, SummaryKind,
+    scan_files,
+};
 use super::{
-    ContentBlock, SessionEvent, SessionEventPage, SessionFileEntry, SessionMessage,
-    SessionMessagePage, SessionOverview, SessionReader, SessionSummary, SessionTokenUsage,
-    SourceApp, TimelineCacheEntry, UsageHourBuckets,
-    family_index::{Family, FamilyIndex, FamilyRow},
-    family_timeline::{
-        FamilyAgentLabel, cached_family_events, cached_family_messages, family_agents,
-    },
+    ContentBlock, SessionEvent, SessionMessage, SessionSummary, SessionTokenUsage, SourceApp,
+    UsageHourBuckets,
 };
 
-pub(crate) struct DshBackend;
-
-pub(crate) static BACKEND: DshBackend = DshBackend;
-
-static DSH_TIMELINE_CACHE: LazyLock<Mutex<HashMap<String, TimelineCacheEntry>>> =
-    LazyLock::new(|| Mutex::new(HashMap::new()));
-static DSH_INDEX_CACHE: LazyLock<Mutex<Option<DshIndexCacheEntry>>> =
-    LazyLock::new(|| Mutex::new(None));
+pub(crate) static BACKEND: FamilyReader<DshSpec> = FamilyReader::new(DshSpec, sessions_root);
 
 // 可用性看 ~/.dsh/sessions 而不是 ~/.dsh 本身;不读 .credentials.yaml 等其他内容。
 pub(crate) fn root() -> Result<PathBuf> {
@@ -36,19 +30,6 @@ pub(crate) fn root() -> Result<PathBuf> {
 
 pub(crate) fn sessions_root() -> Result<PathBuf> {
     Ok(root()?.join("sessions"))
-}
-
-fn lock_timeline_cache()
--> Result<std::sync::MutexGuard<'static, HashMap<String, TimelineCacheEntry>>> {
-    DSH_TIMELINE_CACHE
-        .lock()
-        .map_err(|_| anyhow!("DSH timeline cache lock was poisoned"))
-}
-
-fn lock_index_cache() -> Result<std::sync::MutexGuard<'static, Option<DshIndexCacheEntry>>> {
-    DSH_INDEX_CACHE
-        .lock()
-        .map_err(|_| anyhow!("DSH index cache lock was poisoned"))
 }
 
 // dsh 转录是按写入批次追加的独立 zstd 帧拼接;ruzstd 的 StreamingDecoder 只解
@@ -650,7 +631,7 @@ struct DshSessionRow {
 }
 
 #[derive(Clone)]
-struct DshFamilyRow {
+pub(crate) struct DshFamilyRow {
     row: DshSessionRow,
     family_root_id: String,
     // 父日志 catalog 声明的关系;root 自身为 None。
@@ -681,10 +662,165 @@ impl FamilyRow for DshFamilyRow {
 
 type DshFamily = Family<DshFamilyRow>;
 
-struct DshIndexCacheEntry {
-    source_key: String,
-    fingerprint: String,
-    index: FamilyIndex<DshFamilyRow>,
+#[derive(Clone)]
+pub(crate) struct DshSpec;
+
+impl FamilySpec for DshSpec {
+    type Row = DshFamilyRow;
+
+    fn app(&self) -> SourceApp {
+        SourceApp::Dsh
+    }
+
+    fn label(&self) -> &'static str {
+        "DSH"
+    }
+
+    // 现状 index 锁文案无 "family" 字样,逐字保留。
+    fn index_lock_label(&self) -> String {
+        "DSH index".to_string()
+    }
+
+    // 传入的 root 就是 sessions 目录,不再下钻子目录。
+    fn scan_root(&self, root: &Path) -> PathBuf {
+        root.to_path_buf()
+    }
+
+    fn list_rows(&self, scan_root: &Path) -> Result<Vec<DshFamilyRow>> {
+        let paths = session_transcript_paths_at(scan_root)?;
+        let rows = scan_files(
+            paths,
+            |path| Ok(session_row(path.to_path_buf(), read_transcript(path)?)),
+            RowErrorPolicy::SkipLogged,
+            "DSH",
+        )?;
+
+        // scan_files 只表达单文件解析失败策略;同 id 双文件无法确定 family
+        // 归属,在枚举后自行检查。
+        let mut seen = HashSet::new();
+        let mut family_rows = Vec::with_capacity(rows.len());
+        for row in rows {
+            if !seen.insert(row.session_id.clone()) {
+                bail!("Conflicting DSH session ids for {}", row.path.display());
+            }
+            family_rows.push(DshFamilyRow {
+                family_root_id: row.session_id.clone(),
+                parent_id: None,
+                label: None,
+                row,
+            });
+        }
+        Ok(family_rows)
+    }
+
+    fn group_families(&self, rows: Vec<DshFamilyRow>) -> Result<Vec<DshFamily>> {
+        let by_id = rows
+            .into_iter()
+            .map(|family_row| (family_row.row.session_id.clone(), family_row.row))
+            .collect::<HashMap<_, _>>();
+        build_families(by_id)
+    }
+
+    // dsh 的双口径:index 失效用指纹(文件集合增删也触发重建),timeline
+    // 失效用成员 mtime 最大值(引擎默认)。这是现状的刻意差异,不是遗漏。
+    fn index_freshness(&self, scan_root: &Path) -> Result<Freshness> {
+        let paths = session_transcript_paths_at(scan_root)?;
+        sessions_fingerprint(&paths).map(Freshness::Fingerprint)
+    }
+
+    fn summary_kind(&self) -> SummaryKind {
+        SummaryKind::Rows
+    }
+
+    fn summary_from_rows(&self, root: &DshFamilyRow) -> SessionSummary {
+        session_summary(&root.row)
+    }
+
+    fn row_usage(&self, row: &DshFamilyRow) -> Option<SessionTokenUsage> {
+        row.row.token_usage.clone()
+    }
+
+    // 仅索引反查,不做文件系统兜底:孤儿子会话不入索引,本就不可解析。
+    fn resolve_path(
+        &self,
+        index: &FamilyIndex<DshFamilyRow>,
+        _scan_root: &Path,
+        source_session_id: &str,
+    ) -> Result<PathBuf> {
+        index
+            .path_for_id(source_session_id)
+            .ok_or_else(|| anyhow!("Could not find DSH session {source_session_id}"))
+    }
+
+    // 双半共用一次解码:转录是多帧 zstd,原先 messages/events 两个 loader
+    // 对同一文件各完整解码一遍。
+    fn load_members(&self, members: &[DshFamilyRow]) -> Result<Vec<MemberTimeline>> {
+        members
+            .iter()
+            .map(|row| {
+                let transcript = read_transcript(&row.row.path)?;
+                Ok(MemberTimeline {
+                    messages: Arc::new(transcript.messages),
+                    events: Arc::new(transcript.events),
+                })
+            })
+            .collect()
+    }
+
+    fn agent_name(&self, row: &DshFamilyRow) -> String {
+        row.label
+            .clone()
+            .filter(|label| !label.trim().is_empty())
+            .unwrap_or_else(|| row.row.title.clone())
+    }
+
+    // message/event 同 id(无 start/event 后缀),payload 不对称:event 不带
+    // transcript_path。payload.type=subagent_started 是前端 subagent-group
+    // 分组契约。
+    fn marker(&self, member_id: &str, row: &DshFamilyRow) -> MarkerShape {
+        MarkerShape {
+            message_id: format!("dsh-subagent-{member_id}"),
+            event_id: format!("dsh-subagent-{member_id}"),
+            message_extras: json!({
+                "transcript_path": row.row.path.display().to_string(),
+                "parent_session_id": row.parent_id,
+            }),
+            event_extras: json!({
+                "parent_session_id": row.parent_id,
+            }),
+        }
+    }
+
+    fn agent_label(&self, family: &DshFamily, row: &DshFamilyRow) -> FamilyAgentLabel {
+        if row.row.session_id == family.root.row.session_id {
+            FamilyAgentLabel::Root
+        } else {
+            FamilyAgentLabel::Child(row.label.clone().unwrap_or_else(|| row.row.title.clone()))
+        }
+    }
+
+    fn check_agent_member(&self, family: &DshFamily, agent_session_id: &str) -> Result<()> {
+        if family
+            .members
+            .iter()
+            .all(|row| row.row.session_id != agent_session_id)
+        {
+            bail!("DSH subagent does not belong to this session");
+        }
+        Ok(())
+    }
+}
+
+// 测试直接按根构造引擎实例:完全脱离进程 env 与全局锁,可并行。
+// codex/claude 的同形助手已被 session_engine 级用例消费;dsh 的引擎级用例
+// 尚未落地,落地后删除此 allow。
+#[cfg(test)]
+#[allow(dead_code)]
+pub(crate) fn engine_at(
+    root: PathBuf,
+    store_dir: PathBuf,
+) -> super::reader_engine::ReaderEngine<DshSpec> {
+    super::reader_engine::ReaderEngine::new(DshSpec, root, store_dir)
 }
 
 fn sessions_fingerprint(paths: &[PathBuf]) -> Result<String> {
@@ -805,56 +941,6 @@ fn build_families(rows: HashMap<String, DshSessionRow>) -> Result<Vec<DshFamily>
     Ok(families)
 }
 
-fn family_index() -> Result<FamilyIndex<DshFamilyRow>> {
-    let root = sessions_root()?;
-    let source_key = root.display().to_string();
-    let paths = session_transcript_paths_at(&root)?;
-    let fingerprint = sessions_fingerprint(&paths)?;
-
-    if let Some(entry) = lock_index_cache()?
-        .as_ref()
-        .filter(|entry| entry.source_key == source_key && entry.fingerprint == fingerprint)
-    {
-        return Ok(entry.index.clone());
-    }
-
-    let mut rows = HashMap::new();
-    for path in &paths {
-        match read_transcript(path) {
-            Ok(transcript) => {
-                let row = session_row(path.clone(), transcript);
-                if rows.insert(row.session_id.clone(), row).is_some() {
-                    bail!("Conflicting DSH session ids for {}", path.display());
-                }
-            }
-            Err(error) => {
-                // 单个损坏转录跳过,不让一个坏文件隐藏其余会话。
-                crate::logger::log_error(format!(
-                    "DSH session skipped {}: {error}",
-                    path.display()
-                ));
-            }
-        }
-    }
-
-    let index = FamilyIndex::build_with_ids(build_families(rows)?);
-    *lock_index_cache()? = Some(DshIndexCacheEntry {
-        source_key,
-        fingerprint,
-        index: index.clone(),
-    });
-    Ok(index)
-}
-
-fn family_for_path(path: &Path) -> Result<DshFamily> {
-    let key = crate::support::fs::path_key(path);
-    family_index()?
-        .sessions_by_path
-        .get(&key)
-        .cloned()
-        .ok_or_else(|| anyhow!("Could not find DSH session for {}", path.display()))
-}
-
 fn session_summary(row: &DshSessionRow) -> SessionSummary {
     SessionSummary {
         source_app: SourceApp::Dsh,
@@ -866,247 +952,6 @@ fn session_summary(row: &DshSessionRow) -> SessionSummary {
         created_at: Some(row.created_at),
         updated_at: Some(row.updated_at),
         token_usage: row.token_usage,
-    }
-}
-
-fn family_summary(family: &DshFamily) -> SessionSummary {
-    let mut summary = session_summary(&family.root.row);
-    family.apply_summary_aggregates(&mut summary);
-    summary.token_usage = family.sum_token_usage(|row| row.row.token_usage);
-    summary
-}
-
-fn family_cache_timestamp(family: &DshFamily) -> Result<i64> {
-    let mut timestamp = 0i64;
-    for row in &family.members {
-        timestamp = timestamp.max(crate::support::time::file_modified_timestamp_millis(
-            &row.row.path,
-        )?);
-    }
-    Ok(timestamp)
-}
-
-// 子代理入口 marker:payload.type=subagent_started 是前端 subagent-group 分组契约。
-fn marker_message(row: &DshFamilyRow) -> SessionMessage {
-    let title = row
-        .label
-        .clone()
-        .filter(|label| !label.trim().is_empty())
-        .unwrap_or_else(|| row.row.title.clone());
-    SessionMessage {
-        id: format!("dsh-subagent-{}", row.row.session_id),
-        role: "assistant".to_string(),
-        timestamp: Some(row.row.created_at),
-        blocks: vec![ContentBlock {
-            kind: "output_text".to_string(),
-            text: Some(format!(
-                "Sub-agent session: {}\n{}",
-                title, row.row.session_id
-            )),
-            tool_name: None,
-            tool_call_id: None,
-            is_error: None,
-            payload: Some(json!({
-                "type": "subagent_started",
-                "session_id": row.row.session_id,
-                "title": title,
-                "parent_session_id": row.parent_id,
-                "transcript_path": row.row.path.display().to_string(),
-            })),
-        }],
-        session_id: Some(row.row.session_id.clone()),
-    }
-}
-
-fn marker_event(row: &DshFamilyRow) -> SessionEvent {
-    let title = row
-        .label
-        .clone()
-        .filter(|label| !label.trim().is_empty())
-        .unwrap_or_else(|| row.row.title.clone());
-    SessionEvent {
-        id: format!("dsh-subagent-{}", row.row.session_id),
-        kind: "subagent_started".to_string(),
-        timestamp: Some(row.row.created_at),
-        summary: format!("Sub-agent session started: {title}"),
-        payload: Some(json!({
-            "session_id": row.row.session_id,
-            "title": title,
-            "parent_session_id": row.parent_id,
-        })),
-        session_id: Some(row.row.session_id.clone()),
-    }
-}
-
-// family 时间线:root 与全部子会话的消息/事件按时间归并;marker 声明子代理入口。
-fn load_family_messages(family: &DshFamily) -> Result<Vec<SessionMessage>> {
-    let mut messages: Vec<_> = family
-        .members
-        .iter()
-        .filter(|row| row.row.session_id != family.root.row.session_id)
-        .map(marker_message)
-        .collect();
-    for row in &family.members {
-        messages.extend(read_transcript(&row.row.path)?.messages);
-    }
-    messages.sort_by(|left, right| {
-        left.timestamp
-            .cmp(&right.timestamp)
-            .then_with(|| left.id.cmp(&right.id))
-    });
-    Ok(messages)
-}
-
-fn load_family_events(family: &DshFamily) -> Result<Vec<SessionEvent>> {
-    let mut events: Vec<_> = family
-        .members
-        .iter()
-        .filter(|row| row.row.session_id != family.root.row.session_id)
-        .map(marker_event)
-        .collect();
-    for row in &family.members {
-        events.extend(read_transcript(&row.row.path)?.events);
-    }
-    events.sort_by(|left, right| {
-        left.timestamp
-            .cmp(&right.timestamp)
-            .then_with(|| left.id.cmp(&right.id))
-    });
-    Ok(events)
-}
-
-fn cached_family_messages_for(family: &DshFamily) -> Result<Vec<SessionMessage>> {
-    cached_family_messages(
-        &DSH_TIMELINE_CACHE,
-        "DSH timeline",
-        family.root.row.session_id.clone(),
-        family_cache_timestamp(family)?,
-        || load_family_messages(family),
-    )
-}
-
-fn cached_family_events_for(family: &DshFamily) -> Result<Vec<SessionEvent>> {
-    cached_family_events(
-        &DSH_TIMELINE_CACHE,
-        "DSH timeline",
-        family.root.row.session_id.clone(),
-        family_cache_timestamp(family)?,
-        || load_family_events(family),
-    )
-}
-
-impl SessionReader for DshBackend {
-    fn list_entries(&self) -> Result<Vec<SessionFileEntry>> {
-        let mut entries = family_index()?
-            .families
-            .iter()
-            .map(|family| {
-                let summary = family_summary(family);
-                SessionFileEntry {
-                    path: PathBuf::from(&summary.transcript_path),
-                    sort_timestamp: summary.updated_at.unwrap_or_default(),
-                    summary: Some(summary),
-                }
-            })
-            .collect::<Vec<_>>();
-        super::sort_entries(&mut entries);
-        Ok(entries)
-    }
-
-    fn clear_cache(&self) -> Result<()> {
-        lock_timeline_cache()?.clear();
-        *lock_index_cache()? = None;
-        Ok(())
-    }
-
-    fn resolve_path(&self, source_session_id: &str) -> Result<PathBuf> {
-        family_index()?
-            .path_for_id(source_session_id)
-            .ok_or_else(|| anyhow!("Could not find DSH session {source_session_id}"))
-    }
-
-    fn parse_summary(&self, path: &Path) -> Result<SessionSummary> {
-        Ok(family_summary(&family_for_path(path)?))
-    }
-
-    fn parse_overview(&self, path: &Path) -> Result<SessionOverview> {
-        let family = family_for_path(path)?;
-        let messages = cached_family_messages_for(&family)?;
-        let events = cached_family_events_for(&family)?;
-        Ok(SessionOverview {
-            summary: family_summary(&family),
-            source_paths: family.source_paths(),
-            message_count: Some(messages.len()),
-            event_count: Some(events.len()),
-            agents: family_agents(&family, |row| {
-                if row.row.session_id == family.root.row.session_id {
-                    FamilyAgentLabel::Root
-                } else {
-                    FamilyAgentLabel::Child(
-                        row.label.clone().unwrap_or_else(|| row.row.title.clone()),
-                    )
-                }
-            }),
-        })
-    }
-
-    fn parse_messages_page(
-        &self,
-        path: &Path,
-        offset: usize,
-        limit: usize,
-    ) -> Result<SessionMessagePage> {
-        let family = family_for_path(path)?;
-        let messages = cached_family_messages_for(&family)?;
-        let (page, start, next_offset, total_count) =
-            crate::support::paging::slice_page(&messages, offset, limit);
-        Ok(SessionMessagePage {
-            messages: page,
-            offset: start,
-            limit,
-            next_offset,
-            total_count,
-            has_more: next_offset.is_some(),
-        })
-    }
-
-    fn parse_events_page(
-        &self,
-        path: &Path,
-        offset: usize,
-        limit: usize,
-    ) -> Result<SessionEventPage> {
-        let family = family_for_path(path)?;
-        let events = cached_family_events_for(&family)?;
-        let (page, start, next_offset, total_count) =
-            crate::support::paging::slice_page(&events, offset, limit);
-        Ok(SessionEventPage {
-            events: page,
-            offset: start,
-            limit,
-            next_offset,
-            total_count,
-            has_more: next_offset.is_some(),
-        })
-    }
-
-    fn parse_agent_messages(
-        &self,
-        path: &Path,
-        agent_session_id: &str,
-    ) -> Result<Vec<SessionMessage>> {
-        let family = family_for_path(path)?;
-        if family
-            .members
-            .iter()
-            .all(|row| row.row.session_id != agent_session_id)
-        {
-            bail!("DSH subagent does not belong to this session");
-        }
-        Ok(super::family_timeline::agent_messages(
-            cached_family_messages_for(&family)?,
-            agent_session_id,
-        ))
     }
 }
 
