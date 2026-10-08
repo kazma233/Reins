@@ -576,6 +576,8 @@ fn partition_excluded_returns_skills_not_kept() {
 
 #[test]
 fn default_config_template_parses_with_builtin_targets() -> Result<()> {
+    // 读 ambient PI env 断言默认值,必须持全局锁防并行 pi 测试翻转 env。
+    let _guard = TestEnvGuard::lock();
     let config_path = PathBuf::from("/tmp/reins-default-template-test.yaml");
     let config = parse_manager_config(&default_config_template(), &config_path)?;
 
@@ -659,6 +661,8 @@ fn default_config_template_parses_with_builtin_targets() -> Result<()> {
 
 #[test]
 fn global_pi_target_without_mcp_section_falls_back_to_preset() -> Result<()> {
+    // 同上:两次读 PI env 的断言要防并行翻转。
+    let _guard = TestEnvGuard::lock();
     let config_path = PathBuf::from("/tmp/reins-pi-target-parse-test.yaml");
     let raw = r#"targets:
   pi:
