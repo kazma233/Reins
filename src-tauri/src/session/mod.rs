@@ -18,6 +18,7 @@ pub(crate) mod family_timeline;
 pub(crate) mod grokbuild;
 pub(crate) mod opencode;
 pub(crate) mod pi;
+pub(crate) mod sources;
 pub(crate) mod summary_cache;
 pub(crate) mod usage_day_cache;
 pub(crate) mod usage_stats;
@@ -30,7 +31,9 @@ use self::model::*;
 use self::text::*;
 use self::usage_stats::{hour_key, merge_usage_bucket};
 
-pub(crate) trait SessionReader {
+// Sync:来源注册表的 spec 会跨线程共享(按来源并行探测/统计),读取器自身
+// 必须无内部可变性,并发安全靠各实现内部的 static Mutex 保证。
+pub(crate) trait SessionReader: Sync {
     fn list_entries(&self) -> Result<Vec<SessionFileEntry>>;
 
     fn clear_cache(&self) -> Result<()> {
@@ -72,25 +75,13 @@ pub(crate) trait SessionReader {
 }
 
 pub(crate) fn reader(source_app: SourceApp) -> &'static dyn SessionReader {
-    match source_app {
-        SourceApp::Codex => &codex::BACKEND,
-        SourceApp::ClaudeCode => &claude_code::BACKEND,
-        SourceApp::OpenCode => &opencode::BACKEND,
-        SourceApp::Pi => &pi::BACKEND,
-        SourceApp::GrokBuild => &grokbuild::BACKEND,
-        SourceApp::Zcode => &zcode::BACKEND,
-        SourceApp::Dsh => &dsh::BACKEND,
-    }
+    sources::spec(source_app).reader
 }
 
 pub(crate) fn clear_all_caches() -> Result<()> {
-    reader(SourceApp::Codex).clear_cache()?;
-    reader(SourceApp::ClaudeCode).clear_cache()?;
-    reader(SourceApp::OpenCode).clear_cache()?;
-    reader(SourceApp::Pi).clear_cache()?;
-    reader(SourceApp::GrokBuild).clear_cache()?;
-    reader(SourceApp::Zcode).clear_cache()?;
-    reader(SourceApp::Dsh).clear_cache()?;
+    for spec in sources::SOURCES {
+        spec.reader.clear_cache()?;
+    }
     // 持久缓存一并清空：用户触发的刷新是"全量重建"的逃生通道。
     summary_cache::clear_all();
     usage_day_cache::clear_all();
@@ -98,18 +89,9 @@ pub(crate) fn clear_all_caches() -> Result<()> {
 }
 
 pub(crate) fn delete_session(source_app: SourceApp, path: &Path) -> Result<()> {
-    match source_app {
-        SourceApp::Codex => codex::delete_session(path),
-        SourceApp::ClaudeCode => claude_code::delete_session(path),
-        SourceApp::OpenCode => opencode::delete_session(path),
-        SourceApp::Pi => pi::delete_session(path),
-        SourceApp::GrokBuild => grokbuild::delete_session(path),
-        // zcode CLI 不随桌面版安装、无官方单会话删除命令,直接删库又与常驻
-        // 进程的写入冲突,所以整体不提供删除。
-        SourceApp::Zcode => bail!("ZCode session deletion is unsupported"),
-        // dsh 无官方单会话删除命令(桌面版删除只是 workspace.json 的 archive
-        // 标记),删除转录文件会与常驻进程的写入冲突。
-        SourceApp::Dsh => bail!("DSH session deletion is unsupported"),
+    match sources::spec(source_app).delete {
+        sources::DeletePolicy::Deleter(delete) => delete(path),
+        sources::DeletePolicy::Unsupported(reason) => bail!("{reason}"),
     }
 }
 

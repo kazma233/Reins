@@ -55,7 +55,7 @@ pub(crate) fn apply_mcp_to_target_inner(
         target_id: AgentTargetId(target_id.to_string()),
         updated_path: Some(display_path(&updated_path)),
         action: "apply".to_string(),
-            detail: format!("已写入 {}", display_path(&updated_path)),
+        detail: format!("已写入 {}", display_path(&updated_path)),
     })
 }
 
@@ -81,7 +81,7 @@ pub(crate) fn preview_mcp_target_inner(
     let config_path = target
         .config_path
         .as_ref()
-            .ok_or_else(|| anyhow!("目标 {target_id} 没有 MCP 配置路径"))?;
+        .ok_or_else(|| anyhow!("目标 {target_id} 没有 MCP 配置路径"))?;
 
     let (format, content) = preview_mcp_entry(target, server)?;
 
@@ -284,7 +284,7 @@ fn preview_mcp_entry(
         // 与 JSON/TOML target 一致：preview 先确认文件可解析，再展示条目。
         read_dsh_patch_ops(config_path)?;
         let op = desired_dsh_insert_op(&server.name, server)?;
-    let content = serde_yaml::to_string(&vec![op]).context("MCP 预览序列化失败")?;
+        let content = serde_yaml::to_string(&vec![op]).context("MCP 预览序列化失败")?;
         return Ok(("yaml".to_string(), content));
     }
 
@@ -545,7 +545,6 @@ pub(super) fn desired_opencode_mcp(server: &ResolvedMcpConfig) -> Result<JsonVal
 const DSH_MCP_CLIENT_PLUGIN: &str = "@deepseek-ai/dsh-mcp-client";
 const DSH_DEFAULT_TOOL_CALL_TIMEOUT_MS: u64 = 60_000;
 
-
 // dsh 要求 serverName 匹配 [A-Za-z0-9_-]{1,32}：非法字符折叠为 -，超长截断。
 pub(super) fn dsh_server_name(server_name: &str) -> String {
     let mut sanitized: String = server_name
@@ -610,9 +609,7 @@ fn desired_dsh_insert_entry(server_name: &str, server: &ResolvedMcpConfig) -> Re
                 .ok_or_else(|| anyhow!("无法解析 HOME 目录。"))?
                 .display()
                 .to_string(),
-            tool_call_timeout_ms: server
-                .timeout
-                .unwrap_or(DSH_DEFAULT_TOOL_CALL_TIMEOUT_MS),
+            tool_call_timeout_ms: server.timeout.unwrap_or(DSH_DEFAULT_TOOL_CALL_TIMEOUT_MS),
             fail_on_startup_error: false,
         },
     };
@@ -636,7 +633,6 @@ fn read_dsh_patch_ops(config_path: &Path) -> Result<Vec<YamlValue>> {
 fn write_dsh_patch_ops(config_path: &Path, ops: &[YamlValue]) -> Result<()> {
     crate::support::dsh_patch::write_ops(config_path, ops)
 }
-
 
 fn is_dsh_claimed_entry(entry: &YamlValue, server_name: &str) -> bool {
     entry.get("name").and_then(YamlValue::as_str) == Some(DSH_MCP_CLIENT_PLUGIN)

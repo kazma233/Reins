@@ -29,14 +29,17 @@ pub(crate) fn read_ops(config_path: &Path) -> Result<Vec<YamlValue>> {
     match parsed {
         YamlValue::Null => Ok(Vec::new()),
         YamlValue::Sequence(ops) => Ok(ops),
-        _ => bail!("Cordis patch 根节点必须是操作列表：{}", config_path.display()),
+        _ => bail!(
+            "Cordis patch 根节点必须是操作列表：{}",
+            config_path.display()
+        ),
     }
 }
 
 // 序列化为可落盘文本;providers 域用它组装预览/写入内容,不落盘。
 pub(crate) fn serialize_ops(ops: &[YamlValue]) -> Result<String> {
-    let serialized = serde_yaml::to_string(ops)
-        .with_context(|| "Cordis patch 序列化失败".to_string())?;
+    let serialized =
+        serde_yaml::to_string(ops).with_context(|| "Cordis patch 序列化失败".to_string())?;
     // 哨兵标签还原回 !! 简写:见 BANGBANG_SENTINEL 注释。
     Ok(serialized.replace(BANGBANG_SENTINEL, "!!"))
 }
@@ -55,9 +58,7 @@ pub(crate) fn write_ops_content(config_path: &Path, contents: &str) -> Result<()
 pub(crate) fn untag(value: &YamlValue) -> YamlValue {
     match value {
         YamlValue::Tagged(tagged) => untag(&tagged.value),
-        YamlValue::Sequence(sequence) => {
-            YamlValue::Sequence(sequence.iter().map(untag).collect())
-        }
+        YamlValue::Sequence(sequence) => YamlValue::Sequence(sequence.iter().map(untag).collect()),
         YamlValue::Mapping(mapping) => YamlValue::Mapping(
             mapping
                 .iter()

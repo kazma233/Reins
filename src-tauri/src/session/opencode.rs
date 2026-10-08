@@ -10,11 +10,12 @@ use serde_json::{Value, json};
 use super::{
     ContentBlock, SessionEvent, SessionEventPage, SessionFileEntry, SessionMessage,
     SessionMessagePage, SessionOverview, SessionReader, SessionSummary, SessionTokenUsage,
-    SourceApp, TimelineCacheEntry, UsageHourBuckets, usage_stats::SqlUsageHours,
+    SourceApp, TimelineCacheEntry, UsageHourBuckets,
     family_index::{Family, FamilyIndexCacheEntry, FamilyRow},
     family_timeline::{
         FamilyAgentLabel, cached_family_events, cached_family_messages, family_agents,
     },
+    usage_stats::SqlUsageHours,
 };
 
 #[derive(Clone, Debug)]
@@ -289,10 +290,9 @@ fn session_token_usages(connection: &Connection) -> Result<HashMap<String, Sessi
         .query_map([], |row| {
             let session_id: String = row.get(0)?;
             // SUM 对无匹配行为返回 NULL,按 0 处理;负值理论上不出现,钳到 0。
-            let usage_column =
-                |index: usize| -> rusqlite::Result<u64> {
-                    Ok(row.get::<_, Option<i64>>(index)?.unwrap_or_default().max(0) as u64)
-                };
+            let usage_column = |index: usize| -> rusqlite::Result<u64> {
+                Ok(row.get::<_, Option<i64>>(index)?.unwrap_or_default().max(0) as u64)
+            };
             Ok((
                 session_id,
                 SessionTokenUsage {

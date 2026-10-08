@@ -498,7 +498,9 @@ fn session_usage(path: &Path) -> Result<Option<SessionTokenUsage>> {
     // inputTokens 含缓存命中部分(实测 input+output==totalTokens),扣除后与
     // 其他来源的"新输入"口径一致;outputTokens 已含 reasoning。
     Ok(file.session.map(|totals| SessionTokenUsage {
-        input_tokens: totals.input_tokens.saturating_sub(totals.cached_read_tokens),
+        input_tokens: totals
+            .input_tokens
+            .saturating_sub(totals.cached_read_tokens),
         output_tokens: totals.output_tokens,
         cache_read_tokens: totals.cached_read_tokens,
         cache_write_tokens: totals.cache_creation_tokens,
@@ -682,8 +684,7 @@ fn messages(path: &Path) -> Result<Vec<SessionMessage>> {
                         "image" => {
                             let url = required(item, "url")?;
                             let mut image = block("image", Some(url.into()));
-                            image.payload =
-                                Some(json!({"type":"image", "url": url}));
+                            image.payload = Some(json!({"type":"image", "url": url}));
                             blocks.push(image);
                         }
                         _ => bail!("Unsupported Grok Build user content type"),
@@ -985,7 +986,10 @@ fn delete_search_index_rows(family: &Family<Row>) -> Result<()> {
         .with_context(|| format!("Failed to open {}", db_path.display()))?;
     for row in family.members.iter().skip(1) {
         connection
-            .execute("DELETE FROM session_docs WHERE session_id = ?1", params![row.member_id()])
+            .execute(
+                "DELETE FROM session_docs WHERE session_id = ?1",
+                params![row.member_id()],
+            )
             .with_context(|| {
                 format!(
                     "Failed to delete Grok Build search index for {}",

@@ -703,14 +703,15 @@ fn parse_timeline_record(index: usize, value: &Value, session_id: &str) -> Optio
             if blocks.is_empty() {
                 // 整条都是宿主注入的上下文时保留原文，其余空消息仍退化成原始报文诊断块
                 blocks.push(
-                    super::injected_context_block(message.get("content"), message)
-                        .unwrap_or_else(|| {
+                    super::injected_context_block(message.get("content"), message).unwrap_or_else(
+                        || {
                             super::empty_message_block(
                                 "Claude Code",
                                 "content was empty after sanitization",
                                 Some(message.clone()),
                             )
-                        }),
+                        },
+                    ),
                 );
             }
 
@@ -823,7 +824,11 @@ fn local_command_block(text: &str) -> Option<ContentBlock> {
 
     for tag in ["local-command-stdout", "local-command-stderr"] {
         if let Some(output) = tag_text(text, tag).filter(|output| !output.trim().is_empty()) {
-            return Some(super::diagnostic_block("local_command_output", output, None));
+            return Some(super::diagnostic_block(
+                "local_command_output",
+                output,
+                None,
+            ));
         }
     }
 

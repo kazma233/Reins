@@ -192,10 +192,7 @@ impl AppAdapter for PiAdapter {
                 .as_deref()
                 .filter(|levels| !levels.is_empty())
             {
-                model_entry.insert(
-                    "thinkingLevelMap".to_string(),
-                    thinking_level_map(levels),
-                );
+                model_entry.insert("thinkingLevelMap".to_string(), thinking_level_map(levels));
             }
             if let Some(context_window) = model.context_window {
                 model_entry.insert("contextWindow".to_string(), JsonValue::from(context_window));

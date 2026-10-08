@@ -50,8 +50,7 @@ fn claimed_config<'a>(
             continue;
         };
         for entry in entries {
-            let matched = entry.get("name").and_then(|value| value.as_str())
-                == Some(DSH_PLUGIN)
+            let matched = entry.get("name").and_then(|value| value.as_str()) == Some(DSH_PLUGIN)
                 && entry
                     .get("config")
                     .and_then(|config| config.get("serverName"))
@@ -69,10 +68,18 @@ fn claimed_config<'a>(
 fn dsh_defaults_preset_and_prefix_relaxation() -> Result<()> {
     let home = home_dir().ok_or_else(|| anyhow!("测试环境缺少 HOME"))?;
     let preset = builtin_target_preset_inner("dsh")?;
-    assert_eq!(preset.skill_dir, home.join(".dsh/skills").display().to_string());
+    assert_eq!(
+        preset.skill_dir,
+        home.join(".dsh/skills").display().to_string()
+    );
     assert_eq!(
         preset.config_path.as_deref(),
-        Some(home.join(".dsh/cordis.patch.yml").display().to_string().as_str())
+        Some(
+            home.join(".dsh/cordis.patch.yml")
+                .display()
+                .to_string()
+                .as_str()
+        )
     );
     assert_eq!(preset.mcp_config_prefix, "");
     assert_eq!(preset.mcp_config_type, McpConfigType::Dsh);
@@ -140,18 +147,20 @@ fn dsh_create_target_accepts_config_path_without_prefix() -> Result<()> {
     );
     assert_eq!(target.mcp_config_prefix, "");
 
-    assert!(create_workspace_target_inner(
-        &store,
-        RawTargetInput {
-            target_id: "plain".to_string(),
-            enabled: true,
-            skill_dir: "plain/skills".to_string(),
-            config_path: Some("plain/config.json".to_string()),
-            mcp_config_prefix: String::new(),
-            mcp_config_type: McpConfigType::Common,
-        },
-    )
-    .is_err());
+    assert!(
+        create_workspace_target_inner(
+            &store,
+            RawTargetInput {
+                target_id: "plain".to_string(),
+                enabled: true,
+                skill_dir: "plain/skills".to_string(),
+                config_path: Some("plain/config.json".to_string()),
+                mcp_config_prefix: String::new(),
+                mcp_config_type: McpConfigType::Common,
+            },
+        )
+        .is_err()
+    );
     Ok(())
 }
 
@@ -169,8 +178,7 @@ fn dsh_apply_creates_patch_file_and_preview_matches() -> Result<()> {
     apply_mcp_to_target_inner(&store, "probe", "dsh")?;
 
     let ops = parse_ops(&path)?;
-    let config =
-        claimed_config(&ops, "probe").ok_or_else(|| anyhow!("写入后应包含 probe 条目"))?;
+    let config = claimed_config(&ops, "probe").ok_or_else(|| anyhow!("写入后应包含 probe 条目"))?;
     assert_eq!(
         ops.as_sequence().map(Vec::len),
         Some(1),
@@ -180,10 +188,16 @@ fn dsh_apply_creates_patch_file_and_preview_matches() -> Result<()> {
         config.get("serverName").and_then(|v| v.as_str()),
         Some("probe")
     );
-    assert_eq!(config.get("transport").and_then(|v| v.as_str()), Some("stdio"));
+    assert_eq!(
+        config.get("transport").and_then(|v| v.as_str()),
+        Some("stdio")
+    );
     assert_eq!(config.get("command").and_then(|v| v.as_str()), Some("node"));
     assert_eq!(
-        config.get("args").and_then(|v| v.as_sequence()).map(Vec::len),
+        config
+            .get("args")
+            .and_then(|v| v.as_sequence())
+            .map(Vec::len),
         Some(1)
     );
     assert_eq!(

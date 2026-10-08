@@ -84,7 +84,9 @@ fn decode_one_frame(decoder: &mut FrameDecoder, input: &mut &[u8]) -> Result<Vec
     decoder.init(&mut *input)?;
     decoder.decode_blocks(&mut *input, BlockDecodingStrategy::All)?;
     // reset 会丢弃缓冲,先收集;帧解完时 collect 清空全部输出。
-    decoder.collect().context("Failed to collect DSH zstd frame")
+    decoder
+        .collect()
+        .context("Failed to collect DSH zstd frame")
 }
 
 struct DshHeader {
@@ -128,8 +130,9 @@ fn read_transcript(path: &Path) -> Result<DshTranscript> {
         if line.trim().is_empty() {
             continue;
         }
-        let value = serde_json::from_str(line)
-            .with_context(|| format!("Invalid DSH JSON at {} line {}", path.display(), index + 1))?;
+        let value = serde_json::from_str(line).with_context(|| {
+            format!("Invalid DSH JSON at {} line {}", path.display(), index + 1)
+        })?;
         values.push(value);
     }
 
@@ -148,7 +151,10 @@ fn parse_header(value: &Value) -> Result<DshHeader> {
         .ok_or_else(|| anyhow!("DSH session header has no id"))?;
     Ok(DshHeader {
         id,
-        created_at: value.get("createdAt").and_then(Value::as_i64).unwrap_or_default(),
+        created_at: value
+            .get("createdAt")
+            .and_then(Value::as_i64)
+            .unwrap_or_default(),
         cwd: super::json_string(value, &["cwd"]).filter(|cwd| !cwd.is_empty()),
         delegation_depth: value
             .get("delegationDepth")
@@ -191,13 +197,17 @@ fn build_timeline(header: DshHeader, events: &[Value]) -> DshTranscript {
     for (index, value) in events.iter().enumerate() {
         let kind = super::json_type(value).unwrap_or("unknown");
         let seq = value.get("seq").and_then(Value::as_i64);
-        let time = value.get("time").and_then(Value::as_i64).unwrap_or(last_event_time);
+        let time = value
+            .get("time")
+            .and_then(Value::as_i64)
+            .unwrap_or(last_event_time);
         last_event_time = last_event_time.max(time);
         let data = value.get("data").cloned().unwrap_or(Value::Null);
         let item_id = |prefix: &str| {
             format!(
                 "dsh-{session_id}-{prefix}-{}",
-                seq.map(|seq| seq.to_string()).unwrap_or_else(|| index.to_string())
+                seq.map(|seq| seq.to_string())
+                    .unwrap_or_else(|| index.to_string())
             )
         };
         let surface_op = value.get("surfaceOp");
@@ -280,9 +290,7 @@ fn build_timeline(header: DshHeader, events: &[Value]) -> DshTranscript {
                     tool_name: None,
                     tool_call_id: super::json_string(&message, &["toolCallId"])
                         .or_else(|| super::json_string(&message, &["source", "callId"])),
-                    is_error: message
-                        .get("isError")
-                        .and_then(Value::as_bool),
+                    is_error: message.get("isError").and_then(Value::as_bool),
                     payload: Some(message),
                 };
                 let result = SessionMessage {
@@ -355,7 +363,11 @@ fn build_timeline(header: DshHeader, events: &[Value]) -> DshTranscript {
 
     DshTranscript {
         header,
-        messages: items.messages.into_iter().map(|(_, message)| message).collect(),
+        messages: items
+            .messages
+            .into_iter()
+            .map(|(_, message)| message)
+            .collect(),
         events: items.events.into_iter().map(|(_, event)| event).collect(),
         title,
         first_user_title,
@@ -465,17 +477,19 @@ fn content_text_blocks(data: &Value, kind: &str) -> Vec<ContentBlock> {
         .map(|blocks| {
             blocks
                 .iter()
-                .map(|block| match super::json_string(block, &["type"]).as_deref() {
-                    Some("text") => ContentBlock {
-                        kind: kind.to_string(),
-                        text: super::json_string(block, &["text"]),
-                        tool_name: None,
-                        tool_call_id: None,
-                        is_error: None,
-                        payload: None,
+                .map(
+                    |block| match super::json_string(block, &["type"]).as_deref() {
+                        Some("text") => ContentBlock {
+                            kind: kind.to_string(),
+                            text: super::json_string(block, &["text"]),
+                            tool_name: None,
+                            tool_call_id: None,
+                            is_error: None,
+                            payload: None,
+                        },
+                        _ => super::unsupported_block("DSH", block),
                     },
-                    _ => super::unsupported_block("DSH", block),
-                })
+                )
                 .collect()
         })
         .unwrap_or_default()
@@ -502,7 +516,10 @@ fn message_first_text(data: &Value) -> Option<String> {
 // (arguments 是 JSON 字符串,原样作 text,payload.input 放解析结果);
 // 空 reasoning 是流式占位,没有展示价值,跳过。
 fn assistant_blocks(data: &Value) -> Vec<ContentBlock> {
-    let Some(blocks) = data.get("message").and_then(|message| message.get("content")).and_then(Value::as_array)
+    let Some(blocks) = data
+        .get("message")
+        .and_then(|message| message.get("content"))
+        .and_then(Value::as_array)
     else {
         return Vec::new();
     };
@@ -600,7 +617,10 @@ fn session_transcript_paths_at(root: &Path) -> Result<Vec<PathBuf>> {
                 current.2 = entry.into_path();
             }
             None => {
-                latest.insert(directory.to_path_buf(), (generation, compressed, entry.into_path()));
+                latest.insert(
+                    directory.to_path_buf(),
+                    (generation, compressed, entry.into_path()),
+                );
             }
         }
     }
@@ -879,7 +899,10 @@ fn marker_message(row: &DshFamilyRow) -> SessionMessage {
         timestamp: Some(row.row.created_at),
         blocks: vec![ContentBlock {
             kind: "output_text".to_string(),
-            text: Some(format!("Sub-agent session: {}\n{}", title, row.row.session_id)),
+            text: Some(format!(
+                "Sub-agent session: {}\n{}",
+                title, row.row.session_id
+            )),
             tool_name: None,
             tool_call_id: None,
             is_error: None,

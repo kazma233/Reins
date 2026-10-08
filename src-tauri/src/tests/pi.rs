@@ -1143,10 +1143,12 @@ fn pi_shows_message_error_text_instead_of_raw_empty_message_row() -> Result<()> 
     assert_eq!(block.text.as_deref(), Some("This operation was aborted"));
     assert_eq!(block.is_error, Some(true));
     // 原始报文保留在 payload 里，界面仍可展开查看
-    assert!(block
-        .payload
-        .as_ref()
-        .is_some_and(|payload| payload.to_string().contains("deepseek-flash")));
+    assert!(
+        block
+            .payload
+            .as_ref()
+            .is_some_and(|payload| payload.to_string().contains("deepseek-flash"))
+    );
 
     fs::remove_dir_all(&temp_home).ok();
     Ok(())
@@ -1202,10 +1204,12 @@ fn pi_keeps_injected_context_as_readable_block() -> Result<()> {
     let text = block.text.as_deref().unwrap_or_default();
     assert!(text.contains("<environment_context>"));
     assert!(text.contains("<system-reminder>"));
-    assert!(!detail
-        .messages
-        .iter()
-        .any(|message| message.blocks.iter().any(|block| block.kind == "empty_message")));
+    assert!(!detail.messages.iter().any(|message| {
+        message
+            .blocks
+            .iter()
+            .any(|block| block.kind == "empty_message")
+    }));
 
     fs::remove_dir_all(&temp_home).ok();
     Ok(())
@@ -1245,15 +1249,19 @@ fn pi_keeps_raw_diagnostic_block_when_empty_message_has_no_semantics() -> Result
 
     let detail = read_detail(session::reader(SourceApp::Pi), &path)?;
     // 既没有错误也没有注入上下文：保持原始报文兜底，便于排查来源侧异常
-    assert!(detail.messages.iter().any(|message| message
-        .blocks
-        .iter()
-        .any(|block| block.kind == "empty_message")));
-    assert!(!detail
-        .messages
-        .iter()
-        .flat_map(|message| message.blocks.iter())
-        .any(|block| block.kind == "context_injection"));
+    assert!(detail.messages.iter().any(|message| {
+        message
+            .blocks
+            .iter()
+            .any(|block| block.kind == "empty_message")
+    }));
+    assert!(
+        !detail
+            .messages
+            .iter()
+            .flat_map(|message| message.blocks.iter())
+            .any(|block| block.kind == "context_injection")
+    );
 
     fs::remove_dir_all(&temp_home).ok();
     Ok(())

@@ -6,8 +6,7 @@ use anyhow::Result;
 
 use crate::providers::config::ProviderConfigStore;
 use crate::providers::types::{
-    ProviderModelInput, ProviderProtocol, ProviderUpsertInput, ProviderWriteMode,
-    ReasoningLevel,
+    ProviderModelInput, ProviderProtocol, ProviderUpsertInput, ProviderWriteMode, ReasoningLevel,
 };
 use crate::test_support::TestDir;
 

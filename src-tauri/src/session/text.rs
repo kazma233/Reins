@@ -128,7 +128,8 @@ pub(crate) fn image_reference(item: &Value) -> Option<String> {
     }
 
     let data = json_string(item, &["data"]).or_else(|| json_string(item, &["source", "data"]))?;
-    let mime = json_string(item, &["mimeType"]).or_else(|| json_string(item, &["source", "media_type"]))?;
+    let mime = json_string(item, &["mimeType"])
+        .or_else(|| json_string(item, &["source", "media_type"]))?;
 
     Some(format!("data:{mime};base64,{data}"))
 }

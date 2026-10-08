@@ -225,7 +225,10 @@ pub(crate) fn patch_credential_ref(
             refs_mapping.insert(key(name), YamlValue::String(api_key.to_string()));
         }
         None => {
-            if let Some(refs) = mapping.get_mut(&key("refs")).and_then(YamlValue::as_mapping_mut) {
+            if let Some(refs) = mapping
+                .get_mut(&key("refs"))
+                .and_then(YamlValue::as_mapping_mut)
+            {
                 refs.remove(&key(name));
             }
         }
@@ -256,7 +259,10 @@ fn route_entry(provider: &ResolvedProvider, plan: &ApplyProviderInput) -> Mappin
         let mut model_entry = Mapping::new();
         model_entry.insert(key("id"), key(&model.id));
         if let Some(context_window) = model.context_window {
-            model_entry.insert(key("contextWindow"), YamlValue::Number(context_window.into()));
+            model_entry.insert(
+                key("contextWindow"),
+                YamlValue::Number(context_window.into()),
+            );
         }
         if let Some(max_tokens) = model.max_output_tokens {
             model_entry.insert(key("maxTokens"), YamlValue::Number(max_tokens.into()));
@@ -448,7 +454,8 @@ impl AppAdapter for DshAdapter {
             if let Some(row) = find_row(&global_ops, "llm-pi-ai") {
                 let providers = llm_providers(Some(row));
                 let only_reins = providers.keys().all(|key| {
-                    key.as_str().is_some_and(|name| name.starts_with(super::REINS_PREFIX))
+                    key.as_str()
+                        .is_some_and(|name| name.starts_with(super::REINS_PREFIX))
                 });
                 if providers.is_empty() || only_reins {
                     remove_row(&mut global_ops, "llm-pi-ai");
@@ -458,7 +465,10 @@ impl AppAdapter for DshAdapter {
         }
 
         let mut providers_table = llm_providers(find_row(&profile_ops, "llm-pi-ai"));
-        providers_table.insert(key(&registration), YamlValue::Mapping(route_entry(provider, plan)));
+        providers_table.insert(
+            key(&registration),
+            YamlValue::Mapping(route_entry(provider, plan)),
+        );
         let mut config = Mapping::new();
         config.insert(key("providers"), YamlValue::Mapping(providers_table));
         row_into_ops(
@@ -523,7 +533,10 @@ impl AppAdapter for DshAdapter {
                 config,
             );
         }
-        files.push((profile_patch.clone(), dsh_patch::serialize_ops(&profile_ops)?));
+        files.push((
+            profile_patch.clone(),
+            dsh_patch::serialize_ops(&profile_ops)?,
+        ));
 
         // 凭据随路由一起清掉（refs 段删自己的 ref）。
         let credentials = dsh_credentials_path(env)?;
@@ -572,7 +585,10 @@ impl AppAdapter for DshAdapter {
                 config,
             );
         }
-        files.push((profile_patch.clone(), dsh_patch::serialize_ops(&profile_ops)?));
+        files.push((
+            profile_patch.clone(),
+            dsh_patch::serialize_ops(&profile_ops)?,
+        ));
 
         let points_at_route = find_row(&profile_ops, "agent-default-model").is_some_and(|row| {
             row_config(row)

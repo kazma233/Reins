@@ -9,11 +9,12 @@ use serde_json::{Value, json};
 use super::{
     ContentBlock, SessionEvent, SessionEventPage, SessionFileEntry, SessionMessage,
     SessionMessagePage, SessionOverview, SessionReader, SessionSummary, SessionTokenUsage,
-    SourceApp, TimelineCacheEntry, UsageHourBuckets, usage_stats::SqlUsageHours,
+    SourceApp, TimelineCacheEntry, UsageHourBuckets,
     family_index::{Family, FamilyIndexCacheEntry, FamilyRow},
     family_timeline::{
         FamilyAgentLabel, cached_family_events, cached_family_messages, family_agents,
     },
+    usage_stats::SqlUsageHours,
 };
 
 #[derive(Clone, Debug)]
@@ -81,13 +82,15 @@ pub(crate) struct ZcodeBackend;
 
 pub(crate) static BACKEND: ZcodeBackend = ZcodeBackend;
 
-fn lock_timeline_cache() -> Result<std::sync::MutexGuard<'static, HashMap<String, TimelineCacheEntry>>> {
+fn lock_timeline_cache()
+-> Result<std::sync::MutexGuard<'static, HashMap<String, TimelineCacheEntry>>> {
     ZCODE_TIMELINE_CACHE
         .lock()
         .map_err(|_| anyhow!("ZCode timeline cache lock was poisoned"))
 }
 
-fn lock_family_index_cache() -> Result<std::sync::MutexGuard<'static, Option<ZcodeFamilyIndexCacheEntry>>> {
+fn lock_family_index_cache()
+-> Result<std::sync::MutexGuard<'static, Option<ZcodeFamilyIndexCacheEntry>>> {
     ZCODE_FAMILY_INDEX_CACHE
         .lock()
         .map_err(|_| anyhow!("ZCode family index cache lock was poisoned"))
@@ -239,10 +242,9 @@ fn session_token_usages(connection: &Connection) -> Result<HashMap<String, Sessi
     let rows = statement
         .query_map([], |row| {
             let session_id: String = row.get(0)?;
-            let usage_column =
-                |index: usize| -> rusqlite::Result<u64> {
-                    Ok(row.get::<_, Option<i64>>(index)?.unwrap_or_default().max(0) as u64)
-                };
+            let usage_column = |index: usize| -> rusqlite::Result<u64> {
+                Ok(row.get::<_, Option<i64>>(index)?.unwrap_or_default().max(0) as u64)
+            };
             Ok((
                 session_id,
                 SessionTokenUsage {
@@ -370,7 +372,9 @@ fn family_index() -> Result<ZcodeFamilyIndexCacheEntry> {
     let entry = ZcodeFamilyIndexCacheEntry {
         source_key,
         updated_at,
-        index: super::family_index::FamilyIndex::build(build_session_families(list_session_rows()?)),
+        index: super::family_index::FamilyIndex::build(
+            build_session_families(list_session_rows()?),
+        ),
     };
 
     *lock_family_index_cache()? = Some(entry.clone());
@@ -622,10 +626,7 @@ fn load_parts_by_message(
         "SELECT message_id, data FROM part WHERE session_id IN ({placeholders}) ORDER BY message_id, sequence, time_created, id"
     ))?;
     let rows = statement.query_map(params_from_iter(member_ids.iter()), |row| {
-        Ok((
-            row.get::<_, String>(0)?,
-            row.get::<_, String>(1)?,
-        ))
+        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
     })?;
 
     let mut parts_by_message = HashMap::<String, Vec<Value>>::new();
@@ -834,10 +835,7 @@ fn load_messages_for_family(family: &ZcodeSessionFamily) -> Result<Vec<SessionMe
             continue;
         }
 
-        let parts = parts_by_message
-            .get(&row.id)
-            .cloned()
-            .unwrap_or_default();
+        let parts = parts_by_message.get(&row.id).cloned().unwrap_or_default();
         let mut blocks = load_message_blocks(&row, &parts);
         if row.kind == "user_prompt" {
             blocks = super::sanitize_user_blocks(blocks);
@@ -886,10 +884,7 @@ fn load_events_for_family(family: &ZcodeSessionFamily) -> Result<Vec<SessionEven
             continue;
         }
 
-        let parts = parts_by_message
-            .get(&row.id)
-            .cloned()
-            .unwrap_or_default();
+        let parts = parts_by_message.get(&row.id).cloned().unwrap_or_default();
         events.push(event_from_message_row(row, &parts));
     }
 

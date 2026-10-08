@@ -539,10 +539,7 @@ pub(crate) fn opencode_config_dir() -> Result<PathBuf> {
 // 顺序即优先级：低 → 高。
 pub(crate) fn opencode_candidate_paths() -> Result<Vec<PathBuf>> {
     let dir = opencode_config_dir()?;
-    Ok(vec![
-        dir.join("opencode.json"),
-        dir.join("opencode.jsonc"),
-    ])
+    Ok(vec![dir.join("opencode.json"), dir.join("opencode.jsonc")])
 }
 
 // jsonc 容忍注释与尾逗号，用 json5 解析；行为与 read_json_object 对齐。
@@ -555,8 +552,8 @@ pub(crate) fn read_jsonc_object(path: &Path) -> Result<JsonMap<String, JsonValue
     if content.trim().is_empty() {
         return Ok(JsonMap::new());
     }
-    let value: JsonValue = json5::from_str(&content)
-        .with_context(|| format!("JSONC 解析失败：{}", path.display()))?;
+    let value: JsonValue =
+        json5::from_str(&content).with_context(|| format!("JSONC 解析失败：{}", path.display()))?;
     match value {
         JsonValue::Object(map) => Ok(map),
         _ => bail!("配置文件顶层必须是 JSON 对象：{}", path.display()),

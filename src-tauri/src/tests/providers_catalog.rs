@@ -363,7 +363,6 @@ fn fetch_direct_anthropic_falls_back_to_root_models() -> Result<()> {
     Ok(())
 }
 
-
 // 2xx 但不是 JSON：错误串要带出响应体开头，便于判断网关返回了什么。
 #[test]
 fn fetch_direct_reports_non_json_body_head() -> Result<()> {
@@ -400,8 +399,14 @@ fn fetch_direct_reports_non_json_body_head() -> Result<()> {
     .to_string();
     server.join().unwrap();
 
-    assert!(err.contains(&format!("http://127.0.0.1:{port}/v1/models")), "{err}");
-    assert!(err.contains("<html> <body>404 page not found</body> </html>"), "{err}");
+    assert!(
+        err.contains(&format!("http://127.0.0.1:{port}/v1/models")),
+        "{err}"
+    );
+    assert!(
+        err.contains("<html> <body>404 page not found</body> </html>"),
+        "{err}"
+    );
     assert!(!err.contains('\n'), "错误串应压成单行：{err}");
 
     // 超长响应体：截断并标记省略（截断阈值 1000 字符）

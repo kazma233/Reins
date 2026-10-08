@@ -1,5 +1,5 @@
-use super::*;
 use super::grokbuild::{fixture as grok_fixture, history as grok_history, subagent_fixture};
+use super::*;
 
 // 官方删除 CLI 用跨平台假可执行文件顶替(见 fake_cli_source 注释)。
 #[test]
@@ -318,7 +318,11 @@ fn fake_cli_source() -> Result<PathBuf> {
     };
     std::env::current_exe()
         .ok()
-        .and_then(|exe| exe.parent().and_then(Path::parent).map(|dir| dir.join(exe_name)))
+        .and_then(|exe| {
+            exe.parent()
+                .and_then(Path::parent)
+                .map(|dir| dir.join(exe_name))
+        })
         .ok_or_else(|| anyhow::anyhow!("定位 reins-fake-cli 构建产物失败"))
 }
 
@@ -340,10 +344,9 @@ fn fake_cli_log_path(bin_dir: &Path) -> PathBuf {
 // PATH 前插(分隔符跨平台),返回原值供恢复。
 fn prepend_to_path(bin_dir: &Path) -> std::ffi::OsString {
     let original = env::var_os("PATH").unwrap_or_default();
-    let joined = env::join_paths(
-        std::iter::once(bin_dir.to_path_buf()).chain(env::split_paths(&original)),
-    )
-    .expect("PATH 拼接失败");
+    let joined =
+        env::join_paths(std::iter::once(bin_dir.to_path_buf()).chain(env::split_paths(&original)))
+            .expect("PATH 拼接失败");
     unsafe { env::set_var("PATH", &joined) };
     original
 }
@@ -357,7 +360,13 @@ fn deleting_grokbuild_family_removes_member_dirs_and_search_rows() -> Result<()>
 
     let parent_path = grok_fixture(&temp_home, "grok-parent")?;
     grok_history(&parent_path)?;
-    subagent_fixture(&temp_home, "grok-parent", "grok-child", "at1.delete", "Child answer")?;
+    subagent_fixture(
+        &temp_home,
+        "grok-parent",
+        "grok-child",
+        "at1.delete",
+        "Child answer",
+    )?;
     // prompt_history.jsonl 是 cwd 级共享文件，删除会话时必须保留。
     let bucket = temp_home.join(".grok/sessions/not-a-cwd");
     fs::write(bucket.join("prompt_history.jsonl"), "{}\n")?;

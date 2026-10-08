@@ -473,7 +473,11 @@ pub(crate) fn usage_hours(path: &Path) -> Result<UsageHourBuckets> {
 
     for entry in &document.entries {
         for usage in pi_entry_usages(&entry.value) {
-            super::merge_usage_bucket(&mut buckets, entry.timestamp.and_then(super::hour_key), usage);
+            super::merge_usage_bucket(
+                &mut buckets,
+                entry.timestamp.and_then(super::hour_key),
+                usage,
+            );
         }
     }
 
@@ -829,8 +833,8 @@ fn parse_message_entry(entry: &PiEntry, session_id: &str) -> SessionMessage {
     if blocks.is_empty() {
         // 无可见内容的消息按语义分流：助手侧错误显示错误文案，整条都是宿主注入的
         // 上下文则保留原文，其余才退化成一行原始报文诊断块。
-        let error_message = super::json_string(message, &["errorMessage"])
-            .filter(|text| !text.trim().is_empty());
+        let error_message =
+            super::json_string(message, &["errorMessage"]).filter(|text| !text.trim().is_empty());
         blocks.push(
             error_message
                 .as_deref()
@@ -986,7 +990,11 @@ fn system_prompt_block(message: &Value) -> Option<ContentBlock> {
 
     if let Some(sections) = sections {
         // 首行当折叠行的摘要：这段提示词包含哪些段
-        let names = sections.keys().map(String::as_str).collect::<Vec<_>>().join("、");
+        let names = sections
+            .keys()
+            .map(String::as_str)
+            .collect::<Vec<_>>()
+            .join("、");
         parts.push(format!("{} 段：{}", sections.len(), names));
         parts.extend(
             sections

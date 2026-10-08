@@ -7,56 +7,44 @@
 //! 前端完成。
 
 use std::collections::BTreeMap;
-use std::path::PathBuf;
-use std::thread;
+use std::path::{Path, PathBuf};
 
-use anyhow::{Result, anyhow};
+use anyhow::Result;
 
 use super::model::{
     SessionTokenUsage, SourceApp, UsageDayPoint, UsageHourBuckets, UsageHourPoint,
     UsageSourceStats, UsageStats,
 };
-use super::{claude_code, codex, dsh, grokbuild, opencode, pi, zcode};
+
+/// 来源注册表里一个来源的用量采集方式:三种接入姿势,归桶机器都在本模块,
+/// 差异只剩函数引用。
+#[derive(Clone, Copy)]
+pub(crate) enum UsageKind {
+    /// jsonl 目录扫描 + mtime 命中持久缓存,未变更文件跳过整文件解析
+    /// (codex/claude/pi);扫描目录是来源根目录或其子目录。
+    CachedJsonl {
+        subdir: Option<&'static str>,
+        extract: fn(&Path) -> Result<UsageHourBuckets>,
+    },
+    /// 来源自带的转录文件列表,逐文件直接解析不走持久缓存
+    /// (grokbuild 的 usage.json、dsh 内嵌 usage 的多帧 zstd);根目录复用
+    /// 注册表的 root。
+    RawFiles {
+        paths: fn() -> Result<Vec<PathBuf>>,
+        extract: fn(&Path) -> Result<UsageHourBuckets>,
+    },
+    /// 从 sqlite 直查(opencode/zcode)。
+    Sql {
+        collect: fn() -> Result<Option<SqlUsageHours>>,
+    },
+}
 
 pub(crate) fn usage_stats_inner() -> Result<UsageStats> {
-    let outcomes = thread::scope(|scope| {
-        let codex_handle = scope.spawn(|| {
-            source_days_from_files(
-                SourceApp::Codex,
-                codex::root()?.join("sessions"),
-                codex::usage_hours,
-            )
-        });
-        let claude_handle = scope.spawn(|| {
-            source_days_from_files(
-                SourceApp::ClaudeCode,
-                claude_code::root()?.join("projects"),
-                claude_code::usage_hours,
-            )
-        });
-        let pi_handle = scope
-            .spawn(|| source_days_from_files(SourceApp::Pi, pi::sessions_root()?, pi::usage_hours));
-        let grokbuild_handle = scope.spawn(grokbuild_days);
-        let opencode_handle =
-            scope.spawn(|| sql_source_days(SourceApp::OpenCode, opencode::usage_hours));
-        let zcode_handle = scope.spawn(|| sql_source_days(SourceApp::Zcode, zcode::usage_hours));
-        let dsh_handle = scope.spawn(dsh_days);
-
-        vec![
-            codex_handle.join(),
-            claude_handle.join(),
-            pi_handle.join(),
-            grokbuild_handle.join(),
-            opencode_handle.join(),
-            zcode_handle.join(),
-            dsh_handle.join(),
-        ]
-    });
+    let outcomes = super::sources::parallel_collect("Usage stats", |spec| spec.usage_days());
 
     let mut sources = Vec::new();
     for outcome in outcomes {
-        let stats = outcome.map_err(|_| anyhow!("Usage stats thread panicked"))??;
-        if let Some(stats) = stats {
+        if let Some(stats) = outcome? {
             sources.push(stats);
         }
     }
@@ -64,12 +52,11 @@ pub(crate) fn usage_stats_inner() -> Result<UsageStats> {
     Ok(UsageStats { sources })
 }
 
-// jsonl 来源(claude/codex/pi):按 mtime 命中小时桶持久缓存,未变更文件跳过
-// 整文件解析;单文件失败只记日志跳过,不阻断统计。
-fn source_days_from_files(
+// 单文件失败只记日志跳过,不阻断统计。
+pub(crate) fn days_from_cached_jsonl(
     source_app: SourceApp,
     root: PathBuf,
-    extract: fn(&std::path::Path) -> Result<UsageHourBuckets>,
+    extract: fn(&Path) -> Result<UsageHourBuckets>,
 ) -> Result<Option<UsageSourceStats>> {
     if !root.exists() {
         return Ok(None);
@@ -128,9 +115,15 @@ fn source_days_from_files(
     )))
 }
 
-// GrokBuild 的 usage.json 是几 KB 的小文件,直接读,不走持久缓存。
-fn grokbuild_days() -> Result<Option<UsageSourceStats>> {
-    if !grokbuild::root()?.exists() {
+// 根目录不存在表示来源不可用;文件列表由来源自带,与列表扫描同一发现规则,
+// 单文件失败只记日志跳过。
+pub(crate) fn days_from_paths(
+    source_app: SourceApp,
+    root: &Path,
+    paths: fn() -> Result<Vec<PathBuf>>,
+    extract: fn(&Path) -> Result<UsageHourBuckets>,
+) -> Result<Option<UsageSourceStats>> {
+    if !root.exists() {
         return Ok(None);
     }
 
@@ -139,8 +132,8 @@ fn grokbuild_days() -> Result<Option<UsageSourceStats>> {
     let mut session_count = 0usize;
     let mut today_session_count = 0usize;
 
-    for path in grokbuild::session_summary_paths()? {
-        let file_hours = match grokbuild::usage_hours(&path) {
+    for path in paths()? {
+        let file_hours = match extract(&path) {
             Ok(hours) => hours,
             Err(error) => {
                 crate::logger::log_error(format!(
@@ -163,50 +156,7 @@ fn grokbuild_days() -> Result<Option<UsageSourceStats>> {
     }
 
     Ok(Some(source_stats(
-        SourceApp::GrokBuild,
-        buckets,
-        session_count,
-        today_session_count,
-    )))
-}
-
-// dsh 的 usage 内嵌在转录里,读取要先解压多帧 zstd,直接逐文件解析,不走
-// 持久缓存;单文件失败只记日志跳过,与列表扫描同一发现规则。
-fn dsh_days() -> Result<Option<UsageSourceStats>> {
-    if !dsh::sessions_root()?.exists() {
-        return Ok(None);
-    }
-
-    let today = today_prefix();
-    let mut buckets = UsageHourBuckets::new();
-    let mut session_count = 0usize;
-    let mut today_session_count = 0usize;
-
-    for path in dsh::session_transcript_paths()? {
-        let file_hours = match dsh::usage_hours(&path) {
-            Ok(hours) => hours,
-            Err(error) => {
-                crate::logger::log_error(format!(
-                    "usage stats skipped {}: {error}",
-                    path.display()
-                ));
-                continue;
-            }
-        };
-
-        if file_hours.is_empty() {
-            continue;
-        }
-
-        session_count += 1;
-        if file_has_today(&file_hours, &today) {
-            today_session_count += 1;
-        }
-        merge_buckets(&mut buckets, &file_hours);
-    }
-
-    Ok(Some(source_stats(
-        SourceApp::Dsh,
+        source_app,
         buckets,
         session_count,
         today_session_count,
@@ -220,7 +170,7 @@ pub(crate) struct SqlUsageHours {
     pub(crate) today_session_count: usize,
 }
 
-fn sql_source_days(
+pub(crate) fn days_from_sql(
     source_app: SourceApp,
     collect: fn() -> Result<Option<SqlUsageHours>>,
 ) -> Result<Option<UsageSourceStats>> {

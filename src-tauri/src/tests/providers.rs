@@ -430,9 +430,7 @@ fn codex_apply_writes_model_catalog_and_remove_clears_pointer() -> Result<()> {
     let config: TomlValue = toml::from_str(&read_text(&codex_path()))?;
     let catalog_path = codex_catalog_path();
     assert_eq!(
-        config
-            .get("model_catalog_json")
-            .and_then(TomlValue::as_str),
+        config.get("model_catalog_json").and_then(TomlValue::as_str),
         Some(catalog_path.display().to_string().as_str())
     );
     let catalog: JsonValue = serde_json::from_str(&read_text(&catalog_path))?;
@@ -472,10 +470,10 @@ fn codex_remove_keeps_user_model_catalog_json() -> Result<()> {
 
     let path = codex_path();
     let mut edited: TomlValue = toml::from_str(&read_text(&path))?;
-    edited
-        .as_table_mut()
-        .unwrap()
-        .insert("model_catalog_json".to_string(), TomlValue::String("C:/custom/models.json".to_string()));
+    edited.as_table_mut().unwrap().insert(
+        "model_catalog_json".to_string(),
+        TomlValue::String("C:/custom/models.json".to_string()),
+    );
     fs::write(&path, toml::to_string(&edited)?)?;
 
     isolated.remove_from("p1", ProviderAppId::Codex)?;
@@ -633,10 +631,12 @@ fn claude_apply_cleans_legacy_api_key_and_notes_it() -> Result<()> {
         .iter()
         .find(|app| app.app == ProviderAppId::Claude)
         .unwrap();
-    assert!(claude.entries[0]
-        .notes
-        .iter()
-        .any(|note| note.contains("ANTHROPIC_API_KEY")));
+    assert!(
+        claude.entries[0]
+            .notes
+            .iter()
+            .any(|note| note.contains("ANTHROPIC_API_KEY"))
+    );
 
     isolated.remove_from("agg", ProviderAppId::Claude)?;
     let removed: JsonValue = serde_json::from_str(&read_text(&path))?;
@@ -1111,23 +1111,35 @@ fn opencode_jsonc_takes_precedence_and_apply_migrates_registration() -> Result<(
         .iter()
         .find(|entry| entry.key == "reins-p1")
         .expect("reins-p1 in opencode.json");
-    assert!(shadowed
-        .notes
-        .iter()
-        .any(|note| note.contains("opencode.jsonc")));
+    assert!(
+        shadowed
+            .notes
+            .iter()
+            .any(|note| note.contains("opencode.jsonc"))
+    );
 
     // 再次应用：写入 .jsonc，.json 里的旧键清掉。
     isolated.apply("p1", ProviderAppId::Opencode, &["model-a"], "model-a", None)?;
     let json_root: JsonValue = serde_json::from_str(&read_text(&opencode_path()))?;
     let jsonc_root: JsonValue = serde_json::from_str(&read_text(&jsonc))?;
-    assert!(json_root.get("providers").and_then(|p| p.get("reins-p1")).is_none());
+    assert!(
+        json_root
+            .get("providers")
+            .and_then(|p| p.get("reins-p1"))
+            .is_none()
+    );
     assert!(jsonc_root["providers"]["reins-p1"].is_object());
     assert_eq!(jsonc_root["model"], "reins-p1/model-a");
 
     // 移除：从 .jsonc 清掉注册键与默认模型。
     isolated.remove_from("p1", ProviderAppId::Opencode)?;
     let after: JsonValue = serde_json::from_str(&read_text(&jsonc))?;
-    assert!(after.get("providers").and_then(|p| p.get("reins-p1")).is_none());
+    assert!(
+        after
+            .get("providers")
+            .and_then(|p| p.get("reins-p1"))
+            .is_none()
+    );
     assert!(after.get("model").is_none());
     Ok(())
 }
@@ -1623,9 +1635,9 @@ fn dsh_root(path: &Path) -> Result<serde_yaml::Value> {
 }
 
 fn find_patch_row<'a>(root: &'a serde_yaml::Value, row_id: &str) -> Option<&'a serde_yaml::Value> {
-    root.as_sequence()?.iter().find(|op| {
-        op.get("id").and_then(serde_yaml::Value::as_str) == Some(row_id)
-    })
+    root.as_sequence()?
+        .iter()
+        .find(|op| op.get("id").and_then(serde_yaml::Value::as_str) == Some(row_id))
 }
 
 fn dsh_route<'a>(root: &'a serde_yaml::Value, route: &str) -> Option<&'a serde_yaml::Value> {
@@ -1662,7 +1674,10 @@ fn dsh_apply_writes_patch_rows_and_credential() -> Result<()> {
         Some("REINS_P1")
     );
     assert_eq!(
-        route.get("models").and_then(serde_yaml::Value::as_sequence).map(Vec::len),
+        route
+            .get("models")
+            .and_then(serde_yaml::Value::as_sequence)
+            .map(Vec::len),
         Some(1)
     );
     // 未选默认档时路由不带 reasoning，默认行也不落 reasoningEffort。
@@ -1671,17 +1686,25 @@ fn dsh_apply_writes_patch_rows_and_credential() -> Result<()> {
     let profile = dsh_root(&dsh_profile_patch())?;
     let default_row = find_patch_row(&profile, "agent-default-model").expect("默认模型行");
     assert_eq!(
-        default_row.get("config").and_then(|c| c.get("provider")).and_then(serde_yaml::Value::as_str),
+        default_row
+            .get("config")
+            .and_then(|c| c.get("provider"))
+            .and_then(serde_yaml::Value::as_str),
         Some("reins-p1")
     );
     assert_eq!(
-        default_row.get("config").and_then(|c| c.get("model")).and_then(serde_yaml::Value::as_str),
+        default_row
+            .get("config")
+            .and_then(|c| c.get("model"))
+            .and_then(serde_yaml::Value::as_str),
         Some("model-a")
     );
-    assert!(default_row
-        .get("config")
-        .and_then(|c| c.get("reasoningEffort"))
-        .is_none());
+    assert!(
+        default_row
+            .get("config")
+            .and_then(|c| c.get("reasoningEffort"))
+            .is_none()
+    );
 
     let credentials: serde_yaml::Value = serde_yaml::from_str(&read_text(&dsh_credentials_file()))?;
     assert_eq!(
@@ -1770,7 +1793,16 @@ fn dsh_apply_writes_model_capabilities_and_default_reasoning() -> Result<()> {
             .and_then(serde_yaml::Value::as_str),
         Some("max")
     );
-    assert_eq!(isolated.state()?.apps.iter().find(|a| a.app == ProviderAppId::Dsh).unwrap().default_reasoning_level, Some(ReasoningLevel::Max));
+    assert_eq!(
+        isolated
+            .state()?
+            .apps
+            .iter()
+            .find(|a| a.app == ProviderAppId::Dsh)
+            .unwrap()
+            .default_reasoning_level,
+        Some(ReasoningLevel::Max)
+    );
     Ok(())
 }
 
@@ -1803,7 +1835,9 @@ fn dsh_apply_writes_reasoning_false_for_non_reasoning_model() -> Result<()> {
         .and_then(|models| models.first())
         .expect("模型条目");
     assert_eq!(
-        model.get("reasoningEfforts").and_then(serde_yaml::Value::as_bool),
+        model
+            .get("reasoningEfforts")
+            .and_then(serde_yaml::Value::as_bool),
         Some(false)
     );
     assert!(model.get("input").is_none());
@@ -1851,15 +1885,21 @@ fn dsh_apply_preserves_unrelated_content_and_external_provider() -> Result<()> {
         Some("OTHER_KEY")
     );
 
-        let profile_root = dsh_root(&profile)?;
+    let profile_root = dsh_root(&profile)?;
     let default_row = find_patch_row(&profile_root, "agent-default-model").expect("默认模型行");
     assert_eq!(
-        default_row.get("config").and_then(|c| c.get("provider")).and_then(serde_yaml::Value::as_str),
+        default_row
+            .get("config")
+            .and_then(|c| c.get("provider"))
+            .and_then(serde_yaml::Value::as_str),
         Some("reins-p1"),
         "默认模型切换到新平台"
     );
     assert_eq!(
-        default_row.get("config").and_then(|c| c.get("reasoningEffort")).and_then(serde_yaml::Value::as_str),
+        default_row
+            .get("config")
+            .and_then(|c| c.get("reasoningEffort"))
+            .and_then(serde_yaml::Value::as_str),
         Some("high")
     );
 
@@ -1967,7 +2007,10 @@ fn dsh_remove_clears_route_credential_and_default_row() -> Result<()> {
     remove_provider_from_app_inner(&isolated.store, &isolated.env, "p1", ProviderAppId::Dsh)?;
 
     let root = dsh_root(&dsh_llm_patch())?;
-    assert!(find_patch_row(&root, "llm-pi-ai").is_none(), "providers 清空后整行删除");
+    assert!(
+        find_patch_row(&root, "llm-pi-ai").is_none(),
+        "providers 清空后整行删除"
+    );
     let credentials = read_text(&dsh_credentials_file());
     assert!(!credentials.contains("REINS_P1"), "{credentials}");
     let profile = dsh_root(&dsh_profile_patch())?;
@@ -1981,12 +2024,10 @@ fn dsh_remove_clears_route_credential_and_default_row() -> Result<()> {
 // 凭据文档 version:1 布局：refs 段级 upsert/remove，version/records 保留。
 #[test]
 fn dsh_credential_ref_upsert_and_remove_in_versioned_document() -> Result<()> {
-    let existing = "version: 1\nrefs:\n  OTHER_KEY: 'other-secret'\nrecords:\n  gw/x:\n    key: v1\n";
-    let updated = crate::providers::apps::dsh::patch_credential_ref(
-        existing,
-        "REINS_P1",
-        Some("sk-secret"),
-    )?;
+    let existing =
+        "version: 1\nrefs:\n  OTHER_KEY: 'other-secret'\nrecords:\n  gw/x:\n    key: v1\n";
+    let updated =
+        crate::providers::apps::dsh::patch_credential_ref(existing, "REINS_P1", Some("sk-secret"))?;
     let root: serde_yaml::Value = serde_yaml::from_str(&updated)?;
     assert_eq!(
         yaml_get(&root, &["version"]).and_then(serde_yaml::Value::as_i64),
@@ -2000,7 +2041,10 @@ fn dsh_credential_ref_upsert_and_remove_in_versioned_document() -> Result<()> {
         yaml_get(&root, &["refs", "OTHER_KEY"]).and_then(serde_yaml::Value::as_str),
         Some("other-secret")
     );
-    assert!(yaml_get(&root, &["records", "gw/x"]).is_some(), "records 保留");
+    assert!(
+        yaml_get(&root, &["records", "gw/x"]).is_some(),
+        "records 保留"
+    );
 
     // 再次应用同 ref 更新值（幂等语义由行覆盖承担）。
     let updated_again =
@@ -2027,11 +2071,8 @@ fn dsh_credential_ref_upsert_and_remove_in_versioned_document() -> Result<()> {
 #[test]
 fn dsh_credential_ref_migrates_flat_layout() -> Result<()> {
     let flat = "DEEPSEEK_API_KEY: 'sk-legacy'\n";
-    let updated = crate::providers::apps::dsh::patch_credential_ref(
-        flat,
-        "REINS_P1",
-        Some("sk-secret"),
-    )?;
+    let updated =
+        crate::providers::apps::dsh::patch_credential_ref(flat, "REINS_P1", Some("sk-secret"))?;
     let root: serde_yaml::Value = serde_yaml::from_str(&updated)?;
     assert_eq!(
         yaml_get(&root, &["version"]).and_then(serde_yaml::Value::as_i64),
@@ -2076,13 +2117,9 @@ fn dsh_remove_rejects_missing_entry() -> Result<()> {
         "- id: llm-pi-ai\n  name: '@deepseek-ai/dsh-llm-pi-ai'\n  config:\n    providers:\n      other-gw:\n        baseURL: https://other.test/v1\n",
     )?;
 
-    let error = remove_provider_from_app_inner(
-        &isolated.store,
-        &isolated.env,
-        "p1",
-        ProviderAppId::Dsh,
-    )
-    .expect_err("没有可识别条目应报错");
+    let error =
+        remove_provider_from_app_inner(&isolated.store, &isolated.env, "p1", ProviderAppId::Dsh)
+            .expect_err("没有可识别条目应报错");
     assert!(error.to_string().contains("没有可识别"));
     Ok(())
 }
@@ -2126,10 +2163,12 @@ fn dsh_honors_dsh_home() -> Result<()> {
         &plan("p1", ProviderAppId::Dsh, &["model-a"], "model-a", None),
     )?;
 
-    assert!(custom_dir
-        .path()
-        .join("profiles/desktop/cordis.patch.yml")
-        .exists());
+    assert!(
+        custom_dir
+            .path()
+            .join("profiles/desktop/cordis.patch.yml")
+            .exists()
+    );
     assert!(custom_dir.path().join(".credentials.yaml").exists());
     assert!(!dsh_llm_patch().exists(), "默认 ~/.dsh 不应被触碰");
     Ok(())
@@ -2140,7 +2179,10 @@ fn dsh_broken_patch_reports_load_error() -> Result<()> {
     let isolated = Isolated::new()?;
     let global = dsh_llm_patch();
     fs::create_dir_all(global.parent().unwrap())?;
-    fs::write(&global, "- id: llm-pi-ai\n  config: [unclosed\n".replace("\\n", "\n"))?;
+    fs::write(
+        &global,
+        "- id: llm-pi-ai\n  config: [unclosed\n".replace("\\n", "\n"),
+    )?;
 
     let state = isolated.state()?;
     let dsh = state

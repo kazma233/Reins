@@ -191,37 +191,57 @@ fn dsh_decodes_multiframe_zstd_and_picks_highest_generation() -> Result<()> {
     // assistant/message 的 usage 字段 1:1 映射
     let usage = summary.token_usage.expect("usage present");
     assert_eq!(
-        (usage.input_tokens, usage.output_tokens, usage.cache_read_tokens, usage.cache_write_tokens),
+        (
+            usage.input_tokens,
+            usage.output_tokens,
+            usage.cache_read_tokens,
+            usage.cache_write_tokens
+        ),
         (11, 7, 3, 5)
     );
 
     let detail = read_detail(reader, path)?;
     // 三个帧的内容全部解出:帧1 只有 header+permission(无消息),帧2/帧3 各一条消息
-    assert!(detail.messages.iter().any(|message| message
-        .blocks
-        .iter()
-        .any(|block| block.text.as_deref() == Some("frame two request"))));
+    assert!(detail.messages.iter().any(|message| {
+        message
+            .blocks
+            .iter()
+            .any(|block| block.text.as_deref() == Some("frame two request"))
+    }));
     let assistant = detail
         .messages
         .iter()
         .find(|message| message.role == "assistant")
         .expect("assistant message from frame three");
-    assert!(assistant.blocks.iter().any(|block| block.kind == "thinking"
-        && block.text.as_deref() == Some("think")));
-    assert!(assistant
-        .blocks
-        .iter()
-        .any(|block| block.kind == "text" && block.text.as_deref() == Some("frame three answer")));
+    assert!(
+        assistant
+            .blocks
+            .iter()
+            .any(|block| block.kind == "thinking" && block.text.as_deref() == Some("think"))
+    );
+    assert!(
+        assistant.blocks.iter().any(
+            |block| block.kind == "text" && block.text.as_deref() == Some("frame three answer")
+        )
+    );
     // permission/preset 走事件时间线
     let permission = detail
         .events
         .iter()
         .find(|event| event.kind == "permission/preset")
         .expect("permission event");
-    assert!(detail.events.iter().any(|event| event.kind == "permission/preset"));
+    assert!(
+        detail
+            .events
+            .iter()
+            .any(|event| event.kind == "permission/preset")
+    );
     // raw payload 给整条记录（含 seq/type 信封），不是只给 data
     let payload = permission.payload.as_ref().expect("raw payload");
-    assert_eq!(payload.get("type").and_then(Value::as_str), Some("permission/preset"));
+    assert_eq!(
+        payload.get("type").and_then(Value::as_str),
+        Some("permission/preset")
+    );
     assert!(payload.get("seq").is_some());
     assert!(payload.get("data").is_some());
     fs::remove_dir_all(&home).ok();
@@ -245,17 +265,21 @@ fn dsh_tolerates_truncated_zstd_tail() -> Result<()> {
     let entries = reader.list_entries()?;
     assert_eq!(entries.len(), 1);
     let detail = read_detail(reader, &entries[0].path)?;
-    assert!(detail.messages.iter().any(|message| message
-        .blocks
-        .iter()
-        .any(|block| block.text.as_deref() == Some("frame two request"))));
-    assert!(!detail
-        .messages
-        .iter()
-        .any(|message| message.blocks.iter().any(|block| block
-            .text
-            .as_deref()
-            .is_some_and(|text| text.contains("frame three")))));
+    assert!(detail.messages.iter().any(|message| {
+        message
+            .blocks
+            .iter()
+            .any(|block| block.text.as_deref() == Some("frame two request"))
+    }));
+    assert!(
+        !detail
+            .messages
+            .iter()
+            .any(|message| message.blocks.iter().any(|block| block
+                .text
+                .as_deref()
+                .is_some_and(|text| text.contains("frame three"))))
+    );
     fs::remove_dir_all(&home).ok();
     Ok(())
 }
@@ -293,10 +317,15 @@ fn mapping_fixture(id: &str) -> Vec<Value> {
     ));
     seq += 1;
     // request/header 带全量工具定义,量最大且在忽略列表
-    lines.push(event(seq, 1006, "request/header", json!({
-        "header": {"config": {"provider": "deepseek-account", "model": "deepseek-flash"},
-                   "tools": [{"name": "pwsh", "parameters": {"type": "object"}}]}
-    })));
+    lines.push(event(
+        seq,
+        1006,
+        "request/header",
+        json!({
+            "header": {"config": {"provider": "deepseek-account", "model": "deepseek-flash"},
+                       "tools": [{"name": "pwsh", "parameters": {"type": "object"}}]}
+        }),
+    ));
     seq += 1;
     lines.push(event(
         seq,
@@ -305,9 +334,14 @@ fn mapping_fixture(id: &str) -> Vec<Value> {
         json!({"provider": "deepseek-account", "model": "deepseek-flash", "contextWindow": 1000000}),
     ));
     seq += 1;
-    lines.push(event(seq, 1008, "tool/call", json!({
-        "callId": "call_1", "name": "pwsh", "arguments": "{\"command\": \"ls\"}"
-    })));
+    lines.push(event(
+        seq,
+        1008,
+        "tool/call",
+        json!({
+            "callId": "call_1", "name": "pwsh", "arguments": "{\"command\": \"ls\"}"
+        }),
+    ));
     seq += 1;
     lines.push(assistant_message(
         seq,
@@ -345,20 +379,47 @@ fn mapping_fixture(id: &str) -> Vec<Value> {
     seq += 1;
     lines.push(event(seq, 1014, "llm/retry-attempt", json!({"attempt": 1})));
     seq += 1;
-    lines.push(event(seq, 1015, "turn/end", json!({"turn": 1, "reason": {"kind": "completed"}})));
+    lines.push(event(
+        seq,
+        1015,
+        "turn/end",
+        json!({"turn": 1, "reason": {"kind": "completed"}}),
+    ));
     seq += 1;
     // 未知 type:ignorable 才跳过,否则降级为事件
-    lines.push(event(seq, 1016, "future/experimental", json!({"detail": "skip me"})));
-    lines.last_mut().unwrap()
+    lines.push(event(
+        seq,
+        1016,
+        "future/experimental",
+        json!({"detail": "skip me"}),
+    ));
+    lines
+        .last_mut()
+        .unwrap()
         .as_object_mut()
         .unwrap()
         .insert("ignorable".to_string(), json!(true));
     seq += 1;
-    lines.push(event(seq, 1017, "future/unknown", json!({"detail": "show me"})));
+    lines.push(event(
+        seq,
+        1017,
+        "future/unknown",
+        json!({"detail": "show me"}),
+    ));
     seq += 1;
-    lines.push(event(seq, 1018, "session/title", json!({"title": "Initial title", "source": {"kind": "fallback"}})));
+    lines.push(event(
+        seq,
+        1018,
+        "session/title",
+        json!({"title": "Initial title", "source": {"kind": "fallback"}}),
+    ));
     seq += 1;
-    lines.push(event(seq, 1019, "session/title", json!({"title": "Final title", "source": {"kind": "provider"}})));
+    lines.push(event(
+        seq,
+        1019,
+        "session/title",
+        json!({"title": "Final title", "source": {"kind": "provider"}}),
+    ));
     seq += 1;
     lines.push(assistant_message(
         seq,
@@ -375,7 +436,13 @@ fn mapping_fixture(id: &str) -> Vec<Value> {
 #[test]
 fn dsh_maps_event_types_to_messages_events_and_usage() -> Result<()> {
     let (home, _guard) = dsh_test_home()?;
-    let path = write_session(&home, "session-map", 4, false, &mapping_fixture("session-map"))?;
+    let path = write_session(
+        &home,
+        "session-map",
+        4,
+        false,
+        &mapping_fixture("session-map"),
+    )?;
 
     let reader = session::reader(SourceApp::Dsh);
     let summary = reader.parse_summary(&path)?;
@@ -384,7 +451,12 @@ fn dsh_maps_event_types_to_messages_events_and_usage() -> Result<()> {
     // usage 两轮累计,字段 1:1 无换算
     let usage = summary.token_usage.expect("usage present");
     assert_eq!(
-        (usage.input_tokens, usage.output_tokens, usage.cache_read_tokens, usage.cache_write_tokens),
+        (
+            usage.input_tokens,
+            usage.output_tokens,
+            usage.cache_read_tokens,
+            usage.cache_write_tokens
+        ),
         (150, 15, 20, 5)
     );
 
@@ -396,7 +468,11 @@ fn dsh_maps_event_types_to_messages_events_and_usage() -> Result<()> {
         .iter()
         .find(|message| message.role == "user")
         .expect("human user message");
-    assert!(user.blocks.iter().any(|block| block.text.as_deref() == Some("帮我分析这个项目")));
+    assert!(
+        user.blocks
+            .iter()
+            .any(|block| block.text.as_deref() == Some("帮我分析这个项目"))
+    );
     assert_eq!(
         detail
             .messages
@@ -412,8 +488,11 @@ fn dsh_maps_event_types_to_messages_events_and_usage() -> Result<()> {
         .iter()
         .find(|message| message.role == "assistant")
         .expect("assistant message");
-    assert!(first_assistant.blocks.iter().any(|block| block.kind == "thinking"
-        && block.text.as_deref() == Some("先想想目录结构")));
+    assert!(
+        first_assistant.blocks.iter().any(
+            |block| block.kind == "thinking" && block.text.as_deref() == Some("先想想目录结构")
+        )
+    );
     assert_eq!(
         first_assistant
             .blocks
@@ -431,7 +510,9 @@ fn dsh_maps_event_types_to_messages_events_and_usage() -> Result<()> {
     assert_eq!(call.tool_call_id.as_deref(), Some("call_1"));
     assert_eq!(call.text.as_deref(), Some("{\"command\": \"ls\"}"));
     assert_eq!(
-        call.payload.as_ref().and_then(|payload| payload.get("input")),
+        call.payload
+            .as_ref()
+            .and_then(|payload| payload.get("input")),
         Some(&json!({"command": "ls"}))
     );
 
@@ -453,10 +534,14 @@ fn dsh_maps_event_types_to_messages_events_and_usage() -> Result<()> {
         .expect("failed tool result");
     assert_eq!(failed.is_error, Some(true));
     assert_eq!(failed.text.as_deref(), Some("Error: boom"));
-    assert!(failed.payload.as_ref().is_some_and(|payload| payload
-        .get("toolCallId")
-        .and_then(Value::as_str)
-        == Some("call_2")));
+    assert!(
+        failed
+            .payload
+            .as_ref()
+            .is_some_and(
+                |payload| payload.get("toolCallId").and_then(Value::as_str) == Some("call_2")
+            )
+    );
 
     // 合成注入/系统消息转事件,summary 取首个 text 块截断
     let instructions = detail
@@ -465,10 +550,12 @@ fn dsh_maps_event_types_to_messages_events_and_usage() -> Result<()> {
         .find(|event| event.kind == "agent-instructions")
         .expect("agent-instructions event");
     assert!(instructions.summary.contains("AGENTS.md instructions"));
-    assert!(detail
-        .events
-        .iter()
-        .any(|event| event.kind == "runtime-context"));
+    assert!(
+        detail
+            .events
+            .iter()
+            .any(|event| event.kind == "runtime-context")
+    );
     let system = detail
         .events
         .iter()
@@ -477,7 +564,12 @@ fn dsh_maps_event_types_to_messages_events_and_usage() -> Result<()> {
     assert!(system.summary.contains("AI agent powered"));
 
     // 通用事件在时间线;忽略项与 ignorable 未知项不在任何时间线
-    for expected in ["request/context", "turn/end", "future/unknown", "permission/preset"] {
+    for expected in [
+        "request/context",
+        "turn/end",
+        "future/unknown",
+        "permission/preset",
+    ] {
         assert!(
             detail.events.iter().any(|event| event.kind == expected),
             "missing event {expected}"
@@ -496,10 +588,7 @@ fn dsh_maps_event_types_to_messages_events_and_usage() -> Result<()> {
         "future/experimental",
     ] {
         assert!(
-            !detail
-                .events
-                .iter()
-                .any(|event| event.kind == ignored),
+            !detail.events.iter().any(|event| event.kind == ignored),
             "ignored type {ignored} leaked into timeline"
         );
         assert!(
@@ -596,7 +685,12 @@ fn dsh_surface_replace_folds_covered_range() -> Result<()> {
     let message_texts: Vec<&str> = detail
         .messages
         .iter()
-        .flat_map(|message| message.blocks.iter().filter_map(|block| block.text.as_deref()))
+        .flat_map(|message| {
+            message
+                .blocks
+                .iter()
+                .filter_map(|block| block.text.as_deref())
+        })
         .collect();
     assert!(message_texts.contains(&"压缩后的摘要"));
     for folded in ["原始问题", "原始回答", "原始工具输出"] {
@@ -682,16 +776,24 @@ fn dsh_family_folds_subagents_and_hides_orphans() -> Result<()> {
     // family 用量 = root + child 之和
     let usage = summary.token_usage.expect("usage");
     assert_eq!(
-        (usage.input_tokens, usage.output_tokens, usage.cache_read_tokens, usage.cache_write_tokens),
+        (
+            usage.input_tokens,
+            usage.output_tokens,
+            usage.cache_read_tokens,
+            usage.cache_write_tokens
+        ),
         (130, 28, 5, 0)
     );
 
     let overview = reader.parse_overview(root_path)?;
     assert_eq!(overview.agents.len(), 2);
-    assert!(overview
-        .agents
-        .iter()
-        .any(|agent| agent.session_id == "session-child" && agent.label.contains("Research task")));
+    assert!(
+        overview
+            .agents
+            .iter()
+            .any(|agent| agent.session_id == "session-child"
+                && agent.label.contains("Research task"))
+    );
     // catalog 的 label 优先作为 marker 标题
     assert_eq!(overview.summary.title, summary.title);
 
@@ -701,35 +803,45 @@ fn dsh_family_folds_subagents_and_hides_orphans() -> Result<()> {
         .iter()
         .find(|message| message.id == "dsh-subagent-session-child")
         .expect("subagent marker message");
-    assert!(marker
-        .blocks
-        .iter()
-        .any(|block| block.payload.as_ref().is_some_and(|payload| {
-            payload.get("type").and_then(Value::as_str) == Some("subagent_started")
-        })));
-    assert!(detail
-        .messages
-        .iter()
-        .any(|message| message.blocks.iter().any(|block| block.text.as_deref() == Some("子任务完成"))));
-    assert!(!detail
-        .messages
-        .iter()
-        .any(|message| message.blocks.iter().any(|block| block
-            .text
-            .as_deref()
-            .is_some_and(|text| text.contains("孤儿消息")))));
+    assert!(
+        marker
+            .blocks
+            .iter()
+            .any(|block| block.payload.as_ref().is_some_and(|payload| {
+                payload.get("type").and_then(Value::as_str) == Some("subagent_started")
+            }))
+    );
+    assert!(detail.messages.iter().any(|message| {
+        message
+            .blocks
+            .iter()
+            .any(|block| block.text.as_deref() == Some("子任务完成"))
+    }));
+    assert!(
+        !detail
+            .messages
+            .iter()
+            .any(|message| message.blocks.iter().any(|block| block
+                .text
+                .as_deref()
+                .is_some_and(|text| text.contains("孤儿消息"))))
+    );
 
     // 子代理入口按 agent session id 取消息;孤儿不属于任何 family
     let agent_messages = reader.parse_agent_messages(root_path, "session-child")?;
-    assert!(agent_messages
-        .iter()
-        .any(|message| message.blocks.iter().any(|block| block
-            .text
-            .as_deref()
-            .is_some_and(|text| text.contains("子任务")))));
-    assert!(reader
-        .parse_agent_messages(root_path, "session-orphan")
-        .is_err());
+    assert!(
+        agent_messages
+            .iter()
+            .any(|message| message.blocks.iter().any(|block| block
+                .text
+                .as_deref()
+                .is_some_and(|text| text.contains("子任务"))))
+    );
+    assert!(
+        reader
+            .parse_agent_messages(root_path, "session-orphan")
+            .is_err()
+    );
 
     // resolve_path 反查子会话转录
     let child_path = reader.resolve_path("session-child")?;

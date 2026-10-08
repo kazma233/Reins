@@ -266,10 +266,12 @@ fn claude_keeps_injected_context_as_readable_block() -> Result<()> {
     let text = block.text.as_deref().unwrap_or_default();
     assert!(text.contains("AGENTS.md instructions for /tmp/reins/workspace"));
     assert!(text.contains("<system-reminder>"));
-    assert!(!detail
-        .messages
-        .iter()
-        .any(|message| message.blocks.iter().any(|block| block.kind == "empty_message")));
+    assert!(!detail.messages.iter().any(|message| {
+        message
+            .blocks
+            .iter()
+            .any(|block| block.kind == "empty_message")
+    }));
 
     fs::remove_dir_all(&temp_home).ok();
     Ok(())
@@ -286,24 +288,22 @@ fn claude_turns_image_blocks_into_renderable_image_blocks() -> Result<()> {
         .join("session-image.jsonl");
     write_jsonl(
         &session_file,
-        &[
-            json!({
-                "type": "user",
-                "message": {
-                    "content": [
-                        { "type": "text", "text": "看下这两张图" },
-                        {
-                            "type": "image",
-                            "source": { "type": "base64", "media_type": "image/jpeg", "data": "/9j/4AAQ" }
-                        },
-                        {
-                            "type": "image",
-                            "source": { "type": "url", "url": "https://example.invalid/a.png" }
-                        }
-                    ]
-                }
-            }),
-        ],
+        &[json!({
+            "type": "user",
+            "message": {
+                "content": [
+                    { "type": "text", "text": "看下这两张图" },
+                    {
+                        "type": "image",
+                        "source": { "type": "base64", "media_type": "image/jpeg", "data": "/9j/4AAQ" }
+                    },
+                    {
+                        "type": "image",
+                        "source": { "type": "url", "url": "https://example.invalid/a.png" }
+                    }
+                ]
+            }
+        })],
     )?;
 
     let detail = read_detail(session::reader(SourceApp::ClaudeCode), &session_file)?;
@@ -373,10 +373,12 @@ fn claude_renders_local_command_records_as_readable_blocks() -> Result<()> {
     assert!(blocks.contains(&("local_command", Some("/exit"))));
     assert!(blocks.contains(&("local_command_output", Some("See ya!"))));
     // caveat 是记录用上下文，归到上下文块
-    assert!(blocks
-        .iter()
-        .any(|(kind, text)| *kind == "context_injection"
-            && text.is_some_and(|text| text.starts_with("<local-command-caveat>"))));
+    assert!(
+        blocks
+            .iter()
+            .any(|(kind, text)| *kind == "context_injection"
+                && text.is_some_and(|text| text.starts_with("<local-command-caveat>")))
+    );
     // 三条都不是对话内容，但都不再退化成原始报文兜底块
     assert!(!blocks.iter().any(|(kind, _)| *kind == "empty_message"));
 
@@ -514,10 +516,12 @@ fn codex_turns_input_image_into_renderable_image_block() -> Result<()> {
         block.text.as_deref(),
         Some("data:image/png;base64,iVBORw0KGgo=")
     );
-    assert!(!detail
-        .messages
-        .iter()
-        .any(|message| message.blocks.iter().any(|block| block.kind == "unsupported_block")));
+    assert!(!detail.messages.iter().any(|message| {
+        message
+            .blocks
+            .iter()
+            .any(|block| block.kind == "unsupported_block")
+    }));
     // raw 事件给整条记录：reasoning 的 payload 也带 timestamp/type 信封
     let reasoning = detail
         .events
@@ -525,7 +529,10 @@ fn codex_turns_input_image_into_renderable_image_block() -> Result<()> {
         .find(|event| event.kind == "reasoning")
         .expect("reasoning event");
     let payload = reasoning.payload.as_ref().expect("raw payload");
-    assert_eq!(payload.get("type").and_then(Value::as_str), Some("response_item"));
+    assert_eq!(
+        payload.get("type").and_then(Value::as_str),
+        Some("response_item")
+    );
     assert_eq!(
         payload.get("timestamp").and_then(Value::as_str),
         Some("2026-04-21T12:00:02.000Z")
@@ -594,10 +601,12 @@ fn codex_keeps_injected_context_as_readable_block() -> Result<()> {
     assert!(text.contains("AGENTS.md instructions for /tmp/reins/workspace"));
     assert!(text.contains("<environment_context>"));
     // 不再退化成一行原始报文诊断块
-    assert!(!detail
-        .messages
-        .iter()
-        .any(|message| message.blocks.iter().any(|block| block.kind == "empty_message")));
+    assert!(!detail.messages.iter().any(|message| {
+        message
+            .blocks
+            .iter()
+            .any(|block| block.kind == "empty_message")
+    }));
 
     fs::remove_dir_all(&temp_home).ok();
     Ok(())
@@ -923,8 +932,14 @@ fn opencode_v2_parses_tool_content_and_non_message_events() -> Result<()> {
     assert_eq!(idle.summary, "idle: succeeded");
     // raw payload 给整行：id/type/time_created + data 列原文
     let idle_payload = idle.payload.as_ref().expect("raw payload is the row");
-    assert_eq!(idle_payload.get("type").and_then(Value::as_str), Some("idle"));
-    assert_eq!(idle_payload.get("id").and_then(Value::as_str), Some("msg-idle"));
+    assert_eq!(
+        idle_payload.get("type").and_then(Value::as_str),
+        Some("idle")
+    );
+    assert_eq!(
+        idle_payload.get("id").and_then(Value::as_str),
+        Some("msg-idle")
+    );
     assert!(idle_payload.get("time_created").is_some());
     assert!(idle_payload.get("data").is_some());
     let compaction = detail

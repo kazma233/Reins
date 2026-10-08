@@ -33,7 +33,12 @@ fn bounded_home() -> PathBuf {
     env::temp_dir().join(format!("reins-test-{}", Uuid::new_v4()))
 }
 
-pub(super) fn child_session_fixture(home: &Path, child: &str, attempt: &str, answer: &str) -> Result<PathBuf> {
+pub(super) fn child_session_fixture(
+    home: &Path,
+    child: &str,
+    attempt: &str,
+    answer: &str,
+) -> Result<PathBuf> {
     let dir = home.join(".grok/sessions/not-a-cwd").join(child);
     fs::create_dir_all(&dir)?;
     let path = dir.join("summary.json");
@@ -655,9 +660,7 @@ fn grokbuild_custom_home_is_used_for_listing_and_resolution() -> Result<()> {
     assert_eq!(reader.list_entries()?.len(), 1);
     assert_eq!(
         reader.resolve_path("custom")?,
-        crate::support::fs::canonicalize(
-            &custom.join("sessions/not-a-cwd/custom/summary.json")
-        )?
+        crate::support::fs::canonicalize(&custom.join("sessions/not-a-cwd/custom/summary.json"))?
     );
     Ok(())
 }
@@ -696,7 +699,10 @@ fn grokbuild_large_events_page_and_auxiliary_changes_are_fresh() -> Result<()> {
         .payload
         .as_ref()
         .expect("raw payload is the whole record");
-    assert_eq!(payload.get("outcome").and_then(Value::as_str), Some("completed"));
+    assert_eq!(
+        payload.get("outcome").and_then(Value::as_str),
+        Some("completed")
+    );
     // 加密字段是唯一例外，不下发
     assert!(!serde_json::to_string(&page)?.contains("encrypted_content"));
     write_jsonl(

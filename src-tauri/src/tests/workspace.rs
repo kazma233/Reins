@@ -731,12 +731,14 @@ fn pi_mcp_apply_read_remove_roundtrip() -> Result<()> {
     let entry: serde_json::Value = serde_json::from_str(&preview.content)?;
     assert_eq!(entry["type"], "stdio");
     assert_eq!(entry["command"], "npx");
-    assert_eq!(entry["args"], serde_json::json!(["-y", "server-filesystem"]));
+    assert_eq!(
+        entry["args"],
+        serde_json::json!(["-y", "server-filesystem"])
+    );
 
     apply_mcp_to_target_inner(&store, "fs-server", "pi")?;
     apply_mcp_to_target_inner(&store, "fs-server", "pi")?;
-    let written: serde_json::Value =
-        serde_json::from_str(&fs::read_to_string(&pi_mcp)?)?;
+    let written: serde_json::Value = serde_json::from_str(&fs::read_to_string(&pi_mcp)?)?;
     assert_eq!(written["mcpServers"]["fs-server"]["command"], "npx");
 
     remove_mcp_from_target_inner(&store, "fs-server", "pi")?;

@@ -1,6 +1,5 @@
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
-use std::thread;
 
 use anyhow::{Context, Result, anyhow};
 
@@ -12,91 +11,19 @@ use super::{
 };
 
 pub(crate) fn detect_sources_inner(state: &SessionIndexState) -> Result<Vec<SourceStatus>> {
-    let codex_root = super::codex::root()?;
-    let claude_root = super::claude_code::root()?;
-    let opencode_root = super::opencode::root()?;
-    let pi_root = super::pi::sessions_root()?;
-    let grok_root = super::grokbuild::root()?;
-    let zcode_root = super::zcode::root()?;
-    let dsh_root = super::dsh::sessions_root()?;
-
-    let inspections = thread::scope(|scope| {
-        let codex_state = state.clone();
-        let codex_handle = scope.spawn(move || {
-            inspect_source(
-                &codex_state,
-                SourceApp::Codex,
-                codex_root,
-                Some("Using ~/.codex/sessions as the primary transcript source.".to_string()),
-            )
-        });
-        let claude_state = state.clone();
-        let claude_handle = scope.spawn(move || {
-            inspect_source(
-                &claude_state,
-                SourceApp::ClaudeCode,
-                claude_root,
-                Some("Reading project-level session JSONL files.".to_string()),
-            )
-        });
-        let opencode_state = state.clone();
-        let opencode_handle = scope.spawn(move || {
-            inspect_source(
-                &opencode_state,
-                SourceApp::OpenCode,
-                opencode_root,
-                Some("Reading sessions from ~/.local/share/opencode/opencode.db.".to_string()),
-            )
-        });
-        let pi_state = state.clone();
-        let pi_handle = scope.spawn(move || {
-            inspect_source(
-                &pi_state,
-                SourceApp::Pi,
-                pi_root,
-                Some("Reading ~/.pi/agent/sessions JSONL session files.".to_string()),
-            )
-        });
-
-        let grok_state = state.clone();
-        let grok_handle =
-            scope.spawn(move || inspect_source(&grok_state, SourceApp::GrokBuild, grok_root, None));
-
-        let zcode_state = state.clone();
-        let zcode_handle = scope.spawn(move || {
-            inspect_source(
-                &zcode_state,
-                SourceApp::Zcode,
-                zcode_root,
-                Some("Reading sessions from ~/.zcode/cli/db/db.sqlite.".to_string()),
-            )
-        });
-
-        let dsh_state = state.clone();
-        let dsh_handle = scope.spawn(move || {
-            inspect_source(
-                &dsh_state,
-                SourceApp::Dsh,
-                dsh_root,
-                Some("Reading ~/.dsh/sessions transcript files.".to_string()),
-            )
-        });
-
-        vec![
-            codex_handle.join(),
-            claude_handle.join(),
-            opencode_handle.join(),
-            pi_handle.join(),
-            grok_handle.join(),
-            zcode_handle.join(),
-            dsh_handle.join(),
-        ]
+    let inspections = super::sources::parallel_collect("Source inspection", |spec| {
+        inspect_source(
+            state,
+            spec.app,
+            (spec.root)()?,
+            spec.detect_note.map(str::to_string),
+        )
     });
 
     let mut sources = Vec::with_capacity(inspections.len());
 
     for inspection in inspections {
-        let inspection = inspection.map_err(|_| anyhow!("Source inspection thread panicked"))??;
+        let inspection = inspection?;
 
         if let Some(catalog) = inspection.catalog {
             state.store_catalog(inspection.app, catalog)?;
@@ -150,18 +77,15 @@ impl SourceSelection {
 
 // 与 detect_sources_inner 的可用性判断一致：只看来源根目录是否存在。
 fn available_sources() -> Vec<SourceApp> {
-    [
-        (SourceApp::Codex, super::codex::root()),
-        (SourceApp::ClaudeCode, super::claude_code::root()),
-        (SourceApp::OpenCode, super::opencode::root()),
-        (SourceApp::Pi, super::pi::sessions_root()),
-        (SourceApp::GrokBuild, super::grokbuild::root()),
-        (SourceApp::Zcode, super::zcode::root()),
-        (SourceApp::Dsh, super::dsh::sessions_root()),
-    ]
-    .into_iter()
-    .filter_map(|(app, root)| root.ok().filter(|root| root.exists()).map(|_| app))
-    .collect()
+    super::sources::SOURCES
+        .iter()
+        .filter_map(|spec| {
+            (spec.root)()
+                .ok()
+                .filter(|root| root.exists())
+                .map(|_| spec.app)
+        })
+        .collect()
 }
 
 pub(crate) fn list_sessions_inner(
@@ -238,10 +162,7 @@ pub(crate) fn build_summary(
 
 // 各来源读取器先把自家 usage 字段归一,再经此合并;None 表示尚未见过任何
 // usage 记录,与"字段缺失按 0 处理"区分开。
-pub(crate) fn merge_token_usage(
-    total: &mut Option<SessionTokenUsage>,
-    next: SessionTokenUsage,
-) {
+pub(crate) fn merge_token_usage(total: &mut Option<SessionTokenUsage>, next: SessionTokenUsage) {
     if let Some(total) = total.as_mut() {
         total.input_tokens += next.input_tokens;
         total.output_tokens += next.output_tokens;
