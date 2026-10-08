@@ -90,8 +90,8 @@ pub(crate) fn clear_all_caches() -> Result<()> {
 
 pub(crate) fn delete_session(source_app: SourceApp, path: &Path) -> Result<()> {
     match sources::spec(source_app).delete {
-        sources::DeletePolicy::Deleter(delete) => delete(path),
-        sources::DeletePolicy::Unsupported(reason) => bail!("{reason}"),
+        sources::DeletePolicy::Deleter { delete, .. } => delete(path),
+        sources::DeletePolicy::Unsupported { reason, .. } => bail!("{reason}"),
     }
 }
 

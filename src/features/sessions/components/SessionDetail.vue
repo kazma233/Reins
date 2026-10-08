@@ -22,17 +22,22 @@ import {
 import { extractErrorMessage } from "@shared/lib/errors";
 import { createRequestGuard } from "@shared/lib/request-guard";
 import { formatTimestamp, formatTokenCount } from "@shared/lib/format";
-import { canDeleteSession } from "../model";
 import { formatSourceAppName } from "../source-app";
 import SessionDetailDialogs from "./SessionDetailDialogs.vue";
 import MessageTimeline from "./MessageTimeline.vue";
 import EventTimeline from "./EventTimeline.vue";
-import type { SessionAgent, SessionOverview, SessionTokenUsage } from "../types";
+import type {
+  DeletePlan,
+  SessionAgent,
+  SessionOverview,
+  SessionTokenUsage
+} from "../types";
 import SubagentGroupDialog from "./SubagentGroupDialog.vue";
 import "./session-detail.css";
 
 type SessionDetailProps = {
   overview: SessionOverview | null;
+  deletePlan: DeletePlan | null;
   loading: boolean;
 };
 
@@ -80,6 +85,7 @@ const deferredTimelineFilter = refDebounced(timelineFilter, 300);
 // --- timeline ---
 
 const overviewRef = toRef(props, "overview");
+const deletePlanRef = toRef(props, "deletePlan");
 const { detailKey, messagesLoader, eventsLoader } = useSessionTimeline(overviewRef);
 
 // ref 解构不丢响应性,沿用原有变量名,模板与滚动加载逻辑无需改动
@@ -109,7 +115,9 @@ const {
   openDeleteDialog,
   closeDeleteDialog,
   handleDelete
-} = useSessionDetailActions(overviewRef, detailKey, () => emit("deleted"));
+} = useSessionDetailActions(overviewRef, detailKey, deletePlanRef, () =>
+  emit("deleted")
+);
 
 // Reset UI toggles when the overview changes (dialog state resets inside
 // useSessionDetailActions).
@@ -429,7 +437,7 @@ watch(
         </div>
         <div class="detail-header-actions">
           <button
-            v-if="canDeleteSession(overview.summary.sourceApp)"
+            v-if="deletePlan?.supported"
             class="danger-button"
             :disabled="deleteLoading"
             type="button"
@@ -570,6 +578,8 @@ watch(
     />
 
     <SessionDetailDialogs
+      v-if="deletePlan?.supported"
+      :delete-plan="deletePlan"
       :overview="overview"
       :delete-dialog-open="deleteDialogOpen"
       :delete-loading="deleteLoading"

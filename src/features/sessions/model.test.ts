@@ -1,24 +1,22 @@
 import { describe, expect, it } from "vitest";
-import { canDeleteSession } from "./model";
 import { formatSourceAppName } from "./source-app";
 
+// 删除入口的可见性断言已随 canDeleteSession 一起迁移到后端 plan 测试
+// （src-tauri/src/tests/session_delete_plan.rs）；这里只钉来源产品名。
 describe("Grok Build session contract", () => {
-  it("exposes the Grok Build source as deletable", () => {
+  it("labels the Grok Build source", () => {
     expect(formatSourceAppName("grokbuild")).toBe("Grok Build");
-    expect(canDeleteSession("grokbuild")).toBe(true);
   });
 });
 
 describe("Pi session contract", () => {
-  it("exposes the Pi source as deletable", () => {
+  it("labels the Pi source", () => {
     expect(formatSourceAppName("pi")).toBe("Pi");
-    expect(canDeleteSession("pi")).toBe(true);
   });
 });
 
 describe("DSH session contract", () => {
-  it("labels the source and disables deletion", () => {
+  it("labels the DSH source", () => {
     expect(formatSourceAppName("dsh")).toBe("DeepSeek Harness");
-    expect(canDeleteSession("dsh")).toBe(false);
   });
 });

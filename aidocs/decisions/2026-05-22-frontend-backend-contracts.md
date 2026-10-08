@@ -14,6 +14,7 @@
 | `src/features/sessions/api.ts` | `src-tauri/src/session/commands.rs` | `get_session_overview` | 返回 `SessionOverview` |
 | `src/features/sessions/api.ts` | `src-tauri/src/session/commands.rs` | `get_session_messages` | 返回 `SessionMessagePage` |
 | `src/features/sessions/api.ts` | `src-tauri/src/session/commands.rs` | `get_session_events` | 返回 `SessionEventPage` |
+| `src/features/sessions/api.ts` | `src-tauri/src/session/commands.rs` | `get_delete_plan` | 返回 `DeletePlan`（删除预演：动作清单 + 说明文案，删除语义唯一真相在后端） |
 | `src/features/sessions/api.ts` | `src-tauri/src/session/commands.rs` | `delete_session` | 返回 `DeleteSessionResult` |
 
 ### Session 关键 DTO
@@ -28,6 +29,7 @@
 | `SessionPage` | `SessionPage` | `src-tauri/src/session/model.rs` |
 | `SessionRefreshResult` | `SessionRefreshResult` | `src-tauri/src/session/model.rs` |
 | `DeleteSessionResult` | `DeleteSessionResult` | `src-tauri/src/session/model.rs` |
+| `DeletePlan` | `DeletePlan` | `src-tauri/src/session/model.rs` |
 
 ## Workspace
 

@@ -23,6 +23,7 @@ pub fn run() {
             session::commands::get_session_agent_messages,
             session::commands::get_session_events,
             session::commands::get_usage_stats,
+            session::commands::get_delete_plan,
             session::commands::delete_session,
             workspace::commands::get_workspace_state,
             workspace::commands::get_builtin_target_preset,

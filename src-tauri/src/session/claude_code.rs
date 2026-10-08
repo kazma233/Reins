@@ -15,8 +15,8 @@ use super::reader_engine::{
     FamilyReader, FamilySpec, Freshness, MarkerShape, MemberTimeline, RowErrorPolicy, scan_files,
 };
 use super::{
-    ContentBlock, SessionEvent, SessionMessage, SessionSummary, SessionTokenUsage, SourceApp,
-    SummaryAccumulator, TimelineRecord, UsageHourBuckets,
+    ContentBlock, DeletePlanAction, SessionEvent, SessionMessage, SessionOverview, SessionSummary,
+    SessionTokenUsage, SourceApp, SummaryAccumulator, TimelineRecord, UsageHourBuckets,
 };
 
 #[derive(Clone, Debug)]
@@ -222,6 +222,35 @@ pub(crate) fn delete_session(path: &Path) -> Result<()> {
     prune_empty_parents(root()?.join("projects"), path.parent());
     BACKEND.engine()?.clear()?;
     Ok(())
+}
+
+// delete_session 的预演,动作与顺序对齐删除实现:成员文件 → subagent 元数据
+// → 三个 sidecar 目录。sidecar 保持 ~ 前缀拼写,由前端渲染为 $HOME 形式。
+pub(crate) fn delete_plan(overview: &SessionOverview) -> Result<Vec<DeletePlanAction>> {
+    let session_id = &overview.summary.source_session_id;
+    let mut actions = overview
+        .source_paths
+        .iter()
+        .map(|path| DeletePlanAction::RemoveFile { path: path.clone() })
+        .collect::<Vec<_>>();
+
+    // subagent 转录的同名 .meta.json 元数据只在路径形态上可推导,与执行侧
+    // "存在才删"的差别由用户在确认框看到的是完整意图保证。
+    for path in &overview.source_paths {
+        if path.contains("/subagents/") && path.ends_with(".jsonl") {
+            actions.push(DeletePlanAction::RemoveFile {
+                path: format!("{}.meta.json", path.strip_suffix(".jsonl").unwrap_or(path)),
+            });
+        }
+    }
+
+    for dir in ["projects", "session-env", "file-history"] {
+        actions.push(DeletePlanAction::RemoveDirectory {
+            path: format!("~/.claude/{dir}/{session_id}"),
+        });
+    }
+
+    Ok(actions)
 }
 
 // Member/family ordering and the id/path maps live in the shared engine; this

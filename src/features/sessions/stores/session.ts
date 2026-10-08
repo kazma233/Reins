@@ -1,5 +1,6 @@
 import { defineStore } from "pinia";
 import type {
+  DeletePlan,
   SessionOverview,
   SessionSummary,
   SourceStatus
@@ -12,6 +13,8 @@ type SessionState = {
   sessions: SessionSummary[];
   selectedSessionKey: string | null;
   sessionOverview: SessionOverview | null;
+  // 删除预演与 overview 同生命周期,由后端 plan 驱动删除入口与确认框。
+  deletePlan: DeletePlan | null;
   loadingSources: boolean;
   loadingSessions: boolean;
   loadingDetail: boolean;
@@ -25,6 +28,7 @@ export const useSessionStore = defineStore("session", {
     sessions: [],
     selectedSessionKey: null,
     sessionOverview: null,
+    deletePlan: null,
     loadingSources: false,
     loadingSessions: false,
     loadingDetail: false
@@ -43,6 +47,7 @@ export const useSessionStore = defineStore("session", {
       this.sessions = [];
       this.selectedSessionKey = null;
       this.sessionOverview = null;
+      this.deletePlan = null;
     },
     setSessions(sessions: SessionSummary[]) {
       this.sessions = sessions;
@@ -64,6 +69,9 @@ export const useSessionStore = defineStore("session", {
     },
     setSessionOverview(overview: SessionOverview | null) {
       this.sessionOverview = overview;
+    },
+    setDeletePlan(plan: DeletePlan | null) {
+      this.deletePlan = plan;
     },
     setLoadingSources(value: boolean) {
       this.loadingSources = value;

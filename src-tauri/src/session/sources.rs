@@ -8,16 +8,35 @@ use std::thread;
 
 use anyhow::{Result, anyhow};
 
-use super::model::{SourceApp, UsageSourceStats};
+use super::model::{DeletePlanAction, SessionOverview, SourceApp, UsageSourceStats};
 use super::usage_stats::{self, UsageKind};
 use super::{SessionReader, claude_code, codex, dsh, grokbuild, opencode, pi, zcode};
 
-/// 一个来源的删除策略:能删的挂删除函数;不能删的说明原因,文案直达前端
-/// 错误提示。
+/// 可删来源的删除说明文案(逐字来自前端原 DELETE_METHOD_COPY),与 plan
+/// 动作一起构成删除预演的全部 UI 内容。
+#[derive(Clone, Copy)]
+pub(crate) struct DeleteCopy {
+    pub(crate) description: &'static str,
+    pub(crate) details: &'static [&'static str],
+    pub(crate) command_label: &'static str,
+}
+
+// 不支持删除的来源共用这一句 command 栏文案。
+pub(crate) const DELETE_UNSUPPORTED_LABEL: &str = "不支持删除";
+
+/// 一个来源的删除策略,同时承载执行与预演:能删的挂删除函数与 plan 构造;
+/// 不能删的说明原因(reason 直达前端错误提示,notice 是删除计划 UI 文案)。
 #[derive(Clone, Copy)]
 pub(crate) enum DeletePolicy {
-    Deleter(fn(&Path) -> Result<()>),
-    Unsupported(&'static str),
+    Deleter {
+        delete: fn(&Path) -> Result<()>,
+        plan: fn(&SessionOverview) -> Result<Vec<DeletePlanAction>>,
+        copy: DeleteCopy,
+    },
+    Unsupported {
+        reason: &'static str,
+        notice: &'static str,
+    },
 }
 
 /// 纯静态分发数据,按值复制进注册表。
@@ -58,7 +77,19 @@ static CODEX: SourceSpec = SourceSpec {
     root: codex::root,
     detect_note: Some("Using ~/.codex/sessions as the primary transcript source."),
     reader: &codex::BACKEND,
-    delete: DeletePolicy::Deleter(codex::delete_session),
+    delete: DeletePolicy::Deleter {
+        delete: codex::delete_session,
+        plan: codex::delete_plan,
+        copy: DeleteCopy {
+            description: "Codex 调用官方单会话删除命令（codex delete --force），会话从列表中移除。",
+            details: &[
+                "对当前会话组里每个仍在 state 库中的会话执行 codex delete --force。",
+                "官方命令会级联删除子代理会话文件及 threads、spawn 关系、日志等关联记录。",
+                "已不在 state 库中的会话（如已被级联删除）自动跳过。",
+            ],
+            command_label: "执行命令",
+        },
+    },
     usage: UsageKind::CachedJsonl {
         subdir: Some("sessions"),
         extract: codex::usage_hours,
@@ -70,7 +101,19 @@ static CLAUDE_CODE: SourceSpec = SourceSpec {
     root: claude_code::root,
     detect_note: Some("Reading project-level session JSONL files."),
     reader: &claude_code::BACKEND,
-    delete: DeletePolicy::Deleter(claude_code::delete_session),
+    delete: DeletePolicy::Deleter {
+        delete: claude_code::delete_session,
+        plan: claude_code::delete_plan,
+        copy: DeleteCopy {
+            description: "Claude Code 目前没有合适的单会话官方删除命令，这里按本地会话文件和附属目录清理。",
+            details: &[
+                "删除当前会话组对应的 JSONL 会话文件。",
+                "子 Agent 会额外删除对应的 .meta.json 元数据。",
+                "同步清理 session-env、file-history 等附属目录。",
+            ],
+            command_label: "等价执行动作",
+        },
+    },
     usage: UsageKind::CachedJsonl {
         subdir: Some("projects"),
         extract: claude_code::usage_hours,
@@ -82,7 +125,18 @@ static OPENCODE: SourceSpec = SourceSpec {
     root: opencode::root,
     detect_note: Some("Reading sessions from ~/.local/share/opencode/opencode.db."),
     reader: &opencode::BACKEND,
-    delete: DeletePolicy::Deleter(opencode::delete_session),
+    delete: DeletePolicy::Deleter {
+        delete: opencode::delete_session,
+        plan: opencode::delete_plan,
+        copy: DeleteCopy {
+            description: "OpenCode 调用官方单会话删除命令，会话从列表中移除。",
+            details: &[
+                "对当前会话组里的每个 session id 执行 opencode session delete。",
+                "OpenCode v2 会级联删除子会话，已被级联删除的会话自动跳过。",
+            ],
+            command_label: "执行命令",
+        },
+    },
     usage: UsageKind::Sql {
         collect: opencode::usage_hours,
     },
@@ -93,7 +147,19 @@ static PI: SourceSpec = SourceSpec {
     root: pi::sessions_root,
     detect_note: Some("Reading ~/.pi/agent/sessions JSONL session files."),
     reader: &pi::BACKEND,
-    delete: DeletePolicy::Deleter(pi::delete_session),
+    delete: DeletePolicy::Deleter {
+        delete: pi::delete_session,
+        plan: pi::delete_plan,
+        copy: DeleteCopy {
+            description: "Pi 会话是工作目录下的独立 JSONL 文件，这里直接清理对应 transcript。",
+            details: &[
+                "删除当前 Pi session 对应的 JSONL 文件。",
+                "保留其它工作目录下的 Pi session 文件。",
+                "同步清理本工具的 Pi 索引和时间线缓存。",
+            ],
+            command_label: "等价执行动作",
+        },
+    },
     usage: UsageKind::CachedJsonl {
         subdir: None,
         extract: pi::usage_hours,
@@ -105,7 +171,19 @@ static GROKBUILD: SourceSpec = SourceSpec {
     root: grokbuild::root,
     detect_note: None,
     reader: &grokbuild::BACKEND,
-    delete: DeletePolicy::Deleter(grokbuild::delete_session),
+    delete: DeletePolicy::Deleter {
+        delete: grokbuild::delete_session,
+        plan: grokbuild::delete_plan,
+        copy: DeleteCopy {
+            description: "Grok Build 主会话走官方删除命令，官方够不到的子代理子会话由本地清理。",
+            details: &[
+                "对主会话执行 grok sessions delete，官方一并清理其目录与搜索索引。",
+                "子代理子会话目录及对应搜索索引行由本地清理。",
+                "保留工作目录分组下的 prompt_history.jsonl 等共享文件。",
+            ],
+            command_label: "执行动作",
+        },
+    },
     usage: UsageKind::RawFiles {
         paths: grokbuild::session_summary_paths,
         extract: grokbuild::usage_hours,
@@ -119,7 +197,10 @@ static ZCODE: SourceSpec = SourceSpec {
     root: zcode::root,
     detect_note: Some("Reading sessions from ~/.zcode/cli/db/db.sqlite."),
     reader: &zcode::BACKEND,
-    delete: DeletePolicy::Unsupported("ZCode session deletion is unsupported"),
+    delete: DeletePolicy::Unsupported {
+        reason: "ZCode session deletion is unsupported",
+        notice: "暂不支持删除 ZCode 会话。",
+    },
     usage: UsageKind::Sql {
         collect: zcode::usage_hours,
     },
@@ -132,7 +213,10 @@ static DSH: SourceSpec = SourceSpec {
     root: dsh::sessions_root,
     detect_note: Some("Reading ~/.dsh/sessions transcript files."),
     reader: &dsh::BACKEND,
-    delete: DeletePolicy::Unsupported("DSH session deletion is unsupported"),
+    delete: DeletePolicy::Unsupported {
+        reason: "DSH session deletion is unsupported",
+        notice: "暂不支持删除 DeepSeek Harness 会话。",
+    },
     usage: UsageKind::RawFiles {
         paths: dsh::session_transcript_paths,
         extract: dsh::usage_hours,

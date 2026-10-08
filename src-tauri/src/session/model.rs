@@ -245,6 +245,33 @@ pub(crate) struct DeleteSessionResult {
     pub(crate) deleted_paths: Vec<String>,
 }
 
+// 一次会话删除的预演:动作清单与说明文案都由后端来源注册表给出,前端确认框
+// 只渲染,不再持有 per-source 删除语义。
+#[derive(Clone, Debug, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../src/features/sessions/generated/")]
+pub(crate) struct DeletePlan {
+    pub(crate) source_app: SourceApp,
+    /// false 时仅 reason 有意义:删除入口隐藏,不进对话框。
+    pub(crate) supported: bool,
+    #[ts(optional)]
+    pub(crate) reason: Option<String>,
+    pub(crate) description: String,
+    pub(crate) details: Vec<String>,
+    pub(crate) command_label: String,
+    pub(crate) actions: Vec<DeletePlanAction>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, TS)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+#[ts(export, export_to = "../../src/features/sessions/generated/")]
+pub(crate) enum DeletePlanAction {
+    RemoveFile { path: String },
+    RemoveDirectory { path: String },
+    RunCli { program: String, args: Vec<String> },
+    Sqlite { db_path: String, sql: String },
+}
+
 #[derive(Clone, Debug, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export, export_to = "../../src/features/sessions/generated/")]

@@ -13,8 +13,8 @@ use super::reader_engine::{
     FamilyReader, FamilySpec, Freshness, MarkerShape, MemberTimeline, OverviewCounts, SummaryKind,
 };
 use super::{
-    ContentBlock, SessionEvent, SessionMessage, SessionSummary, SessionTokenUsage, SourceApp,
-    UsageHourBuckets, usage_stats::SqlUsageHours,
+    ContentBlock, DeletePlanAction, SessionEvent, SessionMessage, SessionOverview, SessionSummary,
+    SessionTokenUsage, SourceApp, UsageHourBuckets, usage_stats::SqlUsageHours,
 };
 
 #[derive(Clone, Debug)]
@@ -338,6 +338,18 @@ pub(crate) fn delete_session(path: &Path) -> Result<()> {
 
 fn open_connection() -> Result<Connection> {
     Connection::open(db_path()?).context("Failed to open OpenCode sqlite database")
+}
+
+// 预演逐 id 列出官方命令;执行侧"已被官方级联删除则跳过"是命令层面的
+// 幂等细节,预演仍展示完整意图。
+pub(crate) fn delete_plan(overview: &SessionOverview) -> Result<Vec<DeletePlanAction>> {
+    Ok(super::delete::delete_target_session_ids(overview)
+        .into_iter()
+        .map(|id| DeletePlanAction::RunCli {
+            program: "opencode".to_string(),
+            args: vec!["session".to_string(), "delete".to_string(), id],
+        })
+        .collect())
 }
 
 fn list_session_rows() -> Result<Vec<OpenCodeSessionRow>> {

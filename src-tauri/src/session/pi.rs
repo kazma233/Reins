@@ -11,9 +11,9 @@ use uuid::Uuid;
 
 use super::reader_engine::{self, MemberTimeline, event_page, message_page};
 use super::{
-    ContentBlock, SessionAgent, SessionEvent, SessionEventPage, SessionFileEntry, SessionMessage,
-    SessionMessagePage, SessionOverview, SessionReader, SessionSummary, SessionTokenUsage,
-    SourceApp, SummaryAccumulator, UsageHourBuckets,
+    ContentBlock, DeletePlanAction, SessionAgent, SessionEvent, SessionEventPage, SessionFileEntry,
+    SessionMessage, SessionMessagePage, SessionOverview, SessionReader, SessionSummary,
+    SessionTokenUsage, SourceApp, SummaryAccumulator, UsageHourBuckets,
 };
 
 pub(crate) struct PiBackend;
@@ -218,6 +218,15 @@ pub(crate) fn delete_session(path: &Path) -> Result<()> {
     fs::remove_file(path).with_context(|| format!("Failed to delete {}", path.display()))?;
     prune_empty_parents(sessions_root()?, path.parent());
     BACKEND.clear_cache()
+}
+
+// Pi 的删除单位就是单个 transcript 文件,预演与执行一致。
+pub(crate) fn delete_plan(overview: &SessionOverview) -> Result<Vec<DeletePlanAction>> {
+    Ok(overview
+        .source_paths
+        .iter()
+        .map(|path| DeletePlanAction::RemoveFile { path: path.clone() })
+        .collect())
 }
 
 fn index() -> Result<PiIndexCacheEntry> {

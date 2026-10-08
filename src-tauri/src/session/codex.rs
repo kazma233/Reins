@@ -16,8 +16,8 @@ use super::reader_engine::{
     RowErrorPolicy, scan_files,
 };
 use super::{
-    ContentBlock, SessionEvent, SessionMessage, SessionSummary, SessionTokenUsage, SourceApp,
-    SummaryAccumulator, TimelineRecord, UsageHourBuckets,
+    ContentBlock, DeletePlanAction, SessionEvent, SessionMessage, SessionOverview, SessionSummary,
+    SessionTokenUsage, SourceApp, SummaryAccumulator, TimelineRecord, UsageHourBuckets,
 };
 
 #[derive(Clone, Debug)]
@@ -231,6 +231,18 @@ pub(crate) fn delete_session(path: &Path) -> Result<()> {
 
     BACKEND.engine()?.clear()?;
     Ok(())
+}
+
+// 预演逐 id 列出官方命令;执行侧"已不在 state 库则跳过"是命令层面的幂等
+// 细节,预演仍展示完整意图。
+pub(crate) fn delete_plan(overview: &SessionOverview) -> Result<Vec<DeletePlanAction>> {
+    Ok(super::delete::delete_target_session_ids(overview)
+        .into_iter()
+        .map(|id| DeletePlanAction::RunCli {
+            program: "codex".to_string(),
+            args: vec!["delete".to_string(), "--force".to_string(), id],
+        })
+        .collect())
 }
 
 // codex delete --force 非交互执行且只认 UUID；会话存在性以 state 库 threads 行为准。

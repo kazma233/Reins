@@ -11,9 +11,9 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use super::{
-    ContentBlock, SessionEvent, SessionEventPage, SessionFileEntry, SessionMessage,
-    SessionMessagePage, SessionOverview, SessionReader, SessionSummary, SessionTokenUsage,
-    SourceApp, UsageHourBuckets,
+    ContentBlock, DeletePlanAction, SessionEvent, SessionEventPage, SessionFileEntry,
+    SessionMessage, SessionMessagePage, SessionOverview, SessionReader, SessionSummary,
+    SessionTokenUsage, SourceApp, UsageHourBuckets,
 };
 
 use super::family_index::{Family, FamilyIndex, FamilyRow};
@@ -930,6 +930,56 @@ pub(crate) fn delete_session(path: &Path) -> Result<()> {
         }
     }
     Ok(())
+}
+
+// delete_session 的预演:root 交官方命令,官方够不到的子会话目录与搜索
+// 索引行走本地清理;root 自身的目录与索引行由官方命令负责,不进动作清单。
+pub(crate) fn delete_plan(overview: &SessionOverview) -> Result<Vec<DeletePlanAction>> {
+    let root_id = &overview.summary.source_session_id;
+
+    let mut actions = vec![DeletePlanAction::RunCli {
+        program: "grok".to_string(),
+        args: vec![
+            "sessions".to_string(),
+            "delete".to_string(),
+            root_id.clone(),
+        ],
+    }];
+
+    // sourcePaths 指向各会话目录内的文件,取父目录去重(首见顺序)即成员
+    // 会话目录;再排除 root 自己的目录。
+    let mut session_dirs = Vec::<String>::new();
+    for path in &overview.source_paths {
+        if let Some((dir, _)) = path.rsplit_once('/') {
+            if !session_dirs.iter().any(|seen| seen == dir) {
+                session_dirs.push(dir.to_string());
+            }
+        }
+    }
+    for dir in session_dirs {
+        if !dir.ends_with(&format!("/{root_id}")) {
+            actions.push(DeletePlanAction::RemoveDirectory { path: dir });
+        }
+    }
+
+    // 搜索索引只清本地删除的子会话行;SQL 单引号转义规则与 sqlite 一致。
+    let child_ids = super::delete::delete_target_session_ids(overview)
+        .into_iter()
+        .filter(|id| id != root_id)
+        .collect::<Vec<_>>();
+    if !child_ids.is_empty() {
+        let ids = child_ids
+            .iter()
+            .map(|id| format!("'{}'", id.replace('\'', "''")))
+            .collect::<Vec<_>>()
+            .join(", ");
+        actions.push(DeletePlanAction::Sqlite {
+            db_path: "~/.grok/sessions/session_search.sqlite".to_string(),
+            sql: format!("DELETE FROM session_docs WHERE session_id IN ({ids});"),
+        });
+    }
+
+    Ok(actions)
 }
 
 // grok 对不存在的会话输出 "No session found" 但 exit 0（幂等语义），只有

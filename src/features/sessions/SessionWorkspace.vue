@@ -5,6 +5,7 @@ import { refDebounced } from "@vueuse/core";
 import "./styles/workspace.css";
 import {
   detectSources,
+  getDeletePlan,
   getSessionOverview,
   listSessions,
   refreshSessions
@@ -24,6 +25,7 @@ const SESSION_QUERY_DEBOUNCE_MS = 200;
 
 const sessionStore = useSessionStore();
 const {
+  deletePlan,
   loadingDetail,
   loadingSessions,
   loadingSources,
@@ -114,6 +116,7 @@ function clearSelectedSession(options?: { invalidateDetailRequest?: boolean }) {
   }
   sessionStore.setSelectedSessionKey(null);
   sessionStore.setSessionOverview(null);
+  sessionStore.setDeletePlan(null);
   sessionStore.setLoadingDetail(false);
 }
 
@@ -216,6 +219,7 @@ watch(
     async function loadDetail() {
       if (!selectedSessionKey.value) {
         sessionStore.setSessionOverview(null);
+        sessionStore.setDeletePlan(null);
         sessionStore.setLoadingDetail(false);
         return;
       }
@@ -228,6 +232,7 @@ watch(
           summary.sourceApp !== selectedSource.value)
       ) {
         sessionStore.setSessionOverview(null);
+        sessionStore.setDeletePlan(null);
         sessionStore.setLoadingDetail(false);
         return;
       }
@@ -240,19 +245,28 @@ watch(
         eventCount: null,
         agents: []
       });
+      sessionStore.setDeletePlan(null);
 
       try {
+        // 删除计划与 overview 并行获取；计划失败只隐藏删除入口，不阻断详情。
+        const planPromise = getDeletePlan(
+          summary.sourceApp,
+          summary.sourceSessionId,
+          summary.transcriptPath
+        ).catch(() => null);
         const nextDetail = await getSessionOverview(
           summary.sourceApp,
           summary.sourceSessionId,
           summary.transcriptPath
         );
+        const nextPlan = await planPromise;
 
         if (cancelled || !detailRequestGuard.isLatest(requestId)) {
           return;
         }
 
         sessionStore.setSessionOverview(nextDetail);
+        sessionStore.setDeletePlan(nextPlan);
       } catch (error) {
         if (cancelled || !detailRequestGuard.isLatest(requestId)) {
           return;
@@ -463,6 +477,7 @@ async function handleSessionDeleted() {
       />
       <SessionDetail
         v-else
+        :delete-plan="deletePlan"
         :loading="loadingDetail"
         :overview="sessionOverview"
         @deleted="handleSessionDeleted"
