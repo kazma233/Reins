@@ -1,4 +1,4 @@
-import { agentDisplayName } from "@shared/lib/agent-labels";
+import { AGENT_LABELS } from "@shared/lib/agent-labels";
 import type {
   AgentTargetId,
   McpConfigType,
@@ -16,10 +16,10 @@ export const WORKSPACE_TAB_COPY = [
   { id: "mcp", label: "mcp" },
 ] as const;
 
-// agent 名按统一的产品名渲染（与历史会话来源、providers 同一份常量）；
-// 未知 id（用户自定义 target）原样返回。
+// agent 名按统一的产品名渲染（生成物，与历史会话来源、providers 同一份
+// 常量）；target id 即规范键，未知 id（用户自定义 target）原样返回。
 export function formatTargetName(agentId: string): string {
-  return agentDisplayName(agentId);
+  return AGENT_LABELS[agentId] ?? agentId;
 }
 
 // target id 的展示形式：全局 target 就是 agent 名，

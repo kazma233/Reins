@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { agentDisplayName } from "@shared/lib/agent-labels";
+import { AGENT_LABELS } from "@shared/lib/agent-labels";
 import type { ProviderAppEntry, ProviderAppState, ProviderView, ProvidersState } from "./generated";
 import {
   APP_LABELS,
@@ -530,7 +530,7 @@ describe("providerSyncPlan", () => {
 describe("APP_LABELS", () => {
   it("uses the same product names as targets and session sources", () => {
     for (const [appId, label] of Object.entries(APP_LABELS)) {
-      expect(label).toBe(agentDisplayName(appId));
+      expect(label).toBe(AGENT_LABELS[appId]);
     }
   });
 });

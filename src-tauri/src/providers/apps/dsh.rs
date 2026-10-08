@@ -335,6 +335,15 @@ impl AppAdapter for DshAdapter {
         ProviderAppId::Dsh
     }
 
+    // providers 域只管理 profile 层 patch 与凭据；全局 cordis patch 属于
+    // workspace 域 MCP 分发，不在此列（inspect 反读时会带上它）。
+    fn config_paths(&self, env: &ToolEnv) -> Result<Vec<PathBuf>> {
+        Ok(vec![
+            dsh_profile_patch_path(env)?,
+            dsh_credentials_path(env)?,
+        ])
+    }
+
     fn capability(&self) -> AppCapability {
         AppCapability {
             supported_protocols: ProviderProtocol::all(),

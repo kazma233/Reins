@@ -9,7 +9,6 @@ use std::path::{Path, PathBuf};
 use std::os::windows::fs::MetadataExt;
 
 use anyhow::{Context, Result, anyhow, bail};
-use dirs::home_dir;
 
 use super::WorkspaceConfigStore;
 use super::display_path;
@@ -338,15 +337,16 @@ fn normalize_target_skill_dir(value: &str) -> Result<String> {
 // Target defaults (codex/claude/opencode builtin paths)
 // ---------------------------------------------------------------------------
 
-pub(super) struct TargetDefaults {
-    pub(super) id: AgentTargetId,
-    pub(super) skill_dir: PathBuf,
-    pub(super) config_path: Option<PathBuf>,
-    pub(super) config_prefix: &'static str,
-    pub(super) config_type: McpConfigType,
+pub(crate) struct TargetDefaults {
+    pub(crate) id: AgentTargetId,
+    pub(crate) skill_dir: PathBuf,
+    pub(crate) config_path: Option<PathBuf>,
+    pub(crate) config_prefix: &'static str,
+    pub(crate) config_type: McpConfigType,
 }
 
-use crate::support::fs::{grok_home_path, pi_agent_dir_path};
+#[cfg(test)]
+use crate::support::fs::grok_home_path;
 
 #[cfg(test)]
 #[test]
@@ -378,81 +378,30 @@ pub(crate) fn builtin_target_preset_inner(target_id: &str) -> Result<TargetConfi
     })
 }
 
-fn builtin_target_defaults() -> Vec<TargetDefaults> {
-    let grok_home = grok_home_path(std::env::var_os("GROK_HOME"), home_dir());
-    let pi_agent_dir = pi_agent_dir_path(std::env::var_os("PI_CODING_AGENT_DIR"), home_dir());
-    vec![
-        TargetDefaults {
-            id: AgentTargetId("grokbuild".to_string()),
-            skill_dir: grok_home
-                .as_ref()
-                .map(|h| h.join("skills"))
-                .unwrap_or_default(),
-            config_path: grok_home.map(|h| h.join("config.toml")),
-            config_prefix: "mcp_servers",
-            config_type: McpConfigType::GrokBuild,
-        },
-        TargetDefaults {
-            id: AgentTargetId("codex".to_string()),
-            skill_dir: home_dir()
-                .map(|h| h.join(".agents/skills"))
-                .unwrap_or_default(),
-            config_path: home_dir().map(|h| h.join(".codex/config.toml")),
-            config_prefix: "mcp_servers",
-            config_type: McpConfigType::Common,
-        },
-        TargetDefaults {
-            id: AgentTargetId("claude".to_string()),
-            skill_dir: home_dir()
-                .map(|h| h.join(".claude/skills"))
-                .unwrap_or_default(),
-            config_path: home_dir().map(|h| h.join(".claude.json")),
-            config_prefix: "mcpServers",
-            config_type: McpConfigType::Common,
-        },
-        TargetDefaults {
-            id: AgentTargetId("opencode".to_string()),
-            skill_dir: home_dir()
-                .map(|h| h.join(".config/opencode/skills"))
-                .unwrap_or_default(),
-            config_path: home_dir().map(|h| h.join(".config/opencode/opencode.json")),
-            // opencode v2 的 mcp 配置在 mcp.servers 下，顶层 mcp 不被识别
-            config_prefix: "mcp.servers",
-            config_type: McpConfigType::OpenCode,
-        },
-        TargetDefaults {
-            id: AgentTargetId("zcode".to_string()),
-            skill_dir: home_dir()
-                .map(|h| h.join(".zcode/skills"))
-                .unwrap_or_default(),
-            config_path: home_dir().map(|h| h.join(".zcode/cli/config.json")),
-            config_prefix: "mcp.servers",
-            config_type: McpConfigType::Common,
-        },
-        // pi ≥0.99 支持 MCP：配置在 <agentDir>/mcp.json 顶层 mcpServers，
-        // 形状与其他 MCP client 一致；legacy SSE transport 不被接受。
-        TargetDefaults {
-            id: AgentTargetId("pi".to_string()),
-            skill_dir: pi_agent_dir
-                .as_ref()
-                .map(|dir| dir.join("skills"))
-                .unwrap_or_default(),
-            config_path: pi_agent_dir.map(|dir| dir.join("mcp.json")),
-            config_prefix: "mcpServers",
-            config_type: McpConfigType::Common,
-        },
-        // dsh 的 MCP 配置是 Cordis patch 操作列表（~/.dsh/cordis.patch.yml），
-        // 按 name+serverName 定位条目，没有 configPrefix 概念。
-        TargetDefaults {
-            id: AgentTargetId("dsh".to_string()),
-            skill_dir: home_dir()
-                .map(|h| h.join(".dsh/skills"))
-                .unwrap_or_default(),
-            config_path: home_dir().map(|h| h.join(".dsh/cordis.patch.yml")),
-            config_prefix: "",
-            config_type: McpConfigType::Dsh,
-        },
-    ]
+// 全局 defaults 从 agents 清单派生：路径 = GlobalRoot 解析结果 + spec 的
+// 相对布局；根目录解析失败（无 HOME）时 skill_dir 落空串、config_path 落
+// None，与逐条手写时代的口径一致。
+pub(crate) fn builtin_target_defaults() -> Vec<TargetDefaults> {
+    crate::agents::AGENTS
+        .iter()
+        .filter_map(|spec| {
+            let target_id = spec.target_id?;
+            let root = spec.global.root.resolve();
+            Some(TargetDefaults {
+                id: AgentTargetId(target_id.to_string()),
+                skill_dir: root
+                    .as_ref()
+                    .map(|base| base.join(spec.global.skill_dir))
+                    .unwrap_or_default(),
+                config_path: spec
+                    .global
+                    .mcp_config_path
+                    .and_then(|rel| root.as_ref().map(|base| base.join(rel))),
+                config_prefix: spec.mcp.prefix,
+                config_type: spec.mcp.config_type,
+            })
+        })
+        .collect()
 }
 
 pub(super) fn builtin_target_defaults_map() -> HashMap<AgentTargetId, TargetDefaults> {
@@ -462,60 +411,21 @@ pub(super) fn builtin_target_defaults_map() -> HashMap<AgentTargetId, TargetDefa
         .collect()
 }
 
-pub(super) fn project_agent_defaults(project_path: &Path) -> Vec<TargetDefaults> {
-    vec![
-        TargetDefaults {
-            id: AgentTargetId("grokbuild".to_string()),
-            skill_dir: project_path.join(".grok/skills"),
-            config_path: Some(project_path.join(".grok/config.toml")),
-            config_prefix: "mcp_servers",
-            config_type: McpConfigType::GrokBuild,
-        },
-        TargetDefaults {
-            id: AgentTargetId("claude".to_string()),
-            skill_dir: project_path.join(".claude/skills"),
-            config_path: Some(project_path.join(".mcp.json")),
-            config_prefix: "mcpServers",
-            config_type: McpConfigType::Common,
-        },
-        TargetDefaults {
-            id: AgentTargetId("codex".to_string()),
-            skill_dir: project_path.join(".agents/skills"),
-            config_path: Some(project_path.join(".codex/config.toml")),
-            config_prefix: "mcp_servers",
-            config_type: McpConfigType::Common,
-        },
-        TargetDefaults {
-            id: AgentTargetId("opencode".to_string()),
-            skill_dir: project_path.join(".opencode/skills"),
-            config_path: Some(project_path.join("opencode.json")),
-            // opencode v2 的 mcp 配置在 mcp.servers 下，顶层 mcp 不被识别
-            config_prefix: "mcp.servers",
-            config_type: McpConfigType::OpenCode,
-        },
-        TargetDefaults {
-            id: AgentTargetId("zcode".to_string()),
-            skill_dir: project_path.join(".zcode/skills"),
-            config_path: Some(project_path.join(".zcode/config.json")),
-            config_prefix: "mcp.servers",
-            config_type: McpConfigType::Common,
-        },
-        // 项目级 mcp.json 仅在项目被 pi trust 后生效；写入配置本身无害。
-        TargetDefaults {
-            id: AgentTargetId("pi".to_string()),
-            skill_dir: project_path.join(".pi/skills"),
-            config_path: Some(project_path.join(".pi/mcp.json")),
-            config_prefix: "mcpServers",
-            config_type: McpConfigType::Common,
-        },
-        // dsh 项目层只读 skills(<项目>/.dsh/skills,项目 rank 优先于用户级);
-        // MCP 走全局 Cordis patch,项目级没有配置文件,是"仅 skill 分发"形态。
-        TargetDefaults {
-            id: AgentTargetId("dsh".to_string()),
-            skill_dir: project_path.join(".dsh/skills"),
-            config_path: None,
-            config_prefix: "",
-            config_type: McpConfigType::Dsh,
-        },
-    ]
+// 项目级 defaults 同样从 agents 清单派生；项目与全局非同构（spec 的
+// project 布局如实表达差异，如 dsh 项目级无 MCP 配置入口）。
+pub(crate) fn project_agent_defaults(project_path: &Path) -> Vec<TargetDefaults> {
+    crate::agents::AGENTS
+        .iter()
+        .filter_map(|spec| {
+            let target_id = spec.target_id?;
+            let project = spec.project.as_ref()?;
+            Some(TargetDefaults {
+                id: AgentTargetId(target_id.to_string()),
+                skill_dir: project_path.join(project.skill_dir),
+                config_path: project.mcp_config_path.map(|rel| project_path.join(rel)),
+                config_prefix: spec.mcp.prefix,
+                config_type: spec.mcp.config_type,
+            })
+        })
+        .collect()
 }

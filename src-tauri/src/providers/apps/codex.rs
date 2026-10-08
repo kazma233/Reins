@@ -145,6 +145,10 @@ impl AppAdapter for CodexAdapter {
         ProviderAppId::Codex
     }
 
+    fn config_paths(&self, env: &ToolEnv) -> Result<Vec<PathBuf>> {
+        Ok(vec![codex_config_path(env)?])
+    }
+
     fn capability(&self) -> AppCapability {
         AppCapability {
             supported_protocols: &[ProviderProtocol::OpenaiResponses],

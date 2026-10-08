@@ -272,6 +272,10 @@ impl AppAdapter for OpencodeAdapter {
         ProviderAppId::Opencode
     }
 
+    fn config_paths(&self, _env: &ToolEnv) -> Result<Vec<PathBuf>> {
+        opencode_candidate_paths()
+    }
+
     fn capability(&self) -> AppCapability {
         AppCapability {
             supported_protocols: &[

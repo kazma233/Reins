@@ -1,3 +1,4 @@
+mod agents;
 pub mod logger;
 mod providers;
 mod session;

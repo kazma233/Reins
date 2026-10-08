@@ -111,6 +111,12 @@ pub(crate) trait AppAdapter: Sync {
     fn id(&self) -> ProviderAppId;
     fn capability(&self) -> AppCapability;
 
+    // 该工具在 providers 域管理的配置文件清单（能力声明）：inspect 失败的
+    // 兜底展示与外部调用共用；路径解析失败由调用方兜底为空列表。
+    // 注意与 inspect 内部读取的文件集不一定相同（如 dsh 的 inspect 还会
+    // 读 workspace 域管理的全局 cordis patch）。
+    fn config_paths(&self, env: &ToolEnv) -> Result<Vec<PathBuf>>;
+
     // 思考等级在该平台配置文件里的实际写入值；必须与 apply 的写入
     // 逻辑同源（特殊映射的平台覆写，如 Grok max→xhigh、Pi off→off），
     // 供应用弹窗展示映射，避免前端复刻规则。
@@ -589,8 +595,8 @@ pub(crate) fn grok_config_path(env: &ToolEnv) -> Result<PathBuf> {
 }
 
 // dsh 的 settings.yaml 与 GROK_HOME / PI_CODING_AGENT_DIR 同一重定向模式：
-// 优先 $DSH_HOME，默认 ~/.dsh。
-pub(crate) use dsh::{dsh_credentials_path, dsh_profile_patch_path};
+// 优先 $DSH_HOME，默认 ~/.dsh。路径函数定义在 dsh.rs，由其
+// config_paths() 能力声明对外。
 
 // ---------------------------------------------------------------------------
 // 共享写入助手

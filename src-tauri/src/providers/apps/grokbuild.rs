@@ -199,6 +199,10 @@ impl AppAdapter for GrokbuildAdapter {
         ProviderAppId::Grokbuild
     }
 
+    fn config_paths(&self, env: &ToolEnv) -> Result<Vec<PathBuf>> {
+        Ok(vec![grok_config_path(env)?])
+    }
+
     fn capability(&self) -> AppCapability {
         AppCapability {
             supported_protocols: ProviderProtocol::all(),

@@ -1,4 +1,4 @@
-import { agentDisplayName } from "@shared/lib/agent-labels";
+import { AGENT_LABELS } from "@shared/lib/agent-labels";
 import type {
   ApplyProviderInput,
   FetchedModel,
@@ -26,14 +26,14 @@ export const PROVIDERS_TAB_COPY: Array<{ id: ProvidersTab; label: string }> = [
   { id: "providers", label: "提供商" },
 ];
 
-// 工具名与 target / 会话来源共用同一份产品名常量。
+// 工具名与 target / 会话来源共用同一份产品名常量（生成物）。
 export const APP_LABELS: Record<ProviderAppId, string> = {
-  codex: agentDisplayName("codex"),
-  claude: agentDisplayName("claude"),
-  opencode: agentDisplayName("opencode"),
-  pi: agentDisplayName("pi"),
-  grokbuild: agentDisplayName("grokbuild"),
-  dsh: agentDisplayName("dsh"),
+  codex: AGENT_LABELS.codex,
+  claude: AGENT_LABELS.claude,
+  opencode: AGENT_LABELS.opencode,
+  pi: AGENT_LABELS.pi,
+  grokbuild: AGENT_LABELS.grokbuild,
+  dsh: AGENT_LABELS.dsh,
 };
 
 export const PROTOCOL_LABELS: Record<ProviderProtocol, string> = {

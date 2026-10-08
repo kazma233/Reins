@@ -217,24 +217,8 @@ fn inspect_app(
     }
 }
 
-fn app_config_paths(env: &ToolEnv, app: ProviderAppId) -> Vec<PathBuf> {
-    let resolve = || -> Result<Vec<PathBuf>> {
-        Ok(match app {
-            ProviderAppId::Codex => vec![super::apps::codex_config_path(env)?],
-            ProviderAppId::Claude => vec![super::apps::claude_settings_path(env)?],
-            ProviderAppId::Opencode => super::apps::opencode_candidate_paths()?,
-            ProviderAppId::Pi => vec![
-                super::apps::pi_models_path(env)?,
-                super::apps::pi_settings_path(env)?,
-            ],
-            ProviderAppId::Grokbuild => vec![super::apps::grok_config_path(env)?],
-            ProviderAppId::Dsh => vec![
-                super::apps::dsh_profile_patch_path(env)?,
-                super::apps::dsh_credentials_path(env)?,
-            ],
-        })
-    };
-    resolve().unwrap_or_default()
+pub(crate) fn app_config_paths(env: &ToolEnv, app: ProviderAppId) -> Vec<PathBuf> {
+    adapter_for(app).config_paths(env).unwrap_or_default()
 }
 
 fn provider_view(provider: &ResolvedProvider) -> Result<ProviderView> {
@@ -276,7 +260,8 @@ pub(crate) fn delete_provider_inner(
             .iter()
             .any(|entry| entry.provider_id.as_deref() == Some(provider_id))
         {
-            bail!("Claude Code 仍在引用该平台，请先从 Claude Code 移除后再删除平台。");
+            let claude_label = ProviderAppId::Claude.label();
+            bail!("{claude_label} 仍在引用该平台，请先从 {claude_label} 移除后再删除平台。");
         }
     }
 

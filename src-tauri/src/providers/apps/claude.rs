@@ -48,6 +48,10 @@ impl AppAdapter for ClaudeAdapter {
         ProviderAppId::Claude
     }
 
+    fn config_paths(&self, env: &ToolEnv) -> Result<Vec<PathBuf>> {
+        Ok(vec![claude_settings_path(env)?])
+    }
+
     fn capability(&self) -> AppCapability {
         AppCapability {
             supported_protocols: &[ProviderProtocol::AnthropicMessages],

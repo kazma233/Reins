@@ -16,6 +16,7 @@ use crate::state;
 use crate::support;
 use crate::test_support::TestEnvGuard;
 
+mod agents;
 mod dsh;
 mod grokbuild;
 mod pi;

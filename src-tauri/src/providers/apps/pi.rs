@@ -79,6 +79,10 @@ impl AppAdapter for PiAdapter {
         ProviderAppId::Pi
     }
 
+    fn config_paths(&self, env: &ToolEnv) -> Result<Vec<PathBuf>> {
+        Ok(vec![pi_models_path(env)?, pi_settings_path(env)?])
+    }
+
     fn capability(&self) -> AppCapability {
         AppCapability {
             supported_protocols: ProviderProtocol::all(),

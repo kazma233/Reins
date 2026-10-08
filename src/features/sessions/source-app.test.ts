@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { agentDisplayName } from "@shared/lib/agent-labels";
+import { AGENT_ID_ALIASES, AGENT_LABELS } from "@shared/lib/agent-labels";
 import { formatSourceAppName } from "./source-app";
 import type { SourceApp } from "./types";
 
@@ -19,7 +19,8 @@ describe("formatSourceAppName", () => {
   it("renders every known source with a canonical name, never the raw id", () => {
     for (const app of SOURCE_APPS) {
       const label = formatSourceAppName(app);
-      expect(label).toBe(agentDisplayName(app));
+      const canonicalId = AGENT_ID_ALIASES[app] ?? app;
+      expect(label).toBe(AGENT_LABELS[canonicalId]);
       expect(label).not.toBe(app);
     }
   });

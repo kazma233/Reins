@@ -109,15 +109,12 @@ pub(crate) const PROVIDER_APPS: [ProviderAppId; 6] = [
 ];
 
 impl ProviderAppId {
+    // 产品名唯一来源是 agents 清单；PROVIDER_APPS 对 AGENTS 的全覆盖由
+    // tests/agents.rs 的一致性断言守卫。
     pub(crate) fn label(self) -> &'static str {
-        match self {
-            ProviderAppId::Codex => "Codex",
-            ProviderAppId::Claude => "Claude Code",
-            ProviderAppId::Opencode => "OpenCode",
-            ProviderAppId::Pi => "Pi",
-            ProviderAppId::Grokbuild => "Grok Build",
-            ProviderAppId::Dsh => "DeepSeek Harness",
-        }
+        crate::agents::spec_by_provider_app(self)
+            .expect("providers 工具未登记 agents 清单")
+            .label
     }
 }
 
