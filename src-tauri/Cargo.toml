@@ -4,7 +4,6 @@ version = "0.2.2"
 description = "Read and inspect local coding-agent sessions."
 authors = ["kazma"]
 edition = "2024"
-# 测试专用的假 CLI bin 让包出现第二个 binary,cargo run 需要显式默认目标
 default-run = "reins"
 
 [lib]
@@ -29,13 +28,9 @@ rusqlite = { version = "0.40.2", features = ["bundled"] }
 ts-rs = "12"
 uuid = { version = "1.26.0", features = ["v4", "serde"] }
 walkdir = "2.5.0"
-# dsh 转录是逐批追加的独立 zstd 帧拼接;ruzstd 是纯 Rust 解码器,避免引入 C 工具链
 ruzstd = "0.9.0"
-# providers 域：模型目录拉取；rustls 避免 Windows 上引入 openssl；
-# system-proxy 跟随系统代理，但不读 macOS 例外列表，局域网地址也会经代理
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls", "system-proxy"] }
 
 [target.'cfg(windows)'.dependencies]
 junction = "2.0.0"
-# Windows 上 std canonicalize 返回 \\?\ verbatim 路径;统一走 dunce 取普通拼写。
 dunce = "1.0.5"
