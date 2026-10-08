@@ -44,6 +44,10 @@ _Avoid_: agent（太泛）、容器
 workspace 管理的 skill 来源（git 或本地目录），负责发现、同步、导入与分发。
 _Avoid_: skill 仓库
 
+**MCP 格式 writer（MCP format writer）**：
+一种目标工具 MCP 配置格式的完整知识（条目形态、支持的文件格式、前缀约束、读写与预览）；mcps 域的编排只经唯一分发点调用 writer，不再按工具类型写特例。
+_Avoid_: config type 分发（指旧的散落 match 形态）
+
 ### 模型配置（providers 域）
 
 **聚合平台（provider）**：

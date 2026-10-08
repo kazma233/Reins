@@ -293,9 +293,10 @@ fn normalize_raw_target_input(
 
     // MCP 配置文件和 configPrefix 必须成对出现：只有前缀没有路径无处可写，
     // 只有路径没有前缀无法定位写入节点。不需要 MCP 分发的 target
-    // 允许两者都为空，此时只做 skill 分发。dsh 的 Cordis patch 按
-    // name+serverName 定位条目，没有 prefix 概念，允许“有路径 + 空 prefix”。
-    let prefix_required = input.mcp_config_type != McpConfigType::Dsh;
+    // 允许两者都为空，此时只做 skill 分发。dsh 按 name+serverName 定位
+    // 条目（writer 声明 prefix 不必填），允许“有路径 + 空 prefix”。
+    let prefix_required =
+        super::mcp_formats::mcp_format_writer(input.mcp_config_type).prefix_required();
     match normalized_config_path.as_deref() {
         Some(_) if config_prefix.is_empty() && prefix_required => {
             bail!("target {} 的 MCP configPrefix 不能为空。", target_id);

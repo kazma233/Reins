@@ -14,6 +14,7 @@ use dirs::home_dir;
 pub(crate) mod commands;
 mod config;
 mod inspect;
+pub(crate) mod mcp_formats;
 mod mcps;
 mod skills;
 mod targets;
@@ -440,10 +441,11 @@ fn parse_manager_config(raw_content: &str, config_path: &Path) -> Result<Resolve
 
         // 与 normalize_raw_target_input 的契约一致：configPrefix 只在
         // 真正有 MCP 配置文件可写时才必填（不需要 MCP 的 target 两者皆空）。
-        // dsh 的 Cordis patch 按条目定位 server，没有 prefix，允许留空。
+        // dsh 按 name+serverName 定位条目（writer 声明 prefix 不必填），
+        // 允许留空。
         if config_file_path.is_some()
             && config_prefix.is_empty()
-            && config_type != McpConfigType::Dsh
+            && mcp_formats::mcp_format_writer(config_type).prefix_required()
         {
             bail!("目标 {} 的 mcp.config_prefix 不能为空。", id);
         }

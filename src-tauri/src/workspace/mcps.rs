@@ -1,6 +1,8 @@
-// MCP domain: config.yaml MCP server CRUD plus format-agnostic (JSON / TOML /
-// OpenCode / dsh Cordis patch YAML) reads and writes of per-target MCP config
-// files.
+// MCP domain: config.yaml MCP server CRUD plus cross-format orchestration of
+// per-target MCP config writes (JSON / TOML / OpenCode / dsh Cordis patch YAML).
+// Per-config-type entry shapes and constraints live in mcp_formats.rs; this
+// module owns file parsing, prefix navigation and the JSON/TOML engine shared
+// by all file-format writers.
 
 use std::collections::BTreeMap;
 use std::ffi::OsStr;
@@ -9,17 +11,20 @@ use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
 use anyhow::{Context, Result, anyhow, bail};
-use dirs::home_dir;
-use serde::Serialize;
 use serde_json::{Map as JsonMap, Value as JsonValue};
-use serde_yaml::Value as YamlValue;
 use toml::Value as TomlValue;
 
 use super::WorkspaceConfigStore;
+use super::mcp_formats::{McpFormatWriter, mcp_format_writer};
 use super::targets::builtin_target_defaults_map;
 use super::types::*;
 use super::{display_path, parse_manager_config, resolve_target_from_id};
 use crate::support::fs::write_atomic;
+
+// 测试经 mod.rs 的 `use self::mcps::desired_opencode_mcp` 取该构造器；
+// 实现随 OpenCode writer 搬进了 mcp_formats。
+#[cfg(test)]
+pub(super) use super::mcp_formats::desired_opencode_mcp;
 
 // ---------------------------------------------------------------------------
 // MCP apply / preview / remove (config-path write targets — no workspace dep)
@@ -120,25 +125,74 @@ pub(crate) fn remove_mcp_from_target_inner(
 }
 
 // ---------------------------------------------------------------------------
-// MCP config file read/write (format-agnostic: JSON / TOML / OpenCode)
+// MCP config file read/write (format-agnostic: JSON / TOML / OpenCode / dsh)
 // ---------------------------------------------------------------------------
 
 pub(super) fn read_existing_mcp_entries(
     target: &ResolvedTargetConfig,
     config_path: &Path,
 ) -> Result<BTreeMap<String, JsonValue>> {
-    if target.mcp_config_type == McpConfigType::Dsh {
-        return read_existing_dsh_patch_entries(config_path);
-    }
-    let target = resolve_read_target_for_config(target, config_path)?;
-    read_existing_mcp_entries_for_target(&target, config_path)
+    mcp_format_writer(target.mcp_config_type).read_existing_entries(target, config_path)
 }
 
-fn read_existing_mcp_entries_for_target(
+fn preview_mcp_entry(
+    target: &ResolvedTargetConfig,
+    server: &ResolvedMcpConfig,
+) -> Result<(String, String)> {
+    let config_path = target
+        .config_path
+        .as_ref()
+        .ok_or_else(|| anyhow!("目标 {} 没有 MCP 配置路径", target.id.as_str()))?;
+
+    mcp_format_writer(target.mcp_config_type).preview_entry(config_path, server)
+}
+
+fn apply_mcp_to_target_config(
+    target: &ResolvedTargetConfig,
+    server: &ResolvedMcpConfig,
+) -> Result<PathBuf> {
+    let config_path = target
+        .config_path
+        .as_ref()
+        .ok_or_else(|| anyhow!("目标 {} 没有 MCP 配置路径", target.id.as_str()))?;
+
+    mcp_format_writer(target.mcp_config_type).apply_entry(target, config_path, server)?;
+
+    Ok(config_path.clone())
+}
+
+fn remove_mcp_from_target_config(
+    target: &ResolvedTargetConfig,
+    server_name: &str,
+) -> Result<McpTargetMutationResult> {
+    // 未配置 MCP 的 target 无配置可清理；必须返回 noop 而非报错。
+    // 否则删除 MCP 时遍历全部 target 会被这类 target 中断。
+    let Some(config_path) = target.config_path.as_ref() else {
+        return Ok(McpTargetMutationResult {
+            server_name: server_name.to_string(),
+            target_id: target.id.clone(),
+            updated_path: None,
+            action: "noop".to_string(),
+            detail: "目标未配置 MCP，跳过。".to_string(),
+        });
+    };
+
+    mcp_format_writer(target.mcp_config_type).remove_entry(target, config_path, server_name)
+}
+
+// ---------------------------------------------------------------------------
+// JSON/TOML 引擎：writer 提供格式知识与约束，这里只做解析、前缀定位与写入
+// ---------------------------------------------------------------------------
+
+// 泛型 + ?Sized：trait 默认方法里 Self 未知大小，不能转成 &dyn，
+// 引擎按具体 writer 单态化即可。
+pub(super) fn read_file_entries<W: McpFormatWriter + ?Sized>(
+    writer: &W,
     target: &ResolvedTargetConfig,
     config_path: &Path,
 ) -> Result<BTreeMap<String, JsonValue>> {
-    match detect_target_mcp_file_format(target, config_path)? {
+    let target = resolve_read_target_for_config(target, config_path)?;
+    match detect_supported_format(writer, config_path)? {
         McpConfigFileFormat::Toml => {
             let mut root = read_toml_config(config_path)?;
             let Some(table) = get_toml_table_path_mut(&mut root, &target.mcp_config_prefix) else {
@@ -167,640 +221,61 @@ fn read_existing_mcp_entries_for_target(
     }
 }
 
-fn resolve_read_target_for_config(
-    target: &ResolvedTargetConfig,
+pub(super) fn preview_file_entry<W: McpFormatWriter + ?Sized>(
+    writer: &W,
     config_path: &Path,
-) -> Result<ResolvedTargetConfig> {
-    if target.mcp_config_prefix.trim().is_empty() {
-        if let Some(fallback) = inferred_target_layout(&target.id, config_path) {
-            return Ok(fallback);
-        }
-    }
-
-    Ok(target.clone())
-}
-
-fn inferred_target_layout(
-    target_id: &AgentTargetId,
-    config_path: &Path,
-) -> Option<ResolvedTargetConfig> {
-    let defaults = builtin_target_defaults_map();
-    let default = defaults.get(target_id)?;
-
-    Some(ResolvedTargetConfig {
-        id: target_id.clone(),
-        enabled: true,
-        is_project: false,
-        skill_dir: default.skill_dir.clone(),
-        config_path: Some(config_path.to_path_buf()),
-        mcp_config_prefix: default.config_prefix.to_string(),
-        mcp_config_type: default.config_type,
-    })
-}
-
-fn detect_target_mcp_file_format(
-    target: &ResolvedTargetConfig,
-    config_path: &Path,
-) -> Result<McpConfigFileFormat> {
-    let format = detect_mcp_file_format(config_path)?;
-    if target.mcp_config_type == McpConfigType::GrokBuild && format != McpConfigFileFormat::Toml {
-        bail!("Grok Build config type 仅支持 TOML。");
-    }
-    Ok(format)
-}
-
-fn detect_mcp_file_format(config_path: &Path) -> Result<McpConfigFileFormat> {
-    if config_path.exists() {
-        let raw = fs::read_to_string(config_path)?;
-        let trimmed = raw.trim();
-
-        if trimmed.is_empty() {
-            return infer_mcp_file_format_from_path(config_path);
-        }
-
-        if json5::from_str::<JsonValue>(trimmed).is_ok() {
-            return Ok(McpConfigFileFormat::Json);
-        }
-
-        if toml::from_str::<TomlValue>(trimmed).is_ok() {
-            return Ok(McpConfigFileFormat::Toml);
-        }
-
-        bail!("无法识别 MCP 配置文件格式：{}", config_path.display());
-    }
-
-    infer_mcp_file_format_from_path(config_path)
-}
-
-fn infer_mcp_file_format_from_path(config_path: &Path) -> Result<McpConfigFileFormat> {
-    match config_path
-        .extension()
-        .and_then(OsStr::to_str)
-        .map(|item| item.to_ascii_lowercase())
-    {
-        Some(extension) if extension == "json" => Ok(McpConfigFileFormat::Json),
-        Some(extension) if extension == "toml" => Ok(McpConfigFileFormat::Toml),
-        _ => bail!(
-            "无法从文件名推断 MCP 配置格式：{}，仅支持 json 与 toml",
-            config_path.display()
-        ),
-    }
-}
-
-fn desired_toml_mcp_entry(
-    target: &ResolvedTargetConfig,
-    server: &ResolvedMcpConfig,
-) -> Result<TomlValue> {
-    match target.mcp_config_type {
-        McpConfigType::Common => desired_openai_toml_mcp(server),
-        McpConfigType::GrokBuild => desired_grok_toml_mcp(server),
-        McpConfigType::OpenCode => bail!("OpenCode config type 不支持 TOML。"),
-        McpConfigType::Dsh => bail!("Dsh config type 仅支持 Cordis patch YAML。"),
-    }
-}
-
-fn desired_json_mcp_entry(
-    target: &ResolvedTargetConfig,
-    server: &ResolvedMcpConfig,
-) -> Result<JsonValue> {
-    match target.mcp_config_type {
-        McpConfigType::Common => desired_openai_json_mcp(server),
-        McpConfigType::OpenCode => desired_opencode_mcp(server),
-        McpConfigType::GrokBuild => bail!("Grok Build config type 仅支持 TOML。"),
-        McpConfigType::Dsh => bail!("Dsh config type 仅支持 Cordis patch YAML。"),
-    }
-}
-
-fn preview_mcp_entry(
-    target: &ResolvedTargetConfig,
     server: &ResolvedMcpConfig,
 ) -> Result<(String, String)> {
-    let config_path = target
-        .config_path
-        .as_ref()
-        .ok_or_else(|| anyhow!("目标 {} 没有 MCP 配置路径", target.id.as_str()))?;
-
-    if target.mcp_config_type == McpConfigType::Dsh {
-        // 与 JSON/TOML target 一致：preview 先确认文件可解析，再展示条目。
-        read_dsh_patch_ops(config_path)?;
-        let op = desired_dsh_insert_op(&server.name, server)?;
-        let content = serde_yaml::to_string(&vec![op]).context("MCP 预览序列化失败")?;
-        return Ok(("yaml".to_string(), content));
-    }
-
-    match detect_target_mcp_file_format(target, config_path)? {
+    match detect_supported_format(writer, config_path)? {
         McpConfigFileFormat::Toml => Ok((
             "toml".to_string(),
-            toml::to_string_pretty(&desired_toml_mcp_entry(target, server)?)
+            toml::to_string_pretty(&writer.desired_toml_entry(server)?)
                 .context("MCP 预览序列化失败")?,
         )),
         McpConfigFileFormat::Json => Ok((
             "json".to_string(),
-            serde_json::to_string_pretty(&desired_json_mcp_entry(target, server)?)
+            serde_json::to_string_pretty(&writer.desired_json_entry(server)?)
                 .context("MCP 预览序列化失败")?,
         )),
     }
 }
 
-fn default_json_root_for_target(target: &ResolvedTargetConfig) -> JsonValue {
-    match target.mcp_config_type {
-        McpConfigType::Common | McpConfigType::GrokBuild => JsonValue::Object(JsonMap::new()),
-        // dsh 的配置根是操作列表；dsh 写入路径不走 JSON 根，该分支仅为穷尽。
-        McpConfigType::Dsh => JsonValue::Array(Vec::new()),
-        McpConfigType::OpenCode => JsonValue::Object(JsonMap::from_iter([(
-            "$schema".to_string(),
-            JsonValue::String("https://opencode.ai/config.json".to_string()),
-        )])),
-    }
-}
-
-fn desired_openai_toml_mcp(server: &ResolvedMcpConfig) -> Result<TomlValue> {
-    desired_toml_mcp(
-        server,
-        "http_headers",
-        server
-            .timeout
-            .map(|timeout| TomlValue::Float((timeout as f64) / 1000.0)),
-    )
-}
-
-fn desired_grok_toml_mcp(server: &ResolvedMcpConfig) -> Result<TomlValue> {
-    let timeout = server
-        .timeout
-        .map(|milliseconds| {
-            // Grok 1.0.30 要求 u64 秒，不能静默丢弃毫秒精度。
-            if milliseconds % 1000 != 0 {
-                bail!("Grok Build MCP timeout 必须是整秒（毫秒值须为 1000 的倍数）。");
-            }
-            Ok(TomlValue::Integer(i64::try_from(milliseconds / 1000)?))
-        })
-        .transpose()?;
-    desired_toml_mcp(server, "headers", timeout)
-}
-
-fn desired_toml_mcp(
-    server: &ResolvedMcpConfig,
-    headers_key: &str,
-    timeout: Option<TomlValue>,
-) -> Result<TomlValue> {
-    let mut table = toml::map::Map::new();
-    table.insert("enabled".to_string(), TomlValue::Boolean(server.enabled));
-
-    if let Some(timeout) = timeout {
-        table.insert("tool_timeout_sec".to_string(), timeout);
-    }
-
-    match server.transport {
-        McpTransport::Stdio => {
-            table.insert(
-                "command".to_string(),
-                TomlValue::String(
-                    server
-                        .command
-                        .clone()
-                        .ok_or_else(|| anyhow!("stdio MCP 缺少 command"))?,
-                ),
-            );
-
-            if !server.args.is_empty() {
-                table.insert(
-                    "args".to_string(),
-                    TomlValue::Array(server.args.iter().cloned().map(TomlValue::String).collect()),
-                );
-            }
-
-            if !server.env.is_empty() {
-                let env_table = server
-                    .env
-                    .iter()
-                    .map(|(key, value)| (key.clone(), TomlValue::String(value.clone())))
-                    .collect();
-                table.insert("env".to_string(), TomlValue::Table(env_table));
-            }
-        }
-        McpTransport::Http | McpTransport::Sse => {
-            table.insert(
-                "url".to_string(),
-                TomlValue::String(
-                    server
-                        .url
-                        .clone()
-                        .ok_or_else(|| anyhow!("远程 MCP 缺少 mcp 链接"))?,
-                ),
-            );
-
-            if !server.headers.is_empty() {
-                let headers = server
-                    .headers
-                    .iter()
-                    .map(|(key, value)| (key.clone(), TomlValue::String(value.clone())))
-                    .collect();
-                table.insert(headers_key.to_string(), TomlValue::Table(headers));
-            }
-        }
-    }
-
-    Ok(TomlValue::Table(table))
-}
-
-fn desired_openai_json_mcp(server: &ResolvedMcpConfig) -> Result<JsonValue> {
-    let mut object = JsonMap::new();
-
-    match server.transport {
-        McpTransport::Stdio => {
-            object.insert("type".to_string(), JsonValue::String("stdio".to_string()));
-            object.insert(
-                "command".to_string(),
-                JsonValue::String(
-                    server
-                        .command
-                        .clone()
-                        .ok_or_else(|| anyhow!("stdio MCP 缺少 command"))?,
-                ),
-            );
-            object.insert(
-                "args".to_string(),
-                JsonValue::Array(server.args.iter().cloned().map(JsonValue::String).collect()),
-            );
-            object.insert(
-                "env".to_string(),
-                JsonValue::Object(
-                    server
-                        .env
-                        .iter()
-                        .map(|(key, value)| (key.clone(), JsonValue::String(value.clone())))
-                        .collect(),
-                ),
-            );
-        }
-        McpTransport::Http | McpTransport::Sse => {
-            object.insert(
-                "type".to_string(),
-                JsonValue::String(
-                    match server.transport {
-                        McpTransport::Http => "http",
-                        McpTransport::Sse => "sse",
-                        McpTransport::Stdio => unreachable!(),
-                    }
-                    .to_string(),
-                ),
-            );
-            object.insert(
-                "url".to_string(),
-                JsonValue::String(
-                    server
-                        .url
-                        .clone()
-                        .ok_or_else(|| anyhow!("远程 MCP 缺少 mcp 链接"))?,
-                ),
-            );
-
-            if !server.headers.is_empty() {
-                object.insert(
-                    "headers".to_string(),
-                    JsonValue::Object(
-                        server
-                            .headers
-                            .iter()
-                            .map(|(key, value)| (key.clone(), JsonValue::String(value.clone())))
-                            .collect(),
-                    ),
-                );
-            }
-        }
-    }
-
-    Ok(JsonValue::Object(object))
-}
-
-pub(super) fn desired_opencode_mcp(server: &ResolvedMcpConfig) -> Result<JsonValue> {
-    let mut object = JsonMap::new();
-    object.insert("enabled".to_string(), JsonValue::Bool(server.enabled));
-    if let Some(timeout) = server.timeout {
-        object.insert("timeout".to_string(), JsonValue::Number(timeout.into()));
-    }
-
-    match server.transport {
-        McpTransport::Stdio => {
-            object.insert("type".to_string(), JsonValue::String("local".to_string()));
-            let command = server
-                .command
-                .clone()
-                .ok_or_else(|| anyhow!("stdio MCP 缺少 command"))?;
-            let mut command_parts = vec![JsonValue::String(command)];
-            command_parts.extend(server.args.iter().cloned().map(JsonValue::String));
-            object.insert("command".to_string(), JsonValue::Array(command_parts));
-
-            if !server.env.is_empty() {
-                object.insert(
-                    "environment".to_string(),
-                    JsonValue::Object(
-                        server
-                            .env
-                            .iter()
-                            .map(|(key, value)| (key.clone(), JsonValue::String(value.clone())))
-                            .collect(),
-                    ),
-                );
-            }
-        }
-        McpTransport::Http | McpTransport::Sse => {
-            object.insert("type".to_string(), JsonValue::String("remote".to_string()));
-            object.insert(
-                "url".to_string(),
-                JsonValue::String(
-                    server
-                        .url
-                        .clone()
-                        .ok_or_else(|| anyhow!("远程 MCP 缺少 mcp 链接"))?,
-                ),
-            );
-
-            if !server.headers.is_empty() {
-                object.insert(
-                    "headers".to_string(),
-                    JsonValue::Object(
-                        server
-                            .headers
-                            .iter()
-                            .map(|(key, value)| (key.clone(), JsonValue::String(value.clone())))
-                            .collect(),
-                    ),
-                );
-            }
-        }
-    }
-
-    Ok(JsonValue::Object(object))
-}
-
-// ---------------------------------------------------------------------------
-// dsh (DeepSeek Harness): Cordis patch YAML (~/.dsh/cordis.patch.yml)
-// ---------------------------------------------------------------------------
-
-// dsh 的 MCP server 是 Cordis 插件树里的 dsh-mcp-client 条目。Reins 只认
-// name 为该插件且 config.serverName 匹配的 insert 条目；定位与其它 target
-// 按 server key 定位的语义一致，条目 id 不参与定位。patch 文件其余内容
-// （无关插件、未知操作）原样保留，绝不整文件覆盖。
-const DSH_MCP_CLIENT_PLUGIN: &str = "@deepseek-ai/dsh-mcp-client";
-const DSH_DEFAULT_TOOL_CALL_TIMEOUT_MS: u64 = 60_000;
-
-// dsh 要求 serverName 匹配 [A-Za-z0-9_-]{1,32}：非法字符折叠为 -，超长截断。
-pub(super) fn dsh_server_name(server_name: &str) -> String {
-    let mut sanitized: String = server_name
-        .trim()
-        .chars()
-        .map(|ch| {
-            if ch.is_ascii_alphanumeric() || ch == '_' || ch == '-' {
-                ch
-            } else {
-                '-'
-            }
-        })
-        .collect();
-    // 映射后只有 ASCII，truncate 不会落在多字节边界上。
-    sanitized.truncate(32);
-    sanitized
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct DshMcpClientConfig {
-    server_name: String,
-    transport: String,
-    command: String,
-    args: Vec<String>,
-    env: BTreeMap<String, String>,
-    cwd: String,
-    tool_call_timeout_ms: u64,
-    fail_on_startup_error: bool,
-}
-
-#[derive(Serialize)]
-struct DshInsertEntry {
-    id: String,
-    name: String,
-    config: DshMcpClientConfig,
-}
-
-fn desired_dsh_insert_entry(server_name: &str, server: &ResolvedMcpConfig) -> Result<YamlValue> {
-    // streamable-http 形态的必填字段契约未定稿，v1 只分发 stdio。
-    // 与其写出 dsh 无法启动的条目不如直接失败。
-    match server.transport {
-        McpTransport::Stdio => {}
-        McpTransport::Http | McpTransport::Sse => {
-            bail!("dsh 的 MCP 分发仅支持 stdio transport。")
-        }
-    }
-
-    let entry = DshInsertEntry {
-        id: format!("reins-mcp-{server_name}"),
-        name: DSH_MCP_CLIENT_PLUGIN.to_string(),
-        config: DshMcpClientConfig {
-            server_name: server_name.to_string(),
-            transport: "stdio".to_string(),
-            command: server
-                .command
-                .clone()
-                .ok_or_else(|| anyhow!("stdio MCP 缺少 command"))?,
-            args: server.args.clone(),
-            env: server.env.clone(),
-            cwd: home_dir()
-                .ok_or_else(|| anyhow!("无法解析 HOME 目录。"))?
-                .display()
-                .to_string(),
-            tool_call_timeout_ms: server.timeout.unwrap_or(DSH_DEFAULT_TOOL_CALL_TIMEOUT_MS),
-            fail_on_startup_error: false,
-        },
-    };
-
-    Ok(serde_yaml::to_value(entry).context("dsh MCP 条目序列化失败")?)
-}
-
-fn desired_dsh_insert_op(server_name: &str, server: &ResolvedMcpConfig) -> Result<YamlValue> {
-    let mut op = serde_yaml::Mapping::new();
-    op.insert(
-        YamlValue::String("insert".to_string()),
-        YamlValue::Sequence(vec![desired_dsh_insert_entry(server_name, server)?]),
-    );
-    Ok(YamlValue::Mapping(op))
-}
-
-fn read_dsh_patch_ops(config_path: &Path) -> Result<Vec<YamlValue>> {
-    crate::support::dsh_patch::read_ops(config_path)
-}
-
-fn write_dsh_patch_ops(config_path: &Path, ops: &[YamlValue]) -> Result<()> {
-    crate::support::dsh_patch::write_ops(config_path, ops)
-}
-
-fn is_dsh_claimed_entry(entry: &YamlValue, server_name: &str) -> bool {
-    entry.get("name").and_then(YamlValue::as_str) == Some(DSH_MCP_CLIENT_PLUGIN)
-        && entry
-            .get("config")
-            .and_then(|config| config.get("serverName"))
-            .and_then(YamlValue::as_str)
-            == Some(server_name)
-}
-
-fn locate_dsh_claimed_entry(ops: &[YamlValue], server_name: &str) -> Option<(usize, usize)> {
-    for (op_index, op) in ops.iter().enumerate() {
-        let Some(entries) = op.get("insert").and_then(YamlValue::as_sequence) else {
-            continue;
-        };
-        for (entry_index, entry) in entries.iter().enumerate() {
-            if is_dsh_claimed_entry(entry, server_name) {
-                return Some((op_index, entry_index));
-            }
-        }
-    }
-    None
-}
-
-fn dsh_insert_list_mut(ops: &mut [YamlValue], op_index: usize) -> Result<&mut Vec<YamlValue>> {
-    ops.get_mut(op_index)
-        .and_then(|op| op.get_mut("insert"))
-        .and_then(YamlValue::as_sequence_mut)
-        .ok_or_else(|| anyhow!("Cordis patch 的 insert 操作必须是条目列表。"))
-}
-
-fn read_existing_dsh_patch_entries(config_path: &Path) -> Result<BTreeMap<String, JsonValue>> {
-    let ops = read_dsh_patch_ops(config_path)?;
-    let mut entries = BTreeMap::new();
-
-    for op in &ops {
-        let Some(list) = op.get("insert").and_then(YamlValue::as_sequence) else {
-            continue;
-        };
-        for entry in list {
-            if entry.get("name").and_then(YamlValue::as_str) != Some(DSH_MCP_CLIENT_PLUGIN) {
-                continue;
-            }
-            let Some(server_name) = entry
-                .get("config")
-                .and_then(|config| config.get("serverName"))
-                .and_then(YamlValue::as_str)
-            else {
-                continue;
-            };
-            let config = entry.get("config").cloned().unwrap_or(YamlValue::Null);
-            let json = serde_json::to_value(crate::support::dsh_patch::untag(&config))
-                .with_context(|| format!("Cordis patch 条目转换失败：{server_name}"))?;
-            entries.insert(server_name.to_string(), json);
-        }
-    }
-
-    Ok(entries)
-}
-
-fn apply_dsh_patch_entry(config_path: &Path, server: &ResolvedMcpConfig) -> Result<()> {
-    let server_name = dsh_server_name(&server.name);
-    let mut ops = read_dsh_patch_ops(config_path)?;
-
-    match locate_dsh_claimed_entry(&ops, &server_name) {
-        Some((op_index, entry_index)) => {
-            let entry = desired_dsh_insert_entry(&server_name, server)?;
-            dsh_insert_list_mut(&mut ops, op_index)?[entry_index] = entry;
-        }
-        None => ops.push(desired_dsh_insert_op(&server_name, server)?),
-    }
-
-    write_dsh_patch_ops(config_path, &ops)
-}
-
-fn remove_dsh_patch_entry(
+pub(super) fn apply_file_entry<W: McpFormatWriter + ?Sized>(
+    writer: &W,
     target: &ResolvedTargetConfig,
     config_path: &Path,
-    server_name: &str,
-) -> Result<McpTargetMutationResult> {
-    let claimed_name = dsh_server_name(server_name);
-    let mut ops = read_dsh_patch_ops(config_path)?;
-
-    let Some((op_index, entry_index)) = locate_dsh_claimed_entry(&ops, &claimed_name) else {
-        return Ok(McpTargetMutationResult {
-            server_name: server_name.to_string(),
-            target_id: target.id.clone(),
-            updated_path: None,
-            action: "noop".to_string(),
-            detail: "目标配置里不存在该 MCP。".to_string(),
-        });
-    };
-
-    let insert_list = dsh_insert_list_mut(&mut ops, op_index)?;
-    insert_list.remove(entry_index);
-    if insert_list.is_empty() {
-        ops.remove(op_index);
-    }
-    // 删空后保留空列表文件（`[]`），与“不整文件覆盖”的合并语义一致。
-    write_dsh_patch_ops(config_path, &ops)?;
-
-    Ok(McpTargetMutationResult {
-        server_name: server_name.to_string(),
-        target_id: target.id.clone(),
-        updated_path: Some(display_path(config_path)),
-        action: "remove".to_string(),
-        detail: format!("已从 {} 移除 {}", target.id.as_str(), server_name),
-    })
-}
-
-fn apply_mcp_to_target_config(
-    target: &ResolvedTargetConfig,
     server: &ResolvedMcpConfig,
-) -> Result<PathBuf> {
-    let config_path = target
-        .config_path
-        .as_ref()
-        .ok_or_else(|| anyhow!("目标 {} 没有 MCP 配置路径", target.id.as_str()))?;
-
-    if target.mcp_config_type == McpConfigType::Dsh {
-        apply_dsh_patch_entry(config_path, server)?;
-        return Ok(config_path.clone());
-    }
-
-    match detect_target_mcp_file_format(target, config_path)? {
+) -> Result<()> {
+    match detect_supported_format(writer, config_path)? {
         McpConfigFileFormat::Toml => {
             let mut root = read_toml_config(config_path)?;
             let server_map = ensure_toml_table_path(&mut root, &target.mcp_config_prefix)?;
-            server_map.insert(server.name.clone(), desired_toml_mcp_entry(target, server)?);
+            server_map.insert(server.name.clone(), writer.desired_toml_entry(server)?);
             write_toml_config(config_path, &root)?;
         }
         McpConfigFileFormat::Json => {
             let mut root = read_json_config(config_path)?;
 
             if root.is_null() {
-                root = default_json_root_for_target(target);
+                root = writer.default_json_root();
             }
 
             let server_map = ensure_json_object_path(&mut root, &target.mcp_config_prefix)?;
-            server_map.insert(server.name.clone(), desired_json_mcp_entry(target, server)?);
+            server_map.insert(server.name.clone(), writer.desired_json_entry(server)?);
             write_json_config(config_path, &root)?;
         }
     }
 
-    Ok(config_path.clone())
+    Ok(())
 }
 
-fn remove_mcp_from_target_config(
+pub(super) fn remove_file_entry<W: McpFormatWriter + ?Sized>(
+    writer: &W,
     target: &ResolvedTargetConfig,
+    config_path: &Path,
     server_name: &str,
 ) -> Result<McpTargetMutationResult> {
-    // 未配置 MCP 的 target 无配置可清理；必须返回 noop 而非报错。
-    // 否则删除 MCP 时遍历全部 target 会被这类 target 中断。
-    let Some(config_path) = target.config_path.as_ref() else {
-        return Ok(McpTargetMutationResult {
-            server_name: server_name.to_string(),
-            target_id: target.id.clone(),
-            updated_path: None,
-            action: "noop".to_string(),
-            detail: "目标未配置 MCP，跳过。".to_string(),
-        });
-    };
-
-    if target.mcp_config_type == McpConfigType::Dsh {
-        return remove_dsh_patch_entry(target, config_path, server_name);
-    }
-
-    let removed = match detect_target_mcp_file_format(target, config_path)? {
+    let removed = match detect_supported_format(writer, config_path)? {
         McpConfigFileFormat::Toml => {
             let mut root = read_toml_config(config_path)?;
             match get_toml_table_path_mut(&mut root, &target.mcp_config_prefix) {
@@ -847,6 +322,111 @@ fn remove_mcp_from_target_config(
         detail: format!("已从 {} 移除 {}", target.id.as_str(), server_name),
     })
 }
+
+fn detect_supported_format<W: McpFormatWriter + ?Sized>(
+    writer: &W,
+    config_path: &Path,
+) -> Result<McpConfigFileFormat> {
+    let format = detect_mcp_file_format(config_path)?;
+    writer.ensure_format_supported(format)?;
+    Ok(format)
+}
+
+fn resolve_read_target_for_config(
+    target: &ResolvedTargetConfig,
+    config_path: &Path,
+) -> Result<ResolvedTargetConfig> {
+    if target.mcp_config_prefix.trim().is_empty() {
+        if let Some(fallback) = inferred_target_layout(&target.id, config_path) {
+            return Ok(fallback);
+        }
+    }
+
+    Ok(target.clone())
+}
+
+fn inferred_target_layout(
+    target_id: &AgentTargetId,
+    config_path: &Path,
+) -> Option<ResolvedTargetConfig> {
+    let defaults = builtin_target_defaults_map();
+    let default = defaults.get(target_id)?;
+
+    Some(ResolvedTargetConfig {
+        id: target_id.clone(),
+        enabled: true,
+        is_project: false,
+        skill_dir: default.skill_dir.clone(),
+        config_path: Some(config_path.to_path_buf()),
+        mcp_config_prefix: default.config_prefix.to_string(),
+        mcp_config_type: default.config_type,
+    })
+}
+
+fn detect_mcp_file_format(config_path: &Path) -> Result<McpConfigFileFormat> {
+    if config_path.exists() {
+        let raw = fs::read_to_string(config_path)?;
+        let trimmed = raw.trim();
+
+        if trimmed.is_empty() {
+            return infer_mcp_file_format_from_path(config_path);
+        }
+
+        if json5::from_str::<JsonValue>(trimmed).is_ok() {
+            return Ok(McpConfigFileFormat::Json);
+        }
+
+        if toml::from_str::<TomlValue>(trimmed).is_ok() {
+            return Ok(McpConfigFileFormat::Toml);
+        }
+
+        bail!("无法识别 MCP 配置文件格式：{}", config_path.display());
+    }
+
+    infer_mcp_file_format_from_path(config_path)
+}
+
+fn infer_mcp_file_format_from_path(config_path: &Path) -> Result<McpConfigFileFormat> {
+    match config_path
+        .extension()
+        .and_then(OsStr::to_str)
+        .map(|item| item.to_ascii_lowercase())
+    {
+        Some(extension) if extension == "json" => Ok(McpConfigFileFormat::Json),
+        Some(extension) if extension == "toml" => Ok(McpConfigFileFormat::Toml),
+        _ => bail!(
+            "无法从文件名推断 MCP 配置格式：{}，仅支持 json 与 toml",
+            config_path.display()
+        ),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// dsh (DeepSeek Harness) name sanitization
+// ---------------------------------------------------------------------------
+
+// dsh 要求 serverName 匹配 [A-Za-z0-9_-]{1,32}：非法字符折叠为 -，超长截断。
+// 读取侧（inspect 状态归类）与写入侧（DshPatchWriter）共用这一清洗规则。
+pub(super) fn dsh_server_name(server_name: &str) -> String {
+    let mut sanitized: String = server_name
+        .trim()
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || ch == '_' || ch == '-' {
+                ch
+            } else {
+                '-'
+            }
+        })
+        .collect();
+    // 映射后只有 ASCII，truncate 不会落在多字节边界上。
+    sanitized.truncate(32);
+    sanitized
+}
+
+// ---------------------------------------------------------------------------
+// Generic config file primitives (shared by all file-format writers)
+// ---------------------------------------------------------------------------
 
 fn read_toml_config(config_path: &Path) -> Result<toml::map::Map<String, TomlValue>> {
     if !config_path.exists() {
