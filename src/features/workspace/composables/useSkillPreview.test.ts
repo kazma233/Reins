@@ -46,7 +46,7 @@ afterEach(() => {
 describe("useSkillPreview discover + filter pipeline", () => {
   it("applies the discovery directly when no patterns are set", async () => {
     const host = setupHost();
-    const { discoverAndFilterSkills } = useSkillPreview(host, "刷新预览失败。");
+    const { discoverAndFilterSkills } = useSkillPreview(host);
     const discovery = makeDiscovery("d1");
     mockedDiscoverGitSkills.mockResolvedValue(discovery);
 
@@ -59,7 +59,7 @@ describe("useSkillPreview discover + filter pipeline", () => {
 
   it("drops a stale discovery response when a newer request superseded it", async () => {
     const host = setupHost();
-    const { discoverAndFilterSkills } = useSkillPreview(host, "刷新预览失败。");
+    const { discoverAndFilterSkills } = useSkillPreview(host);
     let resolveFirst: (value: SkillDiscoveryResult) => void = () => {};
     mockedDiscoverGitSkills
       .mockImplementationOnce(() => new Promise((resolve) => (resolveFirst = resolve)))
@@ -84,7 +84,7 @@ describe("useSkillPreview discover + filter pipeline", () => {
 
   it("drops a stale filter response after the guard was invalidated", async () => {
     const host = setupHost();
-    const { discoverAndFilterSkills, invalidatePreviewRequests } = useSkillPreview(host, "刷新预览失败。");
+    const { discoverAndFilterSkills, invalidatePreviewRequests } = useSkillPreview(host);
     let resolveDiscover!: (value: SkillDiscoveryResult) => void;
     let resolveFilter!: (value: SkillDiscoveryResult) => void;
     mockedDiscoverGitSkills.mockImplementationOnce(
@@ -112,7 +112,7 @@ describe("useSkillPreview discover + filter pipeline", () => {
 
   it("does not apply a filter result when the pattern text changed meanwhile", async () => {
     const host = setupHost();
-    const { discoverAndFilterSkills } = useSkillPreview(host, "刷新预览失败。");
+    const { discoverAndFilterSkills } = useSkillPreview(host);
     let resolveDiscover!: (value: SkillDiscoveryResult) => void;
     let resolveFilter!: (value: SkillDiscoveryResult) => void;
     mockedDiscoverGitSkills.mockImplementationOnce(
@@ -143,7 +143,7 @@ describe("useSkillPreview debounced pattern re-filter", () => {
   it("coalesces rapid pattern edits into a single filter call", async () => {
     vi.useFakeTimers();
     const host = setupHost();
-    useSkillPreview(host, "刷新预览失败。");
+    useSkillPreview(host);
     host.preview.discovery = makeDiscovery("d1");
     await nextTick();
 
@@ -165,7 +165,7 @@ describe("useSkillPreview debounced pattern re-filter", () => {
   it("skips the filter call when the loaded discovery already matches the patterns", async () => {
     vi.useFakeTimers();
     const host = setupHost();
-    useSkillPreview(host, "刷新预览失败。");
+    useSkillPreview(host);
     host.preview.discovery = { ...makeDiscovery("d1"), includeNamePatterns: ["x-*"] };
     await nextTick();
 
@@ -175,5 +175,23 @@ describe("useSkillPreview debounced pattern re-filter", () => {
 
     expect(mockedFilterDiscoveredSkills).not.toHaveBeenCalled();
     expect(host.preview.previewLoading).toBe(false);
+  });
+
+  it("keeps a failed re-filter on the preview state instead of a global notice", async () => {
+    vi.useFakeTimers();
+    const host = setupHost();
+    useSkillPreview(host);
+    host.preview.discovery = makeDiscovery("d1");
+    await nextTick();
+    mockedFilterDiscoveredSkills.mockRejectedValue(new Error("filter boom"));
+
+    host.preview.includeNamePatternsText = "a-*";
+    await nextTick();
+    await vi.advanceTimersByTimeAsync(300);
+
+    expect(host.preview.previewError).toBe("filter boom");
+    expect(host.preview.previewLoading).toBe(false);
+    // 失败的预览不会抹掉已加载的结果，用户仍能看到上一次成功的列表。
+    expect(host.preview.discovery?.discoveryId).toBe("d1");
   });
 });

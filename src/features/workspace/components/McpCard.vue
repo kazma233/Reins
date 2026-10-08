@@ -2,6 +2,7 @@
 import { computed } from "vue";
 import { formatTimestamp } from "@shared/lib/format";
 import AppCard from "@shared/ui/AppCard.vue";
+import AppResultBadge from "@shared/ui/AppResultBadge.vue";
 import McpTargetButton from "./McpTargetButton.vue";
 import ProjectMcpTargetButton from "./ProjectMcpTargetButton.vue";
 import type {
@@ -22,10 +23,16 @@ type McpCardProps = {
   projects: ProjectTargetEntry[];
   targetIds: AgentTargetId[];
   loading?: boolean;
+  // 项目 agent 选择器的部分失败：弹窗已关，失败目标只能留在卡片上。
+  warning?: string | null;
+  // 卡片级「同步到目标」的结果，同样在触发它的卡片上展示。
+  syncResult?: { text: string; failed: boolean } | null;
 };
 
 const props = withDefaults(defineProps<McpCardProps>(), {
   loading: false,
+  warning: null,
+  syncResult: null,
 });
 
 defineEmits<{
@@ -33,6 +40,7 @@ defineEmits<{
   requestDeleteMcp: [serverNames: string[]];
   toggleMcpTarget: [serverName: string, targetId: AgentTargetId];
   openProjectAgentPicker: [serverName: string, projectId: string];
+  syncMcp: [mcp: McpConfigView];
 }>();
 
 function formatMcpSummary(mcp: McpConfigView): string {
@@ -54,6 +62,15 @@ const summary = computed(() => formatMcpSummary(props.mcp));
 const targetItemById = computed(() =>
   buildMcpTargetItemById(props.inspection?.targets ?? []),
 );
+// 操作区只放一条结果：优先最近一次「同步到目标」，其次是项目同步的部分失败。
+const hint = computed<{ text: string; failed: boolean } | null>(() => {
+  if (props.syncResult) return props.syncResult;
+  return props.warning ? { text: props.warning, failed: true } : null;
+});
+// 同步只对已安装的 mcp 有意义：没有安装目标时按钮禁用。
+const installedTargetCount = computed(
+  () => (props.inspection?.targets ?? []).filter((target) => target.state === "present").length,
+);
 </script>
 
 <template>
@@ -66,24 +83,6 @@ const targetItemById = computed(() =>
     </template>
     <template #headerMeta>
       <span v-if="mcp.homepage" class="manager-header-path"><strong>主页</strong>{{ mcp.homepage }}</span>
-    </template>
-    <template #ext>
-      <button
-        class="secondary-button"
-        :disabled="loading"
-        type="button"
-        @click="$emit('editMcp', mcp)"
-      >
-        修改
-      </button>
-      <button
-        class="danger-button"
-        :disabled="loading"
-        type="button"
-        @click="$emit('requestDeleteMcp', [mcp.name])"
-      >
-        删除
-      </button>
     </template>
 
     <p class="manager-skill-description">{{ summary }}</p>
@@ -118,5 +117,43 @@ const targetItemById = computed(() =>
         />
       </div>
     </div>
+
+    <template #actions>
+      <!-- 结果只占一个图标：完整文案在 hover 气泡里，不参与操作行宽度 -->
+      <AppResultBadge
+        v-if="hint"
+        :message="hint.text"
+        :tone="hint.failed ? 'danger' : 'success'"
+      />
+      <button
+        class="secondary-button"
+        :disabled="loading || installedTargetCount === 0"
+        :title="
+          installedTargetCount > 0
+            ? `把当前配置重新写入已安装的 ${installedTargetCount} 个目标`
+            : '该 mcp 还没有安装到任何目标'
+        "
+        type="button"
+        @click="$emit('syncMcp', mcp)"
+      >
+        同步到目标{{ installedTargetCount > 0 ? ` (${installedTargetCount})` : "" }}
+      </button>
+      <button
+        class="secondary-button"
+        :disabled="loading"
+        type="button"
+        @click="$emit('editMcp', mcp)"
+      >
+        修改
+      </button>
+      <button
+        class="danger-button"
+        :disabled="loading"
+        type="button"
+        @click="$emit('requestDeleteMcp', [mcp.name])"
+      >
+        删除
+      </button>
+    </template>
   </AppCard>
 </template>

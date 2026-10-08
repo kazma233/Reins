@@ -2,6 +2,8 @@
 import { computed, reactive, ref } from "vue";
 import ConfirmDialog from "@shared/ui/ConfirmDialog.vue";
 import AppCard from "@shared/ui/AppCard.vue";
+import AppFieldError from "@shared/ui/AppFieldError.vue";
+import AppLoadError from "@shared/ui/AppLoadError.vue";
 import { applyProviderToApp, removeExternalEntry, removeProviderFromApp } from "../../api";
 import type {
   ApplyProviderInput,
@@ -22,7 +24,15 @@ import { useProvidersAction } from "../../composables/useProvidersAction";
 import { useProvidersState } from "../../composables/useProvidersState";
 import ProviderApplyDialog from "../dialogs/ProviderApplyDialog.vue";
 
-const { state, loadingState, runningAction } = useProvidersState();
+const {
+  state,
+  error,
+  appErrors,
+  loadingState,
+  runningAction,
+  retryProvidersState,
+  reloadProviderAppState,
+} = useProvidersState();
 const { runProvidersAction } = useProvidersAction();
 
 const applyDialog = reactive<{ open: boolean; app: ProviderAppId | null; providerId: string }>({
@@ -30,6 +40,9 @@ const applyDialog = reactive<{ open: boolean; app: ProviderAppId | null; provide
   app: null,
   providerId: "",
 });
+// 弹窗操作失败的内联错误：与弹窗同生命周期，关闭/重试时清空。
+const applyError = ref<string | null>(null);
+const removeError = ref<string | null>(null);
 const removeTarget = ref<
   | { app: ProviderAppId; providerId: string; external: false }
   | { app: ProviderAppId; entryKey: string; external: true }
@@ -64,7 +77,13 @@ function applyTarget(): { provider: ProviderView; app: ProviderAppId } | null {
 function openApply(app: ProviderAppId, providerId: string) {
   applyDialog.app = app;
   applyDialog.providerId = providerId;
+  applyError.value = null;
   applyDialog.open = true;
+}
+
+function closeApplyDialog() {
+  applyDialog.open = false;
+  applyError.value = null;
 }
 
 // 条目行「重新应用」的目标：已应用与配置有偏差的条目都能重开应用弹窗
@@ -75,23 +94,33 @@ function reapplyTarget(entry: ProviderAppEntry): ProviderView | null {
 }
 
 function confirmApply(input: ApplyProviderInput) {
+  applyError.value = null;
   runProvidersAction({
     action: () => applyProviderToApp(input),
-    success: (result) => ({ message: result.detail || "已应用。" }),
     // 应用只改这一个工具的配置，刷新这一张卡片即可。
-    refreshApp: input.app,
-    after: () => {
+    reloadApp: input.app,
+    onSuccess: () => {
       applyDialog.open = false;
+    },
+    onError: (message) => {
+      applyError.value = message;
     },
   });
 }
 
 function requestRemove(app: ProviderAppId, providerId: string) {
+  removeError.value = null;
   removeTarget.value = { app, providerId, external: false };
 }
 
 function requestRemoveExternal(app: ProviderAppId, entryKey: string) {
+  removeError.value = null;
   removeTarget.value = { app, entryKey, external: true };
+}
+
+function closeRemoveDialog() {
+  removeTarget.value = null;
+  removeError.value = null;
 }
 
 function confirmRemove() {
@@ -99,16 +128,19 @@ function confirmRemove() {
     return;
   }
   const target = removeTarget.value;
+  removeError.value = null;
   runProvidersAction({
     action: () =>
       target.external
         ? removeExternalEntry(target.app, target.entryKey)
         : removeProviderFromApp(target.providerId, target.app),
-    success: (result) => ({ message: result.detail || "已删除。" }),
     // 删除只改这一个工具的配置，刷新这一张卡片即可。
-    refreshApp: target.app,
-    after: () => {
+    reloadApp: target.app,
+    onSuccess: () => {
       removeTarget.value = null;
+    },
+    onError: (message) => {
+      removeError.value = message;
     },
   });
 }
@@ -124,6 +156,13 @@ function confirmRemove() {
         </p>
       </div>
     </div>
+
+    <AppLoadError
+      v-if="error"
+      :message="error"
+      :retrying="loadingState"
+      @retry="retryProvidersState"
+    />
 
     <div v-if="loadingState" class="providers-loading">读取中…</div>
 
@@ -156,6 +195,19 @@ function confirmRemove() {
         <p v-if="appState.loadError" class="providers-entry__note">
           读取失败：{{ appState.loadError }}
         </p>
+
+        <div v-if="appErrors[appState.app]" class="providers-app__refresh-error">
+          <p class="providers-entry__note providers-entry__note--error">
+            刷新失败：{{ appErrors[appState.app] }}
+          </p>
+          <button
+            class="providers-mini-button"
+            type="button"
+            @click="reloadProviderAppState(appState.app)"
+          >
+            重试
+          </button>
+        </div>
 
         <ul v-if="appState.entries.length > 0" class="providers-entry-list">
           <li
@@ -243,7 +295,8 @@ function confirmRemove() {
       :app="applyDialog.app"
       :provider="applyTarget()!.provider"
       :state="state"
-      @close="applyDialog.open = false"
+      :error="applyError"
+      @close="closeApplyDialog"
       @confirm="confirmApply"
     />
 
@@ -254,8 +307,10 @@ function confirmRemove() {
       :description="removeConfirmText.description"
       confirm-label="删除"
       :loading="runningAction"
-      @close="removeTarget = null"
+      @close="closeRemoveDialog"
       @confirm="confirmRemove"
-    />
+    >
+      <AppFieldError :message="removeError" />
+    </ConfirmDialog>
   </section>
 </template>

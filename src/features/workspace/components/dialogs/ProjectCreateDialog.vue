@@ -1,12 +1,14 @@
 <script setup lang="ts">
 import { computed } from "vue";
+import AppFieldError from "@shared/ui/AppFieldError.vue";
 import DialogShell from "@shared/ui/DialogShell.vue";
-import { AVAILABLE_PROJECT_AGENTS, type ProjectFormState } from "../../model";
+import { AVAILABLE_PROJECT_AGENTS, formatTargetName, type ProjectFormState } from "../../model";
 
 type ProjectCreateDialogProps = {
   form: ProjectFormState;
   open: boolean;
   loading: boolean;
+  error: string | null;
 };
 
 const props = defineProps<ProjectCreateDialogProps>();
@@ -14,6 +16,7 @@ const props = defineProps<ProjectCreateDialogProps>();
 defineEmits<{
   close: [];
   confirm: [];
+  clearFieldError: [field: string];
   pickProjectPath: [];
 }>();
 
@@ -58,15 +61,21 @@ function toggleAgent(agentId: string) {
     </template>
 
     <div class="manager-stack">
+      <AppFieldError :message="error" />
+
       <label class="manager-field">
         <span class="manager-field-label">project ID</span>
         <input
           v-model="form.projectId"
+          :aria-describedby="form.errors.projectId ? 'project-id-error' : undefined"
+          :aria-invalid="Boolean(form.errors.projectId)"
           class="manager-input"
           :disabled="mode === 'edit'"
           placeholder="my-app"
           type="text"
+          @input="$emit('clearFieldError', 'projectId')"
         />
+        <AppFieldError id="project-id-error" :message="form.errors.projectId ?? null" />
       </label>
 
       <div class="manager-field">
@@ -74,9 +83,12 @@ function toggleAgent(agentId: string) {
         <div class="manager-field-row">
           <input
             v-model="form.path"
+            :aria-describedby="form.errors.path ? 'project-path-error' : undefined"
+            :aria-invalid="Boolean(form.errors.path)"
             class="manager-input"
             placeholder="~/code/my-app"
             type="text"
+            @input="$emit('clearFieldError', 'path')"
           />
           <button
             class="secondary-button"
@@ -87,6 +99,7 @@ function toggleAgent(agentId: string) {
             选择
           </button>
         </div>
+        <AppFieldError id="project-path-error" :message="form.errors.path ?? null" />
       </div>
 
       <div class="manager-field">
@@ -100,7 +113,7 @@ function toggleAgent(agentId: string) {
             type="button"
             @click="toggleAgent(agentId)"
           >
-            {{ agentId }}
+            {{ formatTargetName(agentId) }}
           </button>
         </div>
       </div>

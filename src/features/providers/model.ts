@@ -1,3 +1,4 @@
+import { agentDisplayName } from "@shared/lib/agent-labels";
 import type {
   ApplyProviderInput,
   FetchedModel,
@@ -24,13 +25,14 @@ export const PROVIDERS_TAB_COPY: Array<{ id: ProvidersTab; label: string }> = [
   { id: "providers", label: "提供商" },
 ];
 
+// 工具名与 target / 会话来源共用同一份产品名常量。
 export const APP_LABELS: Record<ProviderAppId, string> = {
-  codex: "Codex",
-  claude: "Claude Code",
-  opencode: "OpenCode",
-  pi: "Pi",
-  grokbuild: "Grok Build",
-  dsh: "DeepSeek Harness",
+  codex: agentDisplayName("codex"),
+  claude: agentDisplayName("claude"),
+  opencode: agentDisplayName("opencode"),
+  pi: agentDisplayName("pi"),
+  grokbuild: agentDisplayName("grokbuild"),
+  dsh: agentDisplayName("dsh"),
 };
 
 export const PROTOCOL_LABELS: Record<ProviderProtocol, string> = {
@@ -338,6 +340,13 @@ export type ProviderFormState = {
   // 明文回显：表单里的值就是 providers.yaml 里的值，留空保存即清除。
   apiKey: string;
   models: ProviderModelForm[];
+  // 字段级校验错误：ProviderEditDialog 内联展示，用户改动对应字段时清空。
+  errors?: {
+    providerId?: string;
+    label?: string;
+    baseUrl?: string;
+    models?: string;
+  };
 };
 
 let modelRowSeq = 0;
@@ -391,6 +400,7 @@ export function emptyProviderForm(): ProviderFormState {
     baseUrl: "",
     apiKey: "",
     models: [],
+    errors: {},
   };
 }
 
@@ -412,6 +422,7 @@ export function formFromProvider(provider: ProviderView): ProviderFormState {
       reasoning: model.reasoning ?? null,
       reasoningLevels: model.reasoningLevels ?? null,
     })),
+    errors: {},
   };
 }
 

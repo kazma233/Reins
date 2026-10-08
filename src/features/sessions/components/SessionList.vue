@@ -12,6 +12,7 @@ type SessionListProps = {
   selectedSessionKey: string | null;
   loading: boolean;
   loadingMore: boolean;
+  loadMoreError?: string | null;
   hasMore: boolean;
   query: string;
   queryKey: string;
@@ -62,7 +63,14 @@ watch(
   ],
   () => {
     const listElement = listRef.value;
-    if (!listElement || props.loading || props.loadingMore || !props.hasMore) {
+    if (
+      !listElement ||
+      props.loading ||
+      props.loadingMore ||
+      !props.hasMore ||
+      // 错误未清除前不再自动加载，否则失败会立刻触发下一轮请求。
+      props.loadMoreError
+    ) {
       return;
     }
     if (listElement.scrollHeight <= listElement.clientHeight + 32) {
@@ -74,7 +82,13 @@ watch(
 onMounted(() => {
   // Trigger the initial auto-load check after mount.
   const listElement = listRef.value;
-  if (!listElement || props.loading || props.loadingMore || !props.hasMore) {
+  if (
+    !listElement ||
+    props.loading ||
+    props.loadingMore ||
+    !props.hasMore ||
+    props.loadMoreError
+  ) {
     return;
   }
   if (listElement.scrollHeight <= listElement.clientHeight + 32) {
@@ -94,7 +108,12 @@ function totalConsumedTokens(usage: NonNullable<SessionSummary["tokenUsage"]>): 
 }
 
 function handleScroll(event: Event) {
-  if (props.loading || props.loadingMore || !props.hasMore) {
+  if (
+    props.loading ||
+    props.loadingMore ||
+    !props.hasMore ||
+    props.loadMoreError
+  ) {
     return;
   }
   const listElement = event.currentTarget as HTMLDivElement;
@@ -207,6 +226,20 @@ function handleReverseClick() {
       <div v-if="loadingMore" class="session-list-footer">
         <small>已加载 {{ sessions.length }} / {{ totalCount }}</small>
         <span class="session-list-hint">正在加载更多...</span>
+      </div>
+      <div
+        v-else-if="loadMoreError"
+        class="session-list-footer session-list-error"
+        role="alert"
+      >
+        <span>{{ loadMoreError }}</span>
+        <button
+          class="session-list-error-retry"
+          type="button"
+          @click="emit('loadMore')"
+        >
+          重试
+        </button>
       </div>
       <div v-else-if="hasMore" class="session-list-footer">
         <small>已加载 {{ sessions.length }} / {{ totalCount }}</small>

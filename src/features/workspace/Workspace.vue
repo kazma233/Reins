@@ -1,21 +1,18 @@
 <script setup lang="ts">
 import { onMounted } from "vue";
 import { storeToRefs } from "pinia";
-import AppToast from "@shared/ui/AppToast.vue";
 import { WORKSPACE_TAB_COPY } from "./model";
 import { useWorkspaceStore } from "./stores/workspace";
-import { useWorkspaceNotice } from "./composables/useWorkspaceNotice";
 import { useWorkspaceState } from "./composables/useWorkspaceState";
 import TargetsPanel from "./components/panels/TargetsPanel.vue";
 import SkillsPanel from "./components/panels/SkillsPanel.vue";
 import McpPanel from "./components/panels/McpPanel.vue";
 import "./styles.css";
 
-// --- store + notice (singletons) ---
+// --- store (singleton) ---
 
 const store = useWorkspaceStore();
 const { workspaceTab } = storeToRefs(store);
-const { notice, clearNotice } = useWorkspaceNotice();
 
 // --- workspace state (single bootstrap, fired from onMounted below) ---
 
@@ -49,7 +46,5 @@ onMounted(() => {
       <SkillsPanel v-else-if="workspaceTab === 'skills'" />
       <McpPanel v-else-if="workspaceTab === 'mcp'" />
     </div>
-
-    <AppToast :notice="notice" @close="clearNotice" />
   </div>
 </template>

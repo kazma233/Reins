@@ -50,7 +50,7 @@
   background: var(--color-canvas);
   box-shadow: 0 8px 24px rgba(15, 23, 42, 0.12);
   pointer-events: none;
-  /* 两端贴近边缘时收住溢出。 */
+  /* 两端贴近边缘时的位移由 clampCenteredOffset 处理（left 已夹取到容器内）。 */
   white-space: nowrap;
 }
 

@@ -2,6 +2,9 @@
 import { computed, reactive, ref } from "vue";
 import ConfirmDialog from "@shared/ui/ConfirmDialog.vue";
 import AppCard from "@shared/ui/AppCard.vue";
+import AppFieldError from "@shared/ui/AppFieldError.vue";
+import AppLoadError from "@shared/ui/AppLoadError.vue";
+import AppResultBadge from "@shared/ui/AppResultBadge.vue";
 import { extractErrorMessage } from "@shared/lib/errors";
 import { applyProviderToApp, deleteProvider, upsertProvider } from "../../api";
 import {
@@ -21,7 +24,7 @@ import { useProvidersAction } from "../../composables/useProvidersAction";
 import { useProvidersState } from "../../composables/useProvidersState";
 import ProviderEditDialog from "../dialogs/ProviderEditDialog.vue";
 
-const { state, loadingState, runningAction } = useProvidersState();
+const { state, error, loadingState, runningAction, retryProvidersState } = useProvidersState();
 const { runProvidersAction } = useProvidersAction();
 
 const editOpen = ref(false);
@@ -31,6 +34,11 @@ const editCreating = ref(false);
 const editStep = ref<1 | 2>(1);
 const form = reactive<ProviderFormState>(emptyProviderForm());
 const deleteDialog = reactive({ open: false, providerId: "", providerLabel: "" });
+const deleteError = ref<string | null>(null);
+// 同步结果常驻在卡片内直到下次同步：异步任务结束后没有其他反馈位置。
+const syncResults = reactive<
+  Record<string, { message: string; tone: "body" | "danger" }>
+>({});
 
 // 已应用 + 配置有偏差的条目都算同步目标，计划按提供商缓存一份供按钮与同步执行共用。
 const syncPlans = computed(() => {
@@ -95,18 +103,34 @@ function openEdit(providerId: string) {
 }
 
 function confirmEdit() {
+  // 只有后端契约要求的非空校验，失败时错误落在弹窗内对应字段下方。
+  const errors: NonNullable<ProviderFormState["errors"]> = {};
+  if (!form.providerId.trim()) {
+    errors.providerId = "请填写提供商 ID。";
+  }
+  if (!form.label.trim()) {
+    errors.label = "请填写名称。";
+  }
+  if (!form.baseUrl.trim()) {
+    errors.baseUrl = "请填写 Base URL。";
+  }
+  // 新增第一步只落库元数据，模型目录在第二步才填，不能在这一步拦住用户。
+  const isCreateStepOne = editCreating.value && editStep.value === 1;
+  if (!isCreateStepOne && form.models.length === 0) {
+    errors.models = "至少添加一个模型。";
+  }
+  form.errors = errors;
+  if (Object.keys(errors).length > 0) {
+    return;
+  }
+
   const input = formToInput(form);
   runProvidersAction({
     // 元数据与明文 API Key 在同一份 providers.yaml 里，一次 upsert 原子落盘。
     action: () => upsertProvider(input),
-    success: (providerId) => ({
-      message:
-        editCreating.value && editStep.value === 1
-          ? `提供商 ${providerId} 已保存，请继续设置模型目录。`
-          : `提供商 ${providerId} 已保存。`,
-    }),
-    after: (providerId) => {
-      if (editCreating.value && editStep.value === 1) {
+    reload: true,
+    onSuccess: (providerId) => {
+      if (isCreateStepOne) {
         // 新增第一步：不关弹窗，原地进入模型目录设置；
         // 填上 originalProviderId 后，拉取即按已保存提供商走。
         form.originalProviderId = providerId;
@@ -123,13 +147,21 @@ function requestDeleteProvider(providerId: string) {
   const provider = state.value?.providers.find((item) => item.id === providerId);
   deleteDialog.providerId = providerId;
   deleteDialog.providerLabel = provider?.label ?? providerId;
+  deleteError.value = null;
   deleteDialog.open = true;
 }
 
-// 同步是显式操作，点按即执行：逐个 Agent 应用，跳过与失败都汇总到一条提示。
+function closeDeleteDialog() {
+  deleteDialog.open = false;
+  deleteError.value = null;
+}
+
+// 同步是显式操作，点按即执行：逐个 Agent 应用，跳过与失败都汇总成一句
+// 常驻结果写回卡片；执行前先清掉该提供商的旧结果。
 function runSync(providerId: string) {
   const targets = syncTargetsFor(providerId);
   const skips = syncSkipsFor(providerId);
+  delete syncResults[providerId];
   runProvidersAction({
     action: async () => {
       const synced: string[] = [];
@@ -144,14 +176,21 @@ function runSync(providerId: string) {
       }
       return { synced, failures };
     },
-    success: ({ synced, failures }) => ({
-      message: syncNotice(synced, failures, skips),
-      tone: failures.length > 0 ? "error" : "success",
-    }),
+    reload: true,
+    onSuccess: ({ synced, failures }) => {
+      syncResults[providerId] = {
+        message: syncResultText(synced, failures, skips),
+        tone: failures.length > 0 ? "danger" : "body",
+      };
+    },
+    onError: (message) => {
+      syncResults[providerId] = { message, tone: "danger" };
+    },
   });
 }
 
-function syncNotice(synced: string[], failures: string[], skips: ProviderSyncSkip[]): string {
+// 同步结果句：已同步 / 跳过原因 / 逐项失败明细合成一句，常驻在卡片上。
+function syncResultText(synced: string[], failures: string[], skips: ProviderSyncSkip[]): string {
   const parts = [synced.length > 0 ? `已同步到 ${synced.join("、")}` : "没有可同步的 Agent"];
   if (skips.length > 0) {
     const skipped = skips
@@ -167,11 +206,15 @@ function syncNotice(synced: string[], failures: string[], skips: ProviderSyncSki
 
 function confirmDeleteProvider() {
   const providerId = deleteDialog.providerId;
+  deleteError.value = null;
   runProvidersAction({
     action: () => deleteProvider(providerId),
-    success: (result) => ({ message: result.detail }),
-    after: () => {
+    reload: true,
+    onSuccess: () => {
       deleteDialog.open = false;
+    },
+    onError: (message) => {
+      deleteError.value = message;
     },
   });
 }
@@ -191,6 +234,13 @@ function confirmDeleteProvider() {
         <button class="primary-button" type="button" @click="openCreate">新增提供商</button>
       </div>
     </div>
+
+    <AppLoadError
+      v-if="error"
+      :message="error"
+      :retrying="loadingState"
+      @retry="retryProvidersState"
+    />
 
     <div v-if="loadingState" class="providers-loading">读取中…</div>
 
@@ -222,6 +272,12 @@ function confirmDeleteProvider() {
         </dl>
 
         <template #actions>
+          <!-- 同步结果只占一个图标：文案在 hover 气泡里，操作行宽度不受文案长度影响 -->
+          <AppResultBadge
+            v-if="syncResults[provider.id]"
+            :message="syncResults[provider.id].message"
+            :tone="syncResults[provider.id].tone === 'danger' ? 'danger' : 'success'"
+          />
           <button
             class="secondary-button"
             :disabled="runningAction || syncTargetsFor(provider.id).length === 0"
@@ -263,8 +319,10 @@ function confirmDeleteProvider() {
       :description="`将删除提供商 ${deleteDialog.providerLabel} 的元数据与其中的明文 API Key。已写入工具的配置不会被自动清理；如 Claude Code 仍在引用该提供商，删除会被拒绝，请先在「Agent」页移除。`"
       confirm-label="删除"
       :loading="runningAction"
-      @close="deleteDialog.open = false"
+      @close="closeDeleteDialog"
       @confirm="confirmDeleteProvider"
-    />
+    >
+      <AppFieldError :message="deleteError" />
+    </ConfirmDialog>
   </section>
 </template>

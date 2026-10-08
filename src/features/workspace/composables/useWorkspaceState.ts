@@ -3,13 +3,17 @@ import { getWorkspaceState } from "../api";
 import { useWorkspaceStore } from "../stores/workspace";
 import { extractErrorMessage } from "@shared/lib/errors";
 import type { WorkspaceState } from "../types";
-import { useWorkspaceNotice } from "./useWorkspaceNotice";
 
 export function useWorkspaceState() {
   const store = useWorkspaceStore();
-  const { configDocument, inspection, loadingConfig, loadingInspection, runningAction } =
-    storeToRefs(store);
-  const { showNotice, clearNotice } = useWorkspaceNotice();
+  const {
+    configDocument,
+    inspection,
+    loadingConfig,
+    loadingInspection,
+    runningAction,
+    loadError,
+  } = storeToRefs(store);
 
   // NOTE: bootstrap is intentionally NOT wired to onMounted here. Multiple
   // composables call useWorkspaceState() during Workspace.vue setup, so an
@@ -20,23 +24,31 @@ export function useWorkspaceState() {
     store.setInspection(state.inspection);
   }
 
-  async function reloadWorkspaceState(options?: { preserveNotice?: boolean }) {
+  // 读取失败是持久状态：错误条常驻到下次成功读取，重试入口在面板里。
+  async function reloadWorkspaceState() {
     store.setLoadingConfig(true);
     store.setLoadingInspection(true);
 
-    if (!options?.preserveNotice) {
-      clearNotice();
-    }
-
     try {
-      const state = await getWorkspaceState();
-      applyWorkspaceState(state);
+      applyWorkspaceState(await getWorkspaceState());
+      store.setLoadError(null);
     } catch (error) {
-      showNotice(extractErrorMessage(error, "读取配置失败。"), "error");
+      store.setLoadError(extractErrorMessage(error, "读取配置失败。"));
     } finally {
       store.setLoadingConfig(false);
       store.setLoadingInspection(false);
     }
+  }
+
+  async function retryWorkspaceState() {
+    if (store.loadingConfig || store.loadingInspection) {
+      return;
+    }
+    await reloadWorkspaceState();
+  }
+
+  function clearWorkspaceError() {
+    store.setLoadError(null);
   }
 
   return {
@@ -45,7 +57,10 @@ export function useWorkspaceState() {
     loadingConfig,
     loadingInspection,
     runningAction,
+    loadError,
     applyWorkspaceState,
     reloadWorkspaceState,
+    retryWorkspaceState,
+    clearWorkspaceError,
   };
 }

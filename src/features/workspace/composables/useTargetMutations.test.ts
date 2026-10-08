@@ -1,7 +1,13 @@
 import { beforeEach, expect, it, vi } from "vitest";
 import { createPinia, setActivePinia } from "pinia";
-import { createWorkspaceTarget, getBuiltinTargetPreset, getWorkspaceState } from "../api";
+import {
+  createWorkspaceTarget,
+  getBuiltinTargetPreset,
+  getWorkspaceState,
+  updateWorkspaceTarget,
+} from "../api";
 import { AVAILABLE_PROJECT_AGENTS, BUILTIN_TARGET_PRESETS, formatMcpConfigType } from "../model";
+import { useWorkspaceStore } from "../stores/workspace";
 import { useTargetMutations } from "./useTargetMutations";
 
 vi.mock("../api", () => ({
@@ -58,6 +64,51 @@ it("registers Grok project and format options without changing existing static p
   await mutations.handleApplyBuiltinTargetPreset("codex");
   expect(mutations.targetCreateDialog.form).toMatchObject(BUILTIN_TARGET_PRESETS.codex!);
   expect(getBuiltinTargetPreset).not.toHaveBeenCalled();
+});
+
+it("reports missing required target fields as field errors without calling the api", async () => {
+  const mutations = useTargetMutations();
+  mutations.openTargetCreateDialog();
+
+  await mutations.handleSubmitTarget();
+
+  expect(mutations.targetCreateDialog.form.errors).toMatchObject({
+    targetId: "请填写 target id。",
+    skillDir: "请填写 skills 目录。",
+  });
+  expect(createWorkspaceTarget).not.toHaveBeenCalled();
+});
+
+it("clears a field error once the user edits that field", async () => {
+  const mutations = useTargetMutations();
+  mutations.openTargetCreateDialog();
+  await mutations.handleSubmitTarget();
+
+  mutations.clearTargetFormError("targetId");
+
+  expect(mutations.targetCreateDialog.form.errors.targetId).toBeUndefined();
+  expect(mutations.targetCreateDialog.form.errors.skillDir).toBeDefined();
+});
+
+it("keeps a failed enable/disable on the panel result slot", async () => {
+  vi.mocked(getWorkspaceState).mockResolvedValue({ document: null, inspection: null });
+  vi.mocked(updateWorkspaceTarget).mockRejectedValue(new Error("toggle boom"));
+  const store = useWorkspaceStore();
+  const mutations = useTargetMutations();
+
+  await mutations.toggleTargetEnabled({
+    id: "codex",
+    enabled: true,
+    skillDir: "~/.agents/skills",
+    configPath: null,
+    mcpConfigPrefix: "",
+    mcpConfigType: "common",
+  });
+
+  expect(store.actionResults["target-toggle:codex"]).toMatchObject({
+    message: "toggle boom",
+    failed: true,
+  });
 });
 
 it("registers dsh as a user-level preset that skips configPrefix pairing", async () => {

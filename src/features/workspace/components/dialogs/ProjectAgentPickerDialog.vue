@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import DialogShell from "@shared/ui/DialogShell.vue";
+import { formatTargetName } from "../../model";
 import type { AgentTargetId, McpTransport, TargetConfigView } from "../../types";
 import type { ProjectAgentPickerDiff } from "../../composables/useProjectAgentPicker";
 
@@ -38,7 +39,9 @@ function isSseUnsupportedAgent(agent: TargetConfigView): boolean {
 }
 
 function agentButtonTitle(agent: TargetConfigView): string {
-  return isSseUnsupportedAgent(agent) ? "pi 不支持 SSE transport 的 MCP。" : "";
+  return isSseUnsupportedAgent(agent)
+    ? `${formatTargetName(agent.id)} 不支持 SSE transport 的 MCP。`
+    : "";
 }
 
 function agentButtonClass(agent: TargetConfigView): string {
@@ -88,7 +91,7 @@ function agentButtonClass(agent: TargetConfigView): string {
           type="button"
           @click="$emit('toggleAgent', agent.id)"
         >
-          <span class="manager-target-button__label">{{ agent.id }}</span>
+          <span class="manager-target-button__label">{{ formatTargetName(agent.id) }}</span>
         </button>
       </div>
     </div>

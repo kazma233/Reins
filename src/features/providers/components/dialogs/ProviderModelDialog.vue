@@ -2,6 +2,7 @@
 import { computed, reactive, ref, watch } from "vue";
 import ConfirmDialog from "@shared/ui/ConfirmDialog.vue";
 import DialogShell from "@shared/ui/DialogShell.vue";
+import AppFieldError from "@shared/ui/AppFieldError.vue";
 import AppInput from "@shared/ui/AppInput.vue";
 import AppSelect from "@shared/ui/AppSelect.vue";
 import type { ModelsDevMeta, ProviderModelInput } from "../../generated";
@@ -12,7 +13,6 @@ import {
   reasoningLevelsText,
   toggleReasoning,
 } from "../../model";
-import { useProvidersNotice } from "../../composables/useProvidersNotice";
 import ModelsDevCompleteDialog from "./ModelsDevCompleteDialog.vue";
 
 type ProviderModelDialogProps = {
@@ -29,8 +29,6 @@ const emit = defineEmits<{
   close: [];
   confirm: [model: ProviderModelInput];
 }>();
-
-const { showNotice } = useProvidersNotice();
 
 function emptyDraft() {
   return {
@@ -49,6 +47,8 @@ const draft = reactive(emptyDraft());
 const modelsDevOpen = ref(false);
 // 提交的重名提示，内容是命中的模型 ID。
 const duplicatePromptId = ref("");
+// 模型 ID 缺失的字段错误：用户开始输入就清空。
+const idError = ref<string | null>(null);
 
 // 可空布尔三态在 AppSelect 的 string 契约下用 '' 表示未设置。
 const TRI_STATE_OPTIONS = [
@@ -82,7 +82,15 @@ watch(
       Object.assign(draft, emptyDraft());
       modelsDevOpen.value = false;
       duplicatePromptId.value = "";
+      idError.value = null;
     }
+  }
+);
+
+watch(
+  () => draft.id,
+  () => {
+    idError.value = null;
   }
 );
 
@@ -90,13 +98,12 @@ watch(
 function applyModelsDevCompletion(meta: ModelsDevMeta) {
   modelsDevOpen.value = false;
   applyModelsDevMeta(draft, meta);
-  showNotice("已从 models.dev 预填空缺字段。", "success");
 }
 
 function confirm() {
   const id = draft.id.trim();
   if (!id) {
-    showNotice("请先填写模型 ID。", "error");
+    idError.value = "请先填写模型 ID。";
     return;
   }
   if (hasModelId(props.existingIds, id)) {
@@ -131,7 +138,12 @@ function confirm() {
     <div class="providers-form-grid">
       <label class="providers-field">
         <span>模型 ID</span>
-        <AppInput v-model="draft.id" data-autofocus />
+        <AppInput
+          v-model="draft.id"
+          :aria-describedby="idError ? 'provider-model-id-error' : undefined"
+          data-autofocus
+        />
+        <AppFieldError id="provider-model-id-error" :message="idError" />
       </label>
       <label class="providers-field">
         <span>显示名</span>
@@ -144,6 +156,9 @@ function confirm() {
         class="secondary-button"
         :disabled="!providerId.trim() || !draft.id.trim()"
         type="button"
+        :title="
+          !providerId.trim() || !draft.id.trim() ? '请先填写提供商 ID 与模型 ID。' : ''
+        "
         @click="modelsDevOpen = true"
       >
         从 models.dev 补全

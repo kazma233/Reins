@@ -59,6 +59,15 @@ const skillSearch = ref("");
 const showUnmatched = ref(false);
 const sourceRoot = ref("");
 const loadError = ref<string | null>(null);
+// 弹窗内操作的常驻结果：列表就地更新看不出数量变化，结果句留在底部同步按钮旁。
+// 同步流程由父级驱动，它通过 defineExpose 的 reportResult 回写同一个槽位。
+const resultMessage = ref<{ text: string; failed: boolean } | null>(null);
+
+function reportResult(result: { text: string; failed: boolean } | null) {
+  resultMessage.value = result;
+}
+
+defineExpose({ reportResult });
 
 function getSelectableTargetIds(list: SyncTargetOption[]): string[] {
   return list.filter((t) => t.enabled && !t.linkedTargetId).map((t) => t.id);
@@ -74,6 +83,7 @@ async function refreshOptions({ keepTargetSelection = false }: { keepTargetSelec
 
   loading.value = true;
   loadError.value = null;
+  resultMessage.value = null;
 
   try {
     const [targetOptions, skillResult] = await Promise.all([
@@ -203,6 +213,7 @@ function handleDeselectAllTargets() {
 
 function handleConfirm() {
   confirming.value = true;
+  reportResult(null);
   Promise.resolve(
     emit(
       "confirm",
@@ -240,14 +251,20 @@ async function handleRemoveSync() {
   removingSync.value = true;
   await runWorkspaceAction({
     action: () => removeSourceSync(source.id, Array.from(removedTargetIds)),
-    success: (result) =>
-      result.removed.length > 0
-        ? { message: `已移除 ${result.removed.length} 个软链接。` }
-        : { message: "没有需要移除的软链接。", tone: "info" },
     error: `移除 ${source.label} 同步失败。`,
-    skipReload: true,
-    after: () =>
-      dropLinks(removedTargetIds, (link) => link.matchedSourceIds.includes(source.id)),
+    onSuccess: (result) => {
+      reportResult({
+        text:
+          result.removed.length > 0
+            ? `已移除 ${result.removed.length} 个软链接。`
+            : "没有需要移除的软链接。",
+        failed: false,
+      });
+      dropLinks(removedTargetIds, (link) => link.matchedSourceIds.includes(source.id));
+    },
+    onError: (message) => {
+      reportResult({ text: message, failed: true });
+    },
   });
   removingSync.value = false;
 }
@@ -256,11 +273,14 @@ async function handleRemoveLink(targetId: string, destinationPath: string) {
   removingDestination.value = destinationPath;
   await runWorkspaceAction({
     action: () => removeTargetSkillLink(targetId, destinationPath),
-    success: (item) => ({ message: `已移除 ${item.skillName} 的软链接。` }),
     error: "移除软链接失败。",
-    skipReload: true,
-    after: () =>
-      dropLinks(new Set([targetId]), (link) => link.destinationPath === destinationPath),
+    onSuccess: (item) => {
+      reportResult({ text: `已移除 ${item.skillName} 的软链接。`, failed: false });
+      dropLinks(new Set([targetId]), (link) => link.destinationPath === destinationPath);
+    },
+    onError: (message) => {
+      reportResult({ text: message, failed: true });
+    },
   });
   removingDestination.value = null;
 }
@@ -274,11 +294,13 @@ async function handleRefreshSource() {
   refreshingSource.value = true;
   await runWorkspaceAction({
     action: () => refreshGitSkillSource(source.id),
-    success: `已从远端拉取 ${source.label}。`,
     error: `拉取 ${source.label} 失败。`,
-    skipReload: true,
-    after: () => {
+    onSuccess: () => {
+      reportResult({ text: `已从远端拉取 ${source.label}。`, failed: false });
       void refreshOptions({ keepTargetSelection: true });
+    },
+    onError: (message) => {
+      reportResult({ text: message, failed: true });
     },
   });
   refreshingSource.value = false;
@@ -296,6 +318,15 @@ async function handleRefreshSource() {
     @close="$emit('close')"
   >
     <template #actions>
+      <!-- 结果占位固定在按钮组左侧：绝对定位 + 预留 padding，
+           结果出现 / 消失都不会推动右边的按钮。 -->
+      <span
+        v-if="resultMessage"
+        :class="`manager-sync-result${resultMessage.failed ? ' manager-sync-result--failed' : ''}`"
+        role="status"
+      >
+        {{ resultMessage.text }}
+      </span>
       <button
         class="danger-button manager-sync-dialog__remove"
         :disabled="!canRemoveSync"

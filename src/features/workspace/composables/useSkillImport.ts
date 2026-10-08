@@ -25,10 +25,8 @@ export function useSkillImport() {
   const { runWorkspaceAction } = useWorkspaceAction();
 
   const skillImportDialog = reactive<SkillImportDialogState>(createSkillImportDialogState());
-  const { discoverAndFilterSkills, invalidatePreviewRequests } = useSkillPreview(
-    skillImportDialog,
-    "刷新导入预览失败。",
-  );
+  const { discoverAndFilterSkills, invalidatePreviewRequests, clearPreview, failPreview } =
+    useSkillPreview(skillImportDialog);
 
   function openImportDialog() {
     Object.assign(skillImportDialog, createSkillImportDialogState(skillImportDialog.sourceType));
@@ -43,8 +41,7 @@ export function useSkillImport() {
   async function scanGitSkills() {
     const source = buildImportSourcePreviewInput(skillImportDialog);
     // Reset preview so the loading state is visible while discovery runs.
-    skillImportDialog.preview.previewLoading = true;
-    skillImportDialog.preview.discovery = null;
+    clearPreview();
 
     await runWorkspaceAction({
       action: () =>
@@ -54,6 +51,7 @@ export function useSkillImport() {
           skillImportDialog.preview.includePathPatternsText,
         ),
       error: "发现 git skills 失败。",
+      onError: (message) => failPreview(message, "发现 git skills 失败。"),
     });
   }
 
@@ -65,8 +63,7 @@ export function useSkillImport() {
 
         skillImportDialog.sourceType = "local";
         skillImportDialog.rootPath = selected.workspaceDir;
-        skillImportDialog.preview.previewLoading = true;
-        skillImportDialog.preview.discovery = null;
+        clearPreview();
 
         await discoverAndFilterSkills(
           buildImportSourcePreviewInput(skillImportDialog),
@@ -75,6 +72,9 @@ export function useSkillImport() {
         );
       },
       error: "选择本地目录失败。",
+      // 取消选择也会走到这里（selected 为空直接返回），只有目录本身读取失败
+      // 才需要预览区域提示；两者都是「没有结果」，用同一处常驻文案表达。
+      onError: (message) => failPreview(message, "选择本地目录失败。"),
     });
   }
 
@@ -82,17 +82,16 @@ export function useSkillImport() {
     if (skillImportDialog.mode === "batch-git") {
       await runWorkspaceAction({
         action: () => importBatchGitSkills(skillImportDialog.batchYamlText),
-        success: (result) => ({
-          message: result.failedCount
-            ? `已导入 ${result.importedCount} 个 skills，${result.failedCount} 个来源失败。`
-            : `已导入 ${result.importedCount} 个 skills。`,
-          tone: result.failedCount ? "error" : "success",
-        }),
+        reload: true,
         error: "导入 skills 失败。",
-        after: (result) => {
+        onSuccess: (result) => {
           // Batch results stay in the dialog so the user can review failures.
           skillImportDialog.loading = false;
           skillImportDialog.batchResult = result;
+        },
+        onError: (message) => {
+          skillImportDialog.loading = false;
+          skillImportDialog.preview.previewError = message;
         },
       });
       return;
@@ -110,11 +109,12 @@ export function useSkillImport() {
 
         return importDiscoveredSkills(discoveryId, namePatterns, pathPatterns);
       },
-      success: (result) => ({
-        message: `已导入 ${Array.isArray(result) ? result.length : result.skills.length} 个 skills。`,
-      }),
+      reload: true,
       error: "导入 skills 失败。",
-      after: () => closeImportDialog(),
+      onSuccess: () => closeImportDialog(),
+      onError: (message) => {
+        skillImportDialog.preview.previewError = message;
+      },
     });
   }
 

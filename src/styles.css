@@ -27,7 +27,8 @@
   --control-height: 36px;
   --button-height: 36px;
   --z-dialog: 100;
-  --z-toast: 1000;
+  /* 气泡挂在 body 上，需要盖过弹窗 */
+  --z-tooltip: 1000;
   color: var(--color-ink);
   background: var(--color-canvas);
   font-family: var(--font-base);

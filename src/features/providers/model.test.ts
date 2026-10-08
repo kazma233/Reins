@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
+import { agentDisplayName } from "@shared/lib/agent-labels";
 import type { ProviderAppEntry, ProviderAppState, ProviderView, ProvidersState } from "./generated";
 import {
+  APP_LABELS,
   applyBlockers,
   applyCandidates,
   emptyModelForm,
@@ -519,5 +521,13 @@ describe("providerSyncPlan", () => {
     const target = provider({ id: "glm", models: [model("glm-4.5")] });
     const plan = providerSyncPlan(stateOf([appState()], [target]), target);
     expect(plan).toEqual([]);
+  });
+});
+
+describe("APP_LABELS", () => {
+  it("uses the same product names as targets and session sources", () => {
+    for (const [appId, label] of Object.entries(APP_LABELS)) {
+      expect(label).toBe(agentDisplayName(appId));
+    }
   });
 });

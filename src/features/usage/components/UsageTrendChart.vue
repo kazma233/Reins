@@ -2,6 +2,7 @@
 import { computed, ref } from "vue";
 import { useElementSize } from "@vueuse/core";
 import { formatTokenCount } from "@shared/lib/format";
+import { clampCenteredOffset } from "@shared/lib/tooltip-position";
 import { niceCeil } from "../model";
 import "./usage-trend-chart.css";
 
@@ -106,10 +107,21 @@ const hoverX = computed(() =>
   hoverIndex.value === null ? null : xAt(hoverIndex.value)
 );
 
-// tooltip 跟随悬停竖线,viewBox 已是像素坐标,直接定位
-const tooltipLeft = computed(() =>
-  hoverX.value === null ? 0 : hoverX.value
-);
+// tooltip 跟随悬停竖线,viewBox 已是像素坐标,直接定位。
+// 气泡以光标线居中（CSS translateX(-50%)），悬停到最左/最右时会被容器边缘裁掉，
+// 因此把中心点夹取到容器内；宽度实测，首帧按 CSS 的 min-width 兜底。
+const CHART_TOOLTIP_MIN_WIDTH = 148;
+const tooltipEl = ref<HTMLElement | null>(null);
+const { width: tooltipWidth } = useElementSize(tooltipEl);
+
+const tooltipLeft = computed(() => {
+  if (hoverX.value === null) return 0;
+  return clampCenteredOffset({
+    center: hoverX.value,
+    bubbleWidth: Math.max(tooltipWidth.value, CHART_TOOLTIP_MIN_WIDTH),
+    containerWidth: viewWidth.value,
+  });
+});
 </script>
 
 <template>
@@ -179,6 +191,7 @@ const tooltipLeft = computed(() =>
 
     <div
       v-if="hoverIndex !== null"
+      ref="tooltipEl"
       class="usage-chart__tooltip"
       :style="{ left: `${tooltipLeft}px` }"
     >

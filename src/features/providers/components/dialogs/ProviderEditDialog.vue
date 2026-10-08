@@ -2,6 +2,7 @@
 import { computed, reactive, ref, watch } from "vue";
 import ConfirmDialog from "@shared/ui/ConfirmDialog.vue";
 import DialogShell from "@shared/ui/DialogShell.vue";
+import AppFieldError from "@shared/ui/AppFieldError.vue";
 import AppInput from "@shared/ui/AppInput.vue";
 import AppSelect from "@shared/ui/AppSelect.vue";
 import AppSecretInput from "@shared/ui/AppSecretInput.vue";
@@ -15,7 +16,6 @@ import {
   toggleReasoning,
   type ProviderFormState,
 } from "../../model";
-import { useProvidersNotice } from "../../composables/useProvidersNotice";
 import ModelsDevCompleteDialog from "./ModelsDevCompleteDialog.vue";
 import ProviderFetchModelsDialog from "./ProviderFetchModelsDialog.vue";
 import ProviderModelDialog from "./ProviderModelDialog.vue";
@@ -39,8 +39,6 @@ const emit = defineEmits<{
   close: [];
   confirm: [];
 }>();
-
-const { showNotice } = useProvidersNotice();
 
 // models.dev 补全的查询状态：弹窗打开后自行发请求，回填落回对应模型行。
 const modelsDevDialog = reactive({
@@ -81,6 +79,43 @@ const dialogTitle = computed(() => {
   // 新增第二步提供商已落库，但流程仍是「新增」，标题不切到编辑。
   return props.step === 1 ? "新增提供商" : "新增提供商 · 模型目录";
 });
+
+// 新增流程第一步的成功结果没有弹窗外的反馈位置：进入第二步后把已保存的
+// 提供商 ID 常驻在弹窗内，提示当前处于哪一步、接下来做什么。
+const flowHint = computed(() => {
+  if (props.creating && props.step === 2 && props.form.originalProviderId) {
+    return `提供商 ${props.form.originalProviderId} 已保存，请继续设置模型目录。`;
+  }
+  return null;
+});
+
+// models.dev 补全的查询键：已保存的提供商用落库 ID（originalProviderId），
+// 新增第一步还没保存时退回表单 ID。
+const modelsDevProviderId = computed(() =>
+  (props.form.originalProviderId ?? props.form.providerId).trim()
+);
+
+type ProviderFormErrorField = keyof NonNullable<ProviderFormState["errors"]>;
+
+// 字段错误只在用户改到该字段时消失：改完重新具备提交条件。
+function clearFieldError(field: ProviderFormErrorField) {
+  const errors = props.form.errors;
+  if (errors?.[field]) {
+    errors[field] = undefined;
+  }
+}
+
+watch(() => props.form.providerId, () => clearFieldError("providerId"));
+watch(() => props.form.label, () => clearFieldError("label"));
+watch(() => props.form.baseUrl, () => clearFieldError("baseUrl"));
+watch(
+  () => props.form.models.length,
+  (length) => {
+    if (length > 0) {
+      clearFieldError("models");
+    }
+  }
+);
 
 watch(
   () => props.open,
@@ -130,12 +165,10 @@ function removeModel(index: number) {
 }
 
 function openModelsDevDialog(row: ProviderFormState["models"][number]) {
-  // models.dev 补全只按提供商名 + 模型 ID 查公共目录；已保存提供商用落库 ID
-  // （originalProviderId），新增第一步还没保存时退回表单 ID。
-  const providerId = (props.form.originalProviderId ?? props.form.providerId).trim();
+  // 缺失查询键时按钮已禁用，这里再做一次防御非按钮路径的调用。
+  const providerId = modelsDevProviderId.value;
   const modelId = row.id.trim();
   if (!providerId || !modelId) {
-    showNotice("请先填写提供商 ID 与模型 ID。", "error");
     return;
   }
   modelsDevDialog.rowKey = row.rowKey;
@@ -150,7 +183,6 @@ function applyModelsDevCompletion(meta: ModelsDevMeta) {
   modelsDevDialog.open = false;
   if (row) {
     applyModelsDevMeta(row, meta);
-    showNotice("已从 models.dev 预填空缺字段。", "success");
   }
 }
 </script>
@@ -171,6 +203,8 @@ function applyModelsDevCompletion(meta: ModelsDevMeta) {
       </button>
     </template>
 
+    <p v-if="flowHint" class="providers-section-hint">{{ flowHint }}</p>
+
     <div v-if="showMeta" class="providers-form-grid">
       <label class="providers-field">
         <span>
@@ -179,9 +213,11 @@ function applyModelsDevCompletion(meta: ModelsDevMeta) {
         </span>
         <AppInput
           :model-value="form.providerId"
+          :aria-describedby="form.errors?.providerId ? 'provider-id-error' : undefined"
           :disabled="loading || form.originalProviderId !== null"
           @update:model-value="form.providerId = normalizeProviderIdInput(String($event))"
         />
+        <AppFieldError id="provider-id-error" :message="form.errors?.providerId ?? null" />
         <small class="providers-field__hint">
           唯一标识，保存后不可修改（纯本地标识，Key 存同一份 providers.yaml 的条目里）。只允许小写字母、数字和 `-`，不能以
           `reins-` 开头。
@@ -193,7 +229,12 @@ function applyModelsDevCompletion(meta: ModelsDevMeta) {
           名称
           <span aria-hidden="true"> *</span>
         </span>
-        <AppInput v-model="form.label" :disabled="loading" />
+        <AppInput
+          v-model="form.label"
+          :aria-describedby="form.errors?.label ? 'provider-label-error' : undefined"
+          :disabled="loading"
+        />
+        <AppFieldError id="provider-label-error" :message="form.errors?.label ?? null" />
         <small class="providers-field__hint">提供商显示名，可随时修改。</small>
       </label>
 
@@ -213,7 +254,12 @@ function applyModelsDevCompletion(meta: ModelsDevMeta) {
           Base URL
           <span aria-hidden="true"> *</span>
         </span>
-        <AppInput v-model="form.baseUrl" :disabled="loading" />
+        <AppInput
+          v-model="form.baseUrl"
+          :aria-describedby="form.errors?.baseUrl ? 'provider-base-url-error' : undefined"
+          :disabled="loading"
+        />
+        <AppFieldError id="provider-base-url-error" :message="form.errors?.baseUrl ?? null" />
         <small class="providers-field__hint">聚合提供商的 API 根地址，例如 https://openrouter.ai/api/v1。</small>
       </label>
 
@@ -239,6 +285,7 @@ function applyModelsDevCompletion(meta: ModelsDevMeta) {
       <p class="providers-section-hint">
         元数据（上下文窗口、最大输出、图像、思考等级）会随应用写入目标工具；缺失时对应工具可能展示能力警告。
       </p>
+      <AppFieldError id="provider-models-error" :message="form.errors?.models ?? null" />
     </div>
 
     <div v-if="showModels" class="providers-model-list">
@@ -252,8 +299,13 @@ function applyModelsDevCompletion(meta: ModelsDevMeta) {
           <div class="providers-card__actions">
             <button
               class="secondary-button"
-              :disabled="loading"
+              :disabled="loading || !modelsDevProviderId || !row.id.trim()"
               type="button"
+              :title="
+                modelsDevProviderId && row.id.trim()
+                  ? ''
+                  : '请先填写提供商 ID 与模型 ID。'
+              "
               @click="openModelsDevDialog(row)"
             >
               从 models.dev 补全

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, provide, ref, watch } from "vue";
+import { computed, onMounted, onUnmounted, provide, ref, watch } from "vue";
 import { storeToRefs } from "pinia";
 import { refDebounced } from "@vueuse/core";
 import "./styles/workspace.css";
@@ -17,8 +17,7 @@ import { ALL_SOURCES, isSourceApp, type SourceSelection } from "./source-app";
 import type { SessionPage, SourceStatus } from "./types";
 import { extractErrorMessage } from "@shared/lib/errors";
 import { createRequestGuard } from "@shared/lib/request-guard";
-import type { AppToastNotice } from "@shared/ui/AppToast.vue";
-import AppToast from "@shared/ui/AppToast.vue";
+import AppLoadError from "@shared/ui/AppLoadError.vue";
 
 const SESSION_PAGE_SIZE = 20;
 const SESSION_QUERY_DEBOUNCE_MS = 200;
@@ -50,7 +49,11 @@ const debouncedSessionQuery = refDebounced(
 );
 const sessionListResultKey = ref("");
 const reverseSessions = ref(false);
-const notice = ref<AppToastNotice | null>(null);
+// 错误态常驻在各自出错区域，直到重试成功或下一次加载开始。
+const sourceError = ref<string | null>(null);
+const listError = ref<string | null>(null);
+const detailError = ref<string | null>(null);
+const loadMoreError = ref<string | null>(null);
 // Force-trigger the session list watcher once after source detection completes,
 // so the list actually loads when the initial selectedSource happens to equal
 // the store default (e.g. "codex") — setSelectedSource no-ops on equal values,
@@ -67,6 +70,11 @@ provide("sessionScrollContainer", contentPanelRef);
 const sessionListRequestKeyRef = ref("");
 const sessionListRequestVersionRef = ref(0);
 const detailRequestGuard = createRequestGuard();
+// 请求 key 只能区分同一实例内的新旧请求，卸载后仍需阻止在途响应写回 store。
+let listRequestCancelled = false;
+onUnmounted(() => {
+  listRequestCancelled = true;
+});
 
 const selectedSummary = computed(() => {
   if (!selectedSessionKey.value) {
@@ -90,18 +98,6 @@ const selectedSummary = computed(() => {
         retainedSummary.transcriptPath === selectedSessionKey.value;
   return retainedMatches ? retainedSummary : null;
 });
-
-function clearNotice() {
-  notice.value = null;
-}
-
-function showNotice(message: string, tone: AppToastNotice["tone"]) {
-  notice.value = {
-    id: Date.now(),
-    message,
-    tone
-  };
-}
 
 function nextSessionListRequestKey(
   source: SourceSelection,
@@ -130,72 +126,75 @@ function applySessionPage(nextPage: SessionPage) {
 
 // --- bootstrap: detect sources on mount ---
 
-onMounted(async () => {
+async function retryDetectSources() {
   sessionStore.setLoadingSources(true);
-  clearNotice();
+  sourceError.value = null;
 
   try {
     const nextSources = await detectSources();
     sessionStore.setSources(nextSources);
   } catch (error) {
-    showNotice(extractErrorMessage(error, "加载来源失败。"), "error");
+    sourceError.value = extractErrorMessage(error, "加载来源失败。");
   } finally {
     sessionStore.setLoadingSources(false);
-    // Bump after source detection so the watcher fires even when the initial
-    // source equals the store default (setSelectedSource no-ops on equal values).
-    bootstrapToken.value += 1;
   }
+}
+
+onMounted(async () => {
+  await retryDetectSources();
+  // Bump after source detection so the watcher fires even when the initial
+  // source equals the store default (setSelectedSource no-ops on equal values).
+  bootstrapToken.value += 1;
 });
 
 // --- load sessions when source / query / order changes ---
 
-watch(
-  [selectedSource, debouncedSessionQuery, reverseSessions, bootstrapToken],
-  ([source, query, reverse], _old, onCleanup) => {
-    let cancelled = false;
-    const requestKey = nextSessionListRequestKey(source, query, reverse);
-    sessionListRequestKeyRef.value = requestKey;
+async function reloadSessionList() {
+  const source = selectedSource.value;
+  const query = debouncedSessionQuery.value;
+  const reverse = reverseSessions.value;
+  const requestKey = nextSessionListRequestKey(source, query, reverse);
+  sessionListRequestKeyRef.value = requestKey;
 
-    async function loadSessions() {
-      sessionStore.setLoadingSessions(true);
-      loadingMoreSessions.value = false;
-      clearNotice();
+  const isStale = () =>
+    listRequestCancelled || sessionListRequestKeyRef.value !== requestKey;
 
-      try {
-        const nextPage = await listSessions(source, {
-          offset: 0,
-          limit: SESSION_PAGE_SIZE,
-          query,
-          reverse,
-          refresh: false
-        });
+  sessionStore.setLoadingSessions(true);
+  loadingMoreSessions.value = false;
+  listError.value = null;
+  loadMoreError.value = null;
 
-        if (cancelled || sessionListRequestKeyRef.value !== requestKey) {
-          return;
-        }
+  try {
+    const nextPage = await listSessions(source, {
+      offset: 0,
+      limit: SESSION_PAGE_SIZE,
+      query,
+      reverse,
+      refresh: false
+    });
 
-        applySessionPage(nextPage);
-        sessionListResultKey.value = requestKey;
-      } catch (error) {
-        if (cancelled || sessionListRequestKeyRef.value !== requestKey) {
-          return;
-        }
-        showNotice(
-          extractErrorMessage(error, "加载会话列表失败。"),
-          "error"
-        );
-      } finally {
-        if (!cancelled && sessionListRequestKeyRef.value === requestKey) {
-          sessionStore.setLoadingSessions(false);
-        }
-      }
+    if (isStale()) {
+      return;
     }
 
-    void loadSessions();
+    applySessionPage(nextPage);
+    sessionListResultKey.value = requestKey;
+  } catch (error) {
+    if (isStale()) {
+      return;
+    }
+    listError.value = extractErrorMessage(error, "加载会话列表失败。");
+  } finally {
+    if (!isStale()) {
+      sessionStore.setLoadingSessions(false);
+    }
+  }
+}
 
-    onCleanup(() => {
-      cancelled = true;
-    });
+watch(
+  [selectedSource, debouncedSessionQuery, reverseSessions, bootstrapToken],
+  () => {
+    void reloadSessionList();
   }
 );
 
@@ -212,6 +211,7 @@ watch(
   (_new, _old, onCleanup) => {
     let cancelled = false;
     const requestId = detailRequestGuard.next();
+    detailError.value = null;
 
     async function loadDetail() {
       if (!selectedSessionKey.value) {
@@ -233,7 +233,6 @@ watch(
       }
 
       sessionStore.setLoadingDetail(true);
-      clearNotice();
       sessionStore.setSessionOverview({
         summary,
         sourcePaths: [summary.transcriptPath],
@@ -258,9 +257,9 @@ watch(
         if (cancelled || !detailRequestGuard.isLatest(requestId)) {
           return;
         }
-        showNotice(
-          extractErrorMessage(error, "加载会话详情失败。"),
-          "error"
+        detailError.value = extractErrorMessage(
+          error,
+          "加载会话详情失败。"
         );
       } finally {
         if (!cancelled && detailRequestGuard.isLatest(requestId)) {
@@ -279,6 +278,10 @@ watch(
 
 // --- user actions ---
 
+function retryLoadDetail() {
+  detailReloadToken.value += 1;
+}
+
 async function handleLoadMoreSessions() {
   if (loadingSessions.value || loadingMoreSessions.value || !hasMoreSessions.value) {
     return;
@@ -294,6 +297,7 @@ async function handleLoadMoreSessions() {
     return;
   }
 
+  loadMoreError.value = null;
   loadingMoreSessions.value = true;
 
   try {
@@ -318,7 +322,7 @@ async function handleLoadMoreSessions() {
     if (sessionListRequestKeyRef.value !== requestKey) {
       return;
     }
-    showNotice(extractErrorMessage(error, "加载更多会话失败。"), "error");
+    loadMoreError.value = extractErrorMessage(error, "加载更多会话失败。");
   } finally {
     if (sessionListRequestKeyRef.value === requestKey) {
       loadingMoreSessions.value = false;
@@ -344,7 +348,8 @@ async function handleRefresh() {
   refreshing.value = true;
   sessionStore.setLoadingSessions(true);
   loadingMoreSessions.value = false;
-  clearNotice();
+  listError.value = null;
+  loadMoreError.value = null;
   detailRequestGuard.invalidate();
   detailReloadToken.value += 1;
 
@@ -375,7 +380,7 @@ async function handleRefresh() {
     if (sessionListRequestKeyRef.value !== requestKey) {
       return;
     }
-    showNotice(extractErrorMessage(error, "刷新会话失败。"), "error");
+    listError.value = extractErrorMessage(error, "刷新会话失败。");
   } finally {
     if (sessionListRequestKeyRef.value === requestKey) {
       sessionStore.setLoadingSessions(false);
@@ -417,9 +422,22 @@ async function handleSessionDeleted() {
             @refresh="handleRefresh"
           />
         </header>
+        <AppLoadError
+          v-if="sourceError"
+          :message="sourceError"
+          :retrying="loadingSources"
+          @retry="retryDetectSources"
+        />
       </div>
+      <AppLoadError
+        v-if="listError"
+        :message="listError"
+        :retrying="loadingSessions"
+        @retry="reloadSessionList"
+      />
       <SessionList
         :has-more="hasMoreSessions"
+        :load-more-error="loadMoreError"
         :loading="loadingSessions"
         :loading-more="loadingMoreSessions"
         :query="sessionQuery"
@@ -437,12 +455,18 @@ async function handleSessionDeleted() {
       />
     </aside>
     <section ref="contentPanelRef" class="content-panel">
+      <AppLoadError
+        v-if="detailError"
+        :message="detailError"
+        :retrying="loadingDetail"
+        @retry="retryLoadDetail"
+      />
       <SessionDetail
+        v-else
         :loading="loadingDetail"
         :overview="sessionOverview"
         @deleted="handleSessionDeleted"
       />
     </section>
   </main>
-  <AppToast :notice="notice" @close="clearNotice" />
 </template>

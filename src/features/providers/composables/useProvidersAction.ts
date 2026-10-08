@@ -1,58 +1,44 @@
 import { extractErrorMessage } from "@shared/lib/errors";
-import type { AppToastNotice } from "@shared/ui/AppToast.vue";
 import type { ProviderAppId } from "../generated";
 import { useProvidersStore } from "../stores/providers";
-import { useProvidersNotice } from "./useProvidersNotice";
 import { useProvidersState } from "./useProvidersState";
-
-export type ProvidersActionSuccessNotice = {
-  message: string;
-  tone?: AppToastNotice["tone"];
-};
 
 export type RunProvidersActionOptions<T> = {
   action: () => Promise<T>;
-  // 带 success 的操作是写操作：先刷新状态再弹 toast，保证界面不展示
-  // 过期数据。省略 success 表示副作用任务（预览、拉取列表等）。
-  success?: string | ((result: T) => ProvidersActionSuccessNotice);
+  // 错误对象本身没有可读消息时的兜底文案。
   error?: string;
-  after?: (result: T) => void;
-  // 写操作只影响单个工具时指定它：只重读该工具卡片，其余卡片与整页
-  // 保持挂载，不做全量重读。
-  refreshApp?: ProviderAppId;
+  // 失败文案落到调用方的内联错误槽；不给则不产生任何界面反馈。
+  onError?: (message: string) => void;
+  // 成功后回调，在刷新之后执行：写操作的收尾（关弹窗、进入下一步）放这里。
+  onSuccess?: (result: T) => void;
+  // 写操作：action 成功后刷新状态。
+  reload?: boolean;
+  // 只重读单个工具卡片（隐式代表 reload），其余卡片与整页保持挂载。
+  reloadApp?: ProviderAppId;
 };
 
 export function useProvidersAction() {
   const store = useProvidersStore();
-  const { showNotice, clearNotice } = useProvidersNotice();
   const { reloadProvidersState, reloadProviderAppState } = useProvidersState();
 
   async function runProvidersAction<T>(options: RunProvidersActionOptions<T>): Promise<void> {
     store.setRunningAction(true);
-    clearNotice();
 
     try {
       const result = await options.action();
 
-      if (options.success !== undefined) {
-        if (options.refreshApp) {
-          await reloadProviderAppState(options.refreshApp);
+      if (options.reload || options.reloadApp) {
+        if (options.reloadApp) {
+          await reloadProviderAppState(options.reloadApp);
         } else {
-          await reloadProvidersState({ preserveNotice: true });
+          await reloadProvidersState();
         }
       }
 
-      options.after?.(result);
-
-      if (options.success !== undefined) {
-        const notice =
-          typeof options.success === "function"
-            ? options.success(result)
-            : { message: options.success };
-        showNotice(notice.message, notice.tone ?? "success");
-      }
+      options.onSuccess?.(result);
     } catch (error) {
-      showNotice(extractErrorMessage(error, options.error ?? "操作失败。"), "error");
+      const message = extractErrorMessage(error, options.error ?? "操作失败。");
+      options.onError?.(message);
     } finally {
       store.setRunningAction(false);
     }

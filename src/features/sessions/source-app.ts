@@ -1,17 +1,8 @@
+import { agentDisplayName } from "@shared/lib/agent-labels";
 import type { SourceApp } from "./types";
 
-const SOURCE_APP_LABELS: Record<SourceApp, string> = {
-  codex: "Codex",
-  claude_code: "Claude Code",
-  opencode: "OpenCode",
-  pi: "Pi",
-  grokbuild: "Grok Build",
-  zcode: "ZCode",
-  dsh: "DeepSeek Harness",
-};
-
 export function formatSourceAppName(app: SourceApp): string {
-  return SOURCE_APP_LABELS[app] ?? app;
+  return agentDisplayName(app);
 }
 
 // 列表请求的来源选择：单一来源，或跨来源合并视图（全局分页）。

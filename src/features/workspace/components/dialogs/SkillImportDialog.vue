@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import DialogShell from "@shared/ui/DialogShell.vue";
+import AppFieldError from "@shared/ui/AppFieldError.vue";
 import BatchGitImportResultList from "../BatchGitImportResultList.vue";
 import SkillDiscoveryPreview from "../SkillDiscoveryPreview.vue";
 import type { SkillDiscoveryResult } from "../../types";
@@ -9,6 +10,7 @@ import type { SkillImportDialogState } from "../../model";
 type SkillImportDialogProps = {
   dialogState: SkillImportDialogState;
   loading: boolean;
+  error: string | null;
 };
 
 const props = defineProps<SkillImportDialogProps>();
@@ -120,6 +122,8 @@ const summaryText = computed(() =>
     </template>
 
     <div class="manager-import-shell manager-import-shell--compact">
+      <AppFieldError :message="error" />
+
       <div class="manager-stack">
         <span class="manager-field__label">导入模式</span>
         <div class="manager-segmented">
@@ -263,6 +267,7 @@ const summaryText = computed(() =>
       <SkillDiscoveryPreview
         :discovery="dialogState.preview.discovery"
         :empty-text="dialogState.preview.previewLoading ? '正在读取来源...' : '先配置导入来源。'"
+        :error="dialogState.preview.previewError"
         :loading="dialogState.preview.previewLoading"
       />
     </template>
