@@ -153,7 +153,7 @@ const chartSeries = computed(() =>
             }`"
             :title="`${formatSourceAppName(item.sourceApp)} · 窗口内消耗 ${formatTokenCount(
               item.tokens
-            )} · 有用量会话 ${item.sessionCount}`"
+            )} · 有消耗的会话 ${item.sessionCount}`"
             @click="toggleSource(item.sourceApp)"
           >
             <span class="usage-source-chip__dot" :style="{ background: item.color }" />

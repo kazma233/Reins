@@ -465,7 +465,7 @@ watch(
           <dd>{{ overview.summary.cwd ?? "未知" }}</dd>
         </div>
         <div v-if="overview.summary.tokenUsage" class="summary-grid__wide">
-          <dt>Token 用量</dt>
+          <dt>Token 消耗</dt>
           <dd class="token-usage-detail">
             <span>命中率 {{ cacheHitRate(overview.summary.tokenUsage) }}</span>
             <span>
