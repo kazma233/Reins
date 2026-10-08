@@ -16,7 +16,7 @@ use crate::providers::commands::{
 use crate::providers::config::ProviderConfigStore;
 use crate::providers::types::{
     ApplyProviderInput, ProviderAppEntryStatus, ProviderAppId, ProviderModelInput,
-    ProviderProtocol, ProviderUpsertInput, ReasoningLevel,
+    ProviderProtocol, ProviderUpsertInput, ProviderWriteMode, ReasoningLevel,
 };
 use crate::test_support::{TestDir, TestEnvGuard};
 
@@ -67,6 +67,7 @@ impl Isolated {
     ) -> Result<()> {
         self.store.upsert(ProviderUpsertInput {
             provider_id: id.to_string(),
+            mode: ProviderWriteMode::Upsert,
             label: format!("Label {id}"),
             protocol,
             base_url: base_url.to_string(),
@@ -137,6 +138,7 @@ impl Isolated {
 fn provider_input(id: &str, protocol: ProviderProtocol, base_url: &str) -> ProviderUpsertInput {
     ProviderUpsertInput {
         provider_id: id.to_string(),
+        mode: ProviderWriteMode::Upsert,
         label: format!("Label {id}"),
         protocol,
         base_url: base_url.to_string(),
@@ -378,6 +380,7 @@ fn codex_apply_writes_and_clears_model_context_window() -> Result<()> {
     // 元数据清空后替换应用不再写该键，避免残留旧窗口。
     isolated.store.upsert(ProviderUpsertInput {
         provider_id: "p1".to_string(),
+        mode: ProviderWriteMode::Upsert,
         label: "Label p1".to_string(),
         protocol: ProviderProtocol::OpenaiResponses,
         base_url: "https://p1.test/v1".to_string(),
@@ -905,6 +908,7 @@ fn opencode_apply_omits_incomplete_limit_and_narrows_modalities() -> Result<()> 
     fs::write(&path, json!({}).to_string())?;
     isolated.store.upsert(ProviderUpsertInput {
         provider_id: "p1".to_string(),
+        mode: ProviderWriteMode::Upsert,
         label: "Label p1".to_string(),
         protocol: ProviderProtocol::OpenaiChatCompletions,
         base_url: "https://p1.test/v1".to_string(),
@@ -1199,6 +1203,7 @@ fn pi_apply_writes_thinking_level_map_from_model_levels() -> Result<()> {
     let isolated = Isolated::new()?;
     isolated.store.upsert(ProviderUpsertInput {
         provider_id: "p1".to_string(),
+        mode: ProviderWriteMode::Upsert,
         label: "Label p1".to_string(),
         protocol: ProviderProtocol::OpenaiResponses,
         base_url: "https://p1.test/v1".to_string(),
@@ -1421,6 +1426,7 @@ fn grok_apply_omits_absent_model_metadata() -> Result<()> {
     let isolated = Isolated::new()?;
     isolated.store.upsert(ProviderUpsertInput {
         provider_id: "p1".to_string(),
+        mode: ProviderWriteMode::Upsert,
         label: "Label p1".to_string(),
         protocol: ProviderProtocol::OpenaiChatCompletions,
         base_url: "https://p1.test/v1".to_string(),
@@ -1773,6 +1779,7 @@ fn dsh_apply_writes_reasoning_false_for_non_reasoning_model() -> Result<()> {
     let isolated = Isolated::new()?;
     isolated.store.upsert(ProviderUpsertInput {
         provider_id: "p1".to_string(),
+        mode: ProviderWriteMode::Upsert,
         label: "Label p1".to_string(),
         protocol: ProviderProtocol::OpenaiChatCompletions,
         base_url: "https://p1.test/v1".to_string(),

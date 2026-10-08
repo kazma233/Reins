@@ -6,6 +6,8 @@ import {
   applyBlockers,
   applyCandidates,
   emptyModelForm,
+  emptyProviderForm,
+  formToInput,
   entriesForProvider,
   hasModelId,
   initialApplySelection,
@@ -19,6 +21,7 @@ import {
   reasoningLevelOptions,
   reapplyProvider,
   unwrittenModelFieldsText,
+  validateProviderForm,
 } from "./model";
 
 function appState(overrides: Partial<ProviderAppState> = {}): ProviderAppState {
@@ -529,5 +532,69 @@ describe("APP_LABELS", () => {
     for (const [appId, label] of Object.entries(APP_LABELS)) {
       expect(label).toBe(agentDisplayName(appId));
     }
+  });
+});
+
+describe("validateProviderForm", () => {
+  function form(overrides: Partial<ReturnType<typeof emptyProviderForm>> = {}) {
+    return {
+      ...emptyProviderForm(),
+      label: "Label",
+      baseUrl: "https://a.test/v1",
+      ...overrides,
+    };
+  }
+
+  it("rejects a new provider that reuses an existing id", () => {
+    const errors = validateProviderForm(form({ providerId: "fanggeek" }), {
+      allowEmptyModels: true,
+      existingProviderIds: ["fanggeek"],
+    });
+
+    expect(errors.providerId).toBe("该提供商 ID 已存在，请换一个。");
+  });
+
+  it("compares the normalized id, not the raw input", () => {
+    // 输入侧会归一化，这里兜住绕过输入归一化的调用（大小写、下划线）
+    const errors = validateProviderForm(form({ providerId: "FangGeek" }), {
+      allowEmptyModels: true,
+      existingProviderIds: ["fanggeek"],
+    });
+
+    expect(errors.providerId).toBeDefined();
+  });
+
+  it("lets an edit keep its own id", () => {
+    const errors = validateProviderForm(
+      form({ originalProviderId: "fanggeek", providerId: "fanggeek" }),
+      { allowEmptyModels: false, existingProviderIds: ["fanggeek"] },
+    );
+
+    expect(errors.providerId).toBeUndefined();
+  });
+
+  it("skips the model requirement only while creating the first step", () => {
+    expect(
+      validateProviderForm(form({ providerId: "new-one" }), {
+        allowEmptyModels: true,
+        existingProviderIds: [],
+      }).models,
+    ).toBeUndefined();
+
+    expect(
+      validateProviderForm(form({ providerId: "new-one" }), {
+        allowEmptyModels: false,
+        existingProviderIds: [],
+      }).models,
+    ).toBe("至少添加一个模型。");
+  });
+});
+
+describe("formToInput", () => {
+  it("carries the caller's write intent", () => {
+    const state = { ...emptyProviderForm(), providerId: "p1", label: "L", baseUrl: "https://a.test/v1" };
+
+    expect(formToInput(state, "create").mode).toBe("create");
+    expect(formToInput(state, "update").mode).toBe("update");
   });
 });

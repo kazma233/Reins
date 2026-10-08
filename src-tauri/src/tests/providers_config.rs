@@ -6,13 +6,15 @@ use anyhow::Result;
 
 use crate::providers::config::ProviderConfigStore;
 use crate::providers::types::{
-    ProviderModelInput, ProviderProtocol, ProviderUpsertInput, ReasoningLevel,
+    ProviderModelInput, ProviderProtocol, ProviderUpsertInput, ProviderWriteMode,
+    ReasoningLevel,
 };
 use crate::test_support::TestDir;
 
 fn input(id: &str) -> ProviderUpsertInput {
     ProviderUpsertInput {
         provider_id: id.to_string(),
+        mode: ProviderWriteMode::Upsert,
         label: format!("Label {id}"),
         protocol: ProviderProtocol::OpenaiChatCompletions,
         base_url: format!("https://{id}.test/v1"),
@@ -137,5 +139,59 @@ fn missing_file_loads_as_empty() -> Result<()> {
     let store = ProviderConfigStore::at(dir.path().to_path_buf());
     assert!(store.load()?.is_empty());
     assert!(!store.config_path().exists());
+    Ok(())
+}
+
+#[test]
+fn create_mode_rejects_an_existing_provider() -> Result<()> {
+    let dir = TestDir::new("providers-create-conflict")?;
+    let store = ProviderConfigStore::at(dir.path().to_path_buf());
+    store.upsert(input("p1"))?;
+
+    let mut create = input("p1");
+    create.mode = ProviderWriteMode::Create;
+    create.label = "覆盖后的名字".to_string();
+
+    assert!(store.upsert(create).is_err(), "新增同 ID 的平台应被拒绝");
+    let providers = store.load()?;
+    assert_eq!(providers["p1"].label, "Label p1", "原有平台不应被新增覆盖");
+    Ok(())
+}
+
+#[test]
+fn create_mode_accepts_a_new_provider() -> Result<()> {
+    let dir = TestDir::new("providers-create-new")?;
+    let store = ProviderConfigStore::at(dir.path().to_path_buf());
+
+    let mut create = input("p2");
+    create.mode = ProviderWriteMode::Create;
+
+    assert_eq!(store.upsert(create)?, "p2");
+    Ok(())
+}
+
+#[test]
+fn update_mode_requires_an_existing_provider() -> Result<()> {
+    let dir = TestDir::new("providers-update-missing")?;
+    let store = ProviderConfigStore::at(dir.path().to_path_buf());
+
+    let mut update = input("missing");
+    update.mode = ProviderWriteMode::Update;
+
+    assert!(store.upsert(update).is_err(), "更新不存在的平台应被拒绝");
+    Ok(())
+}
+
+#[test]
+fn default_upsert_mode_still_replaces_in_place() -> Result<()> {
+    let dir = TestDir::new("providers-upsert-default")?;
+    let store = ProviderConfigStore::at(dir.path().to_path_buf());
+    store.upsert(input("p1"))?;
+
+    let mut next = input("p1");
+    next.label = "改名后的平台".to_string();
+    store.upsert(next)?;
+
+    assert_eq!(store.load()?["p1"].label, "改名后的平台");
     Ok(())
 }

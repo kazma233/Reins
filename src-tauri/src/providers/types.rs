@@ -340,11 +340,25 @@ pub(crate) struct ProviderModelInput {
     pub(crate) reasoning_levels: Option<Vec<ReasoningLevel>>,
 }
 
+// 调用方的写入意图：新增时拒绝覆盖同名记录，更新时要求记录已存在。
+// 不传按 upsert 处理（既有内部调用方保持原语义）。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../src/features/providers/generated/")]
+pub(crate) enum ProviderWriteMode {
+    #[default]
+    Upsert,
+    Create,
+    Update,
+}
+
 #[derive(Clone, Debug, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export, export_to = "../../src/features/providers/generated/")]
 pub(crate) struct ProviderUpsertInput {
     pub(crate) provider_id: String,
+    #[serde(default)]
+    pub(crate) mode: ProviderWriteMode,
     pub(crate) label: String,
     pub(crate) protocol: ProviderProtocol,
     pub(crate) base_url: String,

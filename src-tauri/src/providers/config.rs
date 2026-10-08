@@ -7,7 +7,7 @@ use anyhow::{Context, Result, bail};
 use dirs::config_dir;
 
 use super::types::{
-    ProviderModelInput, ProviderModelRecord, ProviderUpsertInput, RawProvider,
+    ProviderModelInput, ProviderModelRecord, ProviderUpsertInput, ProviderWriteMode, RawProvider,
     RawProvidersDocument, ResolvedProvider,
 };
 use crate::support::fs::write_atomic;
@@ -176,6 +176,7 @@ impl ProviderConfigStore {
 
     pub(crate) fn upsert(&self, input: ProviderUpsertInput) -> Result<String> {
         let provider_id = normalize_provider_id(&input.provider_id)?;
+        let mode = input.mode;
         let label = input.label.trim();
         if label.is_empty() {
             bail!("平台名称不能为空。");
@@ -194,6 +195,17 @@ impl ProviderConfigStore {
 
         let guard = self.lock();
         let mut providers = self.load_locked(&guard)?;
+        // 冲突判定与写入在同一把锁内：新增不能把已存在的平台静默替换成新表单的
+        // 元数据（连同它的模型目录一起丢）。
+        match mode {
+            ProviderWriteMode::Create if providers.contains_key(&provider_id) => {
+                bail!("提供商 ID 已存在：{provider_id}");
+            }
+            ProviderWriteMode::Update if !providers.contains_key(&provider_id) => {
+                bail!("提供商不存在：{provider_id}");
+            }
+            _ => {}
+        }
         providers.insert(
             provider_id.clone(),
             ResolvedProvider {

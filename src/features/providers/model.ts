@@ -13,6 +13,7 @@ import type {
   ProviderUpsertInput,
   ProviderView,
   ProvidersState,
+  ProviderWriteMode,
   ReasoningLevel,
 } from "./generated";
 
@@ -340,12 +341,14 @@ export type ProviderFormState = {
   // 明文回显：表单里的值就是 providers.yaml 里的值，留空保存即清除。
   apiKey: string;
   models: ProviderModelForm[];
-  // 字段级校验错误：ProviderEditDialog 内联展示，用户改动对应字段时清空。
+  // 校验错误：ProviderEditDialog 内联展示，用户改动对应字段时清空。
+  // form 是整体失败（提交被后端拒绝）的落点。
   errors?: {
     providerId?: string;
     label?: string;
     baseUrl?: string;
     models?: string;
+    form?: string;
   };
 };
 
@@ -446,9 +449,51 @@ export function normalizeProviderIdInput(value: string): string {
     .replace(/[^a-z0-9-]/g, "");
 }
 
-export function formToInput(form: ProviderFormState): ProviderUpsertInput {
+export type ProviderFormValidation = {
+  // 新增第一步只落库元数据，模型目录留到第二步
+  allowEmptyModels: boolean;
+  // 已存在的平台 ID
+  existingProviderIds: readonly string[];
+};
+
+// 表单校验：非空字段 + 新增时的平台 ID 冲突。
+// 撞名必须在提交前拦住：后端的写入会把同 ID 当成更新，静默覆盖已有平台
+// 的元数据与模型目录。
+export function validateProviderForm(
+  form: ProviderFormState,
+  context: ProviderFormValidation,
+): NonNullable<ProviderFormState["errors"]> {
+  const errors: NonNullable<ProviderFormState["errors"]> = {};
+  const providerId = normalizeProviderIdInput(form.providerId.trim());
+
+  if (!providerId) {
+    errors.providerId = "请填写提供商 ID。";
+  } else if (
+    form.originalProviderId === null &&
+    context.existingProviderIds.includes(providerId)
+  ) {
+    errors.providerId = "该提供商 ID 已存在，请换一个。";
+  }
+  if (!form.label.trim()) {
+    errors.label = "请填写名称。";
+  }
+  if (!form.baseUrl.trim()) {
+    errors.baseUrl = "请填写 Base URL。";
+  }
+  if (!context.allowEmptyModels && form.models.length === 0) {
+    errors.models = "至少添加一个模型。";
+  }
+
+  return errors;
+}
+
+export function formToInput(
+  form: ProviderFormState,
+  mode: ProviderWriteMode,
+): ProviderUpsertInput {
   return {
     providerId: form.providerId,
+    mode,
     label: form.label,
     protocol: form.protocol,
     baseUrl: form.baseUrl,

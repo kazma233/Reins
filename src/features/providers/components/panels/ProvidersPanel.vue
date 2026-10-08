@@ -15,6 +15,7 @@ import {
   protocolLabel,
   providerSyncPlan,
   emptyProviderForm,
+  validateProviderForm,
   type ProviderFormState,
   type ProviderSyncPlanItem,
   type ProviderSyncSkip,
@@ -103,28 +104,18 @@ function openEdit(providerId: string) {
 }
 
 function confirmEdit() {
-  // 只有后端契约要求的非空校验，失败时错误落在弹窗内对应字段下方。
-  const errors: NonNullable<ProviderFormState["errors"]> = {};
-  if (!form.providerId.trim()) {
-    errors.providerId = "请填写提供商 ID。";
-  }
-  if (!form.label.trim()) {
-    errors.label = "请填写名称。";
-  }
-  if (!form.baseUrl.trim()) {
-    errors.baseUrl = "请填写 Base URL。";
-  }
   // 新增第一步只落库元数据，模型目录在第二步才填，不能在这一步拦住用户。
   const isCreateStepOne = editCreating.value && editStep.value === 1;
-  if (!isCreateStepOne && form.models.length === 0) {
-    errors.models = "至少添加一个模型。";
-  }
-  form.errors = errors;
-  if (Object.keys(errors).length > 0) {
+  form.errors = validateProviderForm(form, {
+    allowEmptyModels: isCreateStepOne,
+    existingProviderIds: (state.value?.providers ?? []).map((provider) => provider.id),
+  });
+  if (Object.keys(form.errors).length > 0) {
     return;
   }
 
-  const input = formToInput(form);
+  // 新增与编辑走同一条写入命令，意图显式下发：新增撞名会被后端拒绝。
+  const input = formToInput(form, form.originalProviderId === null ? "create" : "update");
   runProvidersAction({
     // 元数据与明文 API Key 在同一份 providers.yaml 里，一次 upsert 原子落盘。
     action: () => upsertProvider(input),
@@ -139,6 +130,10 @@ function confirmEdit() {
         return;
       }
       editOpen.value = false;
+    },
+    onError: (message) => {
+      // 后端拒绝时留在弹窗里，不再静默失败
+      form.errors = { form: message };
     },
   });
 }

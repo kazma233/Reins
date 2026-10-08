@@ -205,6 +205,8 @@ function applyModelsDevCompletion(meta: ModelsDevMeta) {
 
     <p v-if="flowHint" class="providers-section-hint">{{ flowHint }}</p>
 
+    <AppFieldError :message="form.errors?.form ?? null" />
+
     <div v-if="showMeta" class="providers-form-grid">
       <label class="providers-field">
         <span>
