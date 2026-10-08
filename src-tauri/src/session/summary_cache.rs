@@ -25,32 +25,68 @@ const DB_FILE_NAME: &str = "session-summary-cache_v2.db";
 static CONNECTION: LazyLock<Mutex<Option<(PathBuf, Connection)>>> =
     LazyLock::new(|| Mutex::new(None));
 
-pub(crate) fn load(source_app: SourceApp, path: &Path, mtime: i64) -> Option<SessionSummary> {
-    with_connection(|connection| {
-        let summary_json = connection
-            .query_row(
-                "SELECT summary FROM session_summary_cache WHERE source_app = ?1 AND path = ?2 AND mtime = ?3",
-                rusqlite::params![source_app.as_str(), path_key(path), mtime],
-                |row| row.get::<_, String>(0),
-            )
-            .map_err(|error| anyhow::anyhow!("summary cache lookup failed: {error}"))?;
+/// 实例级句柄:目录随读取器引擎实例注入(测试传临时目录),连接惰性打开。
+/// SQL 与全局层同源,两张脸共享同一份库文件格式。
+pub(crate) struct SummaryDb {
+    dir: PathBuf,
+    connection: Mutex<Option<Connection>>,
+}
 
-        serde_json::from_str(&summary_json)
-            .map_err(|error| anyhow::anyhow!("summary cache row failed to parse: {error}"))
-    })
-    .ok()
+impl SummaryDb {
+    pub(crate) fn at(dir: PathBuf) -> Self {
+        Self {
+            dir,
+            connection: Mutex::new(None),
+        }
+    }
+
+    pub(crate) fn load(
+        &self,
+        source_app: SourceApp,
+        path: &Path,
+        mtime: i64,
+    ) -> Option<SessionSummary> {
+        self.with_connection(|connection| lookup_summary(connection, source_app, path, mtime))
+            .ok()
+    }
+
+    pub(crate) fn store(
+        &self,
+        source_app: SourceApp,
+        path: &Path,
+        mtime: i64,
+        summary: &SessionSummary,
+    ) {
+        let result = self.with_connection(|connection| {
+            insert_summary(connection, source_app, path, mtime, summary)
+        });
+
+        if let Err(error) = result {
+            crate::logger::log_error(format!("summary cache store failed: {error}"));
+        }
+    }
+
+    fn with_connection<T>(&self, operation: impl FnOnce(&Connection) -> Result<T>) -> Result<T> {
+        let mut guard = self
+            .connection
+            .lock()
+            .map_err(|_| anyhow::anyhow!("summary cache connection lock was poisoned"))?;
+
+        if guard.is_none() {
+            *guard = Some(open_connection(&self.dir)?);
+        }
+
+        operation(guard.as_ref().expect("connection was just ensured"))
+    }
+}
+
+pub(crate) fn load(source_app: SourceApp, path: &Path, mtime: i64) -> Option<SessionSummary> {
+    with_connection(|connection| lookup_summary(connection, source_app, path, mtime)).ok()
 }
 
 pub(crate) fn store(source_app: SourceApp, path: &Path, mtime: i64, summary: &SessionSummary) {
-    let result = with_connection(|connection| {
-        let summary_json = serde_json::to_string(summary)?;
-        connection.execute(
-            "INSERT INTO session_summary_cache (source_app, path, mtime, summary) VALUES (?1, ?2, ?3, ?4)
-             ON CONFLICT(source_app, path) DO UPDATE SET mtime = excluded.mtime, summary = excluded.summary",
-            rusqlite::params![source_app.as_str(), path_key(path), mtime, summary_json],
-        )?;
-        Ok(())
-    });
+    let result =
+        with_connection(|connection| insert_summary(connection, source_app, path, mtime, summary));
 
     if let Err(error) = result {
         crate::logger::log_error(format!("summary cache store failed: {error}"));
@@ -74,11 +110,68 @@ fn path_key(path: &Path) -> String {
     crate::support::fs::path_key(path)
 }
 
-fn db_path() -> Result<PathBuf> {
+fn lookup_summary(
+    connection: &Connection,
+    source_app: SourceApp,
+    path: &Path,
+    mtime: i64,
+) -> Result<SessionSummary> {
+    let summary_json = connection
+        .query_row(
+            "SELECT summary FROM session_summary_cache WHERE source_app = ?1 AND path = ?2 AND mtime = ?3",
+            rusqlite::params![source_app.as_str(), path_key(path), mtime],
+            |row| row.get::<_, String>(0),
+        )
+        .map_err(|error| anyhow::anyhow!("summary cache lookup failed: {error}"))?;
+
+    serde_json::from_str(&summary_json)
+        .map_err(|error| anyhow::anyhow!("summary cache row failed to parse: {error}"))
+}
+
+fn insert_summary(
+    connection: &Connection,
+    source_app: SourceApp,
+    path: &Path,
+    mtime: i64,
+    summary: &SessionSummary,
+) -> Result<()> {
+    let summary_json = serde_json::to_string(summary)?;
+    connection.execute(
+        "INSERT INTO session_summary_cache (source_app, path, mtime, summary) VALUES (?1, ?2, ?3, ?4)
+         ON CONFLICT(source_app, path) DO UPDATE SET mtime = excluded.mtime, summary = excluded.summary",
+        rusqlite::params![source_app.as_str(), path_key(path), mtime, summary_json],
+    )?;
+    Ok(())
+}
+
+fn cache_dir() -> Result<PathBuf> {
     Ok(crate::support::fs::user_home_dir()
         .context("Unable to determine home directory")?
-        .join(".reins")
-        .join(DB_FILE_NAME))
+        .join(".reins"))
+}
+
+fn open_connection(dir: &Path) -> Result<Connection> {
+    fs::create_dir_all(dir).with_context(|| format!("Failed to create {}", dir.display()))?;
+    remove_stale_db_files(dir);
+
+    let path = dir.join(DB_FILE_NAME);
+    let connection =
+        Connection::open(&path).with_context(|| format!("Failed to open {}", path.display()))?;
+    connection.pragma_update(None, "journal_mode", "WAL")?;
+    connection.pragma_update(None, "synchronous", "NORMAL")?;
+
+    connection.execute(
+        "CREATE TABLE IF NOT EXISTS session_summary_cache (
+            source_app TEXT NOT NULL,
+            path TEXT NOT NULL,
+            mtime INTEGER NOT NULL,
+            summary TEXT NOT NULL,
+            PRIMARY KEY (source_app, path)
+        )",
+        [],
+    )?;
+
+    Ok(connection)
 }
 
 // 清掉旧版本（含版本化之前的无后缀命名）残留的库文件，避免 bump 后旧库
@@ -109,43 +202,22 @@ fn remove_stale_db_files(dir: &Path) {
 }
 
 fn with_connection<T>(operation: impl FnOnce(&Connection) -> Result<T>) -> Result<T> {
-    let path = db_path()?;
+    let dir = cache_dir()?;
     let mut guard = CONNECTION
         .lock()
         .map_err(|_| anyhow::anyhow!("summary cache connection lock was poisoned"))?;
 
-    // 测试会切换 HOME 覆盖；路径变化时必须重开连接，避免读写到上一个环境的库。
+    // 测试会切换 HOME 覆盖；目录变化时必须重开连接，避免读写到上一个环境的库。
     if guard
         .as_ref()
-        .is_some_and(|(cached_path, _)| *cached_path != path)
+        .is_some_and(|(cached_dir, _)| *cached_dir != dir)
     {
         *guard = None;
     }
 
     if guard.is_none() {
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)
-                .with_context(|| format!("Failed to create {}", parent.display()))?;
-            remove_stale_db_files(parent);
-        }
-
-        let connection = Connection::open(&path)
-            .with_context(|| format!("Failed to open {}", path.display()))?;
-        connection.pragma_update(None, "journal_mode", "WAL")?;
-        connection.pragma_update(None, "synchronous", "NORMAL")?;
-
-        connection.execute(
-            "CREATE TABLE IF NOT EXISTS session_summary_cache (
-                source_app TEXT NOT NULL,
-                path TEXT NOT NULL,
-                mtime INTEGER NOT NULL,
-                summary TEXT NOT NULL,
-                PRIMARY KEY (source_app, path)
-            )",
-            [],
-        )?;
-
-        *guard = Some((path, connection));
+        let connection = open_connection(&dir)?;
+        *guard = Some((dir, connection));
     }
 
     operation(&guard.as_ref().expect("connection was just ensured").1)

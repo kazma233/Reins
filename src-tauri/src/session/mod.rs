@@ -18,6 +18,7 @@ pub(crate) mod family_timeline;
 pub(crate) mod grokbuild;
 pub(crate) mod opencode;
 pub(crate) mod pi;
+pub(crate) mod reader_engine;
 pub(crate) mod sources;
 pub(crate) mod summary_cache;
 pub(crate) mod usage_day_cache;

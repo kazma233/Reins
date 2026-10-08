@@ -18,6 +18,10 @@ _Avoid_: 分发表、来源清单（指迭代结果时另说）
 一个来源的会话数据解析实现，每个来源恰好一个。
 _Avoid_: backend
 
+**读取器引擎（reader engine）**：
+family 形态读取器共享的机械底座：缓存生命周期（目录索引、双半时间线、三级摘要）、失效判定、marker 注入、排序分页、clear 编排；读取器只声明真差异，典型来源零覆写。
+_Avoid_: harness（域内该词专指 DSH/DeepSeek Harness 这类被管理的 agent 运行时）、runtime
+
 **会话目录（catalog）**：
 一个来源的会话文件枚举结果与缓存，列表分页的数据源。
 _Avoid_: 索引（易与会话族索引混淆）
