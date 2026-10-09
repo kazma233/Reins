@@ -1,6 +1,6 @@
 [package]
 name = "reins"
-version = "0.2.2"
+version = "0.2.3"
 description = "Read and inspect local coding-agent sessions."
 authors = ["kazma"]
 edition = "2024"
