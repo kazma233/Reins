@@ -12,6 +12,7 @@ import AppTooltip from "@shared/ui/AppTooltip.vue";
 import DialogShell from "@shared/ui/DialogShell.vue";
 import SyncTargetGroups from "../SyncTargetGroups.vue";
 import { useWorkspaceAction } from "../../composables/useWorkspaceAction";
+import { defaultSelectedSyncTargetIds, isSelectableSyncTarget } from "../../syncAssociations";
 import type {
   SkillLinkAssociation,
   SkillSourceConfigView,
@@ -70,7 +71,7 @@ function reportResult(result: { text: string; failed: boolean } | null) {
 defineExpose({ reportResult });
 
 function getSelectableTargetIds(list: SyncTargetOption[]): string[] {
-  return list.filter((t) => t.enabled && !t.linkedTargetId).map((t) => t.id);
+  return list.filter(isSelectableSyncTarget).map((t) => t.id);
 }
 
 // 递增令牌作废旧请求：关闭弹窗或切换来源后，在途响应不得再写回状态。
@@ -116,7 +117,11 @@ async function refreshOptions({ keepExistingOptions = false }: { keepExistingOpt
     selectedSkillPaths.value = new Set(
       skillResult.skills.filter((s) => s.matched !== false).map((s) => s.relativePath),
     );
-    if (!keepExistingOptions) selectedTargetIds.value = new Set();
+    // targets 同理预选已装当前来源的那批，让用户接着补同步；其余留空，
+    // 保持「没勾就不动」的边界。
+    if (!keepExistingOptions) {
+      selectedTargetIds.value = new Set(defaultSelectedSyncTargetIds(targetOptions, source.id));
+    }
   } catch (error) {
     if (token !== loadToken) return;
     clearOptions();

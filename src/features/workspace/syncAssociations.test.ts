@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vitest";
-import type { SkillLinkAssociation } from "./types";
+import type { SkillLinkAssociation, SyncTargetOption } from "./types";
 import {
   buildSkillLinkSourceLabels,
   canRemoveSkillLink,
+  defaultSelectedSyncTargetIds,
   hasCurrentSourceSkillLinks,
   hasUnmanagedSkillLinks,
+  isSelectableSyncTarget,
   pendingSkillLinkCleanupCount,
   skillLinkSourceLabel,
   skillLinkSourcePath,
@@ -18,6 +20,16 @@ function makeLink(state: SkillLinkAssociation["state"], matchedSourceIds: string
     sourcePath: "/source/alpha",
     matchedSourceIds,
     state,
+  };
+}
+
+function makeTarget(overrides: Partial<SyncTargetOption> & { id: string }): SyncTargetOption {
+  return {
+    label: overrides.id,
+    skillDir: `/targets/${overrides.id}`,
+    enabled: true,
+    links: [],
+    ...overrides,
   };
 }
 
@@ -88,6 +100,30 @@ describe("skill link association presentation", () => {
     expect(hasCurrentSourceSkillLinks(links, "source-a")).toBe(true);
     expect(hasCurrentSourceSkillLinks(links, "source-b")).toBe(false);
     expect(hasCurrentSourceSkillLinks(links)).toBe(false);
+  });
+
+  it("marks disabled and inherited targets as unselectable", () => {
+    expect(isSelectableSyncTarget(makeTarget({ id: "enabled" }))).toBe(true);
+    expect(isSelectableSyncTarget(makeTarget({ id: "disabled", enabled: false }))).toBe(false);
+    expect(isSelectableSyncTarget(makeTarget({ id: "inherited", linkedTargetId: "enabled" }))).toBe(false);
+  });
+
+  it("preselects selectable targets already linked to the current source", () => {
+    const targets = [
+      makeTarget({ id: "linked", links: [makeLink("linked", ["source-a"])] }),
+      makeTarget({
+        id: "cleanup",
+        links: [makeLink("excluded", ["source-a"]), makeLink("sourceMissing", ["source-a"])],
+      }),
+      makeTarget({ id: "other-source", links: [makeLink("linked", ["source-b"])] }),
+      makeTarget({ id: "unmanaged", links: [makeLink("unmanaged")] }),
+      makeTarget({ id: "empty" }),
+      makeTarget({ id: "disabled", enabled: false, links: [makeLink("linked", ["source-a"])] }),
+      makeTarget({ id: "inherited", linkedTargetId: "linked", links: [makeLink("linked", ["source-a"])] }),
+    ];
+
+    expect(defaultSelectedSyncTargetIds(targets, "source-a")).toEqual(["linked", "cleanup"]);
+    expect(defaultSelectedSyncTargetIds(targets)).toEqual([]);
   });
 
   it("allows removing only unmanaged links one by one", () => {

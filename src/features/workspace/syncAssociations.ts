@@ -1,4 +1,4 @@
-import type { SkillLinkAssociation, SkillSourceConfigView } from "./types";
+import type { SkillLinkAssociation, SkillSourceConfigView, SyncTargetOption } from "./types";
 
 export type SkillLinkStateInfo = {
   label: string;
@@ -64,6 +64,23 @@ export function hasCurrentSourceSkillLinks(
   return Boolean(
     currentSourceId && links.some((link) => link.matchedSourceIds.includes(currentSourceId)),
   );
+}
+
+// 能被勾选的 target：禁用的、整目录继承别的 target 的都不参与同步选择。
+export function isSelectableSyncTarget(target: SyncTargetOption): boolean {
+  return target.enabled && !target.linkedTargetId;
+}
+
+// 打开同步弹窗时的 targets 预选：只挑已经装了当前来源内容的那批（列表里带
+// 「关联」标签的 target），让用户接着把来源新增的 skill 补过去，不用每次重新勾。
+export function defaultSelectedSyncTargetIds(
+  targets: SyncTargetOption[],
+  currentSourceId?: string,
+): string[] {
+  return targets
+    .filter(isSelectableSyncTarget)
+    .filter((target) => hasCurrentSourceSkillLinks(target.links, currentSourceId))
+    .map((target) => target.id);
 }
 
 // 只有非受管来源的链接可以逐条移除：它们不属于任何已配置来源，没有来源级的
