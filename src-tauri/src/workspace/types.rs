@@ -155,7 +155,24 @@ pub(crate) struct TargetConfigView {
     pub(crate) skill_dir: String,
     pub(crate) config_path: Option<String>,
     pub(crate) mcp_config_prefix: String,
-    pub(crate) mcp_config_type: McpConfigType,
+    // 编辑页展示的 MCP 配置格式说明，取自对应格式 writer 的 description。
+    // config_type 本体是 config.yaml 的存储判别字段，已从前端契约面退役。
+    pub(crate) mcp_format_description: String,
+}
+
+// 创建弹窗一次下发的内置工具预设：与 builtin defaults 同源（AgentSpec
+// 派生），路径是 env 解析后的绝对真实路径，因此 grokbuild/pi 也能预填。
+// MCP 格式（config_type）是后端内部知识，不进契约面。
+#[derive(Clone, Debug, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../src/features/workspace/generated/")]
+pub(crate) struct TargetPreset {
+    pub(crate) target_id: AgentTargetId,
+    pub(crate) label: String,
+    pub(crate) enabled: bool,
+    pub(crate) skill_dir: String,
+    pub(crate) config_path: Option<String>,
+    pub(crate) mcp_config_prefix: String,
 }
 
 #[derive(Clone, Debug, Serialize, TS)]
@@ -233,9 +250,10 @@ pub(crate) enum McpTransport {
     Sse,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize, TS)]
+// config.yaml 的存储判别字段与 mcp_formats writer 的分发键；仅后端内部
+// 使用，已从前端契约面退役（ts 不再导出，命令参数与视图 DTO 不携带）。
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
-#[ts(export, export_to = "../../src/features/workspace/generated/")]
 pub(crate) enum McpConfigType {
     #[serde(rename = "common")]
     Common,
@@ -541,7 +559,6 @@ pub(crate) struct RawTargetInput {
     pub(crate) skill_dir: String,
     pub(crate) config_path: Option<String>,
     pub(crate) mcp_config_prefix: String,
-    pub(crate) mcp_config_type: McpConfigType,
 }
 
 #[derive(Clone, Debug)]

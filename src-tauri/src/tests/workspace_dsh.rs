@@ -1,6 +1,6 @@
 use super::*;
 use crate::test_support::{TestDir, TestEnvGuard};
-use crate::workspace::targets::builtin_target_preset_inner;
+use crate::workspace::targets::target_presets_inner;
 use serde_json::json;
 
 const DSH_PLUGIN: &str = "@deepseek-ai/dsh-mcp-client";
@@ -69,7 +69,10 @@ fn dsh_defaults_preset_and_prefix_relaxation() -> Result<()> {
     // 读 ambient HOME 断言默认值,必须持全局锁防并行测试翻转 env。
     let _guard = TestEnvGuard::lock();
     let home = home_dir().ok_or_else(|| anyhow!("测试环境缺少 HOME"))?;
-    let preset = builtin_target_preset_inner("dsh")?;
+    let preset = target_presets_inner()
+        .into_iter()
+        .find(|preset| preset.target_id.as_str() == "dsh")
+        .ok_or_else(|| anyhow!("缺少 dsh 预设"))?;
     assert_eq!(
         preset.skill_dir,
         home.join(".dsh/skills").display().to_string()
@@ -84,7 +87,6 @@ fn dsh_defaults_preset_and_prefix_relaxation() -> Result<()> {
         )
     );
     assert_eq!(preset.mcp_config_prefix, "");
-    assert_eq!(preset.mcp_config_type, McpConfigType::Dsh);
     assert_eq!(serde_json::to_string(&McpConfigType::Dsh)?, "\"dsh\"");
     assert_eq!(
         serde_json::from_str::<McpConfigType>("\"dsh\"")?,
@@ -140,7 +142,6 @@ fn dsh_create_target_accepts_config_path_without_prefix() -> Result<()> {
             skill_dir: "dsh/skills".to_string(),
             config_path: Some("dsh/cordis.patch.yml".to_string()),
             mcp_config_prefix: String::new(),
-            mcp_config_type: McpConfigType::Dsh,
         },
     )?;
 
@@ -151,21 +152,6 @@ fn dsh_create_target_accepts_config_path_without_prefix() -> Result<()> {
         Some(root.path().join("dsh/cordis.patch.yml"))
     );
     assert_eq!(target.mcp_config_prefix, "");
-
-    assert!(
-        create_workspace_target_inner(
-            &store,
-            RawTargetInput {
-                target_id: "plain".to_string(),
-                enabled: true,
-                skill_dir: "plain/skills".to_string(),
-                config_path: Some("plain/config.json".to_string()),
-                mcp_config_prefix: String::new(),
-                mcp_config_type: McpConfigType::Common,
-            },
-        )
-        .is_err()
-    );
     Ok(())
 }
 

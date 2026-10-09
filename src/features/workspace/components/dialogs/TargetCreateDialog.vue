@@ -1,15 +1,22 @@
 <script setup lang="ts">
 import { computed } from "vue";
-import { BUILTIN_TARGET_PRESETS, formatTargetName, type BuiltinTargetPresetId } from "../../model";
+import { type TargetFormState } from "../../model";
+import type { TargetPreset } from "../../types";
 import AppFieldError from "@shared/ui/AppFieldError.vue";
+import AppLoadError from "@shared/ui/AppLoadError.vue";
 import DialogShell from "@shared/ui/DialogShell.vue";
-import type { TargetFormState } from "../../model";
 
 type TargetCreateDialogProps = {
   form: TargetFormState;
   open: boolean;
   loading: boolean;
   error: string | null;
+  // 创建模式：后端下发的七个内置工具预设。
+  presets: TargetPreset[];
+  presetsLoading: boolean;
+  presetsError: string | null;
+  // 编辑模式：后端下发的该 target 的 MCP 配置格式说明。
+  mcpFormatDescription: string | null;
 };
 
 const props = defineProps<TargetCreateDialogProps>();
@@ -18,18 +25,17 @@ defineEmits<{
   close: [];
   confirm: [];
   clearFieldError: [field: string];
-  applyBuiltinPreset: [presetId: BuiltinTargetPresetId];
+  // presetId 来自下发的预设 targetId（封闭集合），用 string 传递。
+  applyBuiltinPreset: [presetId: string];
+  retryLoadPresets: [];
   pickMcpConfigFile: [];
   pickSkillDirectory: [];
 }>();
 
 const dialogTitle = computed(() => (props.form.originalTargetId ? "修改 target" : "新增 target"));
 const confirmLabel = computed(() => (props.form.originalTargetId ? "保存" : "添加"));
-const presetIds = computed(() => Object.keys(BUILTIN_TARGET_PRESETS) as BuiltinTargetPresetId[]);
-// 内置预设按展示名列出，不再直接显示配置里的 id。
-const presetLabels = Object.fromEntries(
-  presetIds.value.map((presetId) => [presetId, formatTargetName(presetId)]),
-) as Record<BuiltinTargetPresetId, string>;
+// 创建模式只能从七个内置预设里选，编辑模式（含存量自定义 target）不走预设。
+const isCreate = computed(() => props.form.originalTargetId === null);
 </script>
 
 <template>
@@ -56,18 +62,25 @@ const presetLabels = Object.fromEntries(
     <div class="manager-target-form-shell">
       <AppFieldError :message="error" />
 
-      <div class="manager-stack">
-        <span class="manager-field__label">内置默认值</span>
-        <div class="manager-card-actions manager-card-actions--start">
+      <div v-if="isCreate" class="manager-stack">
+        <span class="manager-field__label">内置工具</span>
+        <div v-if="presetsLoading" class="loading-pill">正在读取内置工具预设...</div>
+        <AppLoadError
+          v-else-if="presetsError"
+          :message="presetsError"
+          :retrying="presetsLoading"
+          @retry="$emit('retryLoadPresets')"
+        />
+        <div v-else class="manager-card-actions manager-card-actions--start">
           <button
-            v-for="presetId in presetIds"
-            :key="presetId"
+            v-for="preset in presets"
+            :key="preset.targetId"
             class="secondary-button"
             :disabled="loading"
             type="button"
-            @click="$emit('applyBuiltinPreset', presetId)"
+            @click="$emit('applyBuiltinPreset', preset.targetId)"
           >
-            {{ presetLabels[presetId] }}
+            {{ preset.label }}
           </button>
         </div>
       </div>
@@ -83,9 +96,11 @@ const presetLabels = Object.fromEntries(
               :message="form.errors.targetId ?? null"
             />
           </span>
-          <small class="manager-field__hint">唯一标识。只允许小写字母、数字和 `-`。</small>
+          <small v-if="isCreate" class="manager-field__hint">从上方内置工具选择后自动填入，不可修改。</small>
+          <small v-else class="manager-field__hint">唯一标识。只允许小写字母、数字和 `-`。</small>
           <input
             v-model="form.targetId"
+            :readonly="isCreate"
             :aria-describedby="form.errors.targetId ? 'target-id-error' : undefined"
             :aria-invalid="Boolean(form.errors.targetId)"
             type="text"
@@ -179,42 +194,9 @@ const presetLabels = Object.fromEntries(
           />
         </label>
 
-        <div class="manager-stack">
-          <span class="manager-field__label">configType</span>
-          <small class="manager-field__hint">
-            Common：command + args + env；OpenCode：command（数组，含参数）+
-            environment；DeepSeek Harness：Cordis patch YAML 条目（无 configPrefix）
-          </small>
-          <div class="manager-segmented">
-            <button
-              :class="`manager-segmented__button${form.mcpConfigType === 'common' ? ' is-active' : ''}`"
-              type="button"
-              @click="form.mcpConfigType = 'common'"
-            >
-              Common
-            </button>
-            <button
-              :class="`manager-segmented__button${form.mcpConfigType === 'opencode' ? ' is-active' : ''}`"
-              type="button"
-              @click="form.mcpConfigType = 'opencode'"
-            >
-              OpenCode
-            </button>
-            <button
-              :class="`manager-segmented__button${form.mcpConfigType === 'grokbuild' ? ' is-active' : ''}`"
-              type="button"
-              @click="form.mcpConfigType = 'grokbuild'"
-            >
-              Grok Build
-            </button>
-            <button
-              :class="`manager-segmented__button${form.mcpConfigType === 'dsh' ? ' is-active' : ''}`"
-              type="button"
-              @click="form.mcpConfigType = 'dsh'"
-            >
-              DeepSeek Harness
-            </button>
-          </div>
+        <div v-if="mcpFormatDescription && !isCreate" class="manager-stack">
+          <span class="manager-field__label">MCP 配置格式</span>
+          <small class="manager-field__hint">{{ mcpFormatDescription }}</small>
         </div>
       </div>
     </div>

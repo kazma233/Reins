@@ -51,7 +51,8 @@
 | `src/features/workspace/api.ts` | `src-tauri/src/workspace/commands.rs` | `inspect_workspace_state` | 返回 `WorkspaceInspection` |
 | `src/features/workspace/api.ts` | `src-tauri/src/workspace/commands.rs` | `discover_git_skills` / `discover_local_skills` / `filter_discovered_skills` / `import_discovered_skills` | 返回 `SkillDiscoveryResult` |
 | `src/features/workspace/api.ts` | `src-tauri/src/workspace/commands.rs` | `load_skill_detail` / `sync_skill_source` / `update_skill_source` | skill 详情与来源同步 |
-| `src/features/workspace/api.ts` | `src-tauri/src/workspace/commands.rs` | `create_workspace_target` / `update_workspace_target` / `delete_workspace_target` | target CRUD |
+| `src/features/workspace/api.ts` | `src-tauri/src/workspace/commands.rs` | `get_target_presets` | 返回 `TargetPreset[]`：七个内置工具的创建预设，由 AgentSpec 派生，路径为 env 解析后的绝对真实路径（grokbuild/pi 因此可预填） |
+| `src/features/workspace/api.ts` | `src-tauri/src/workspace/commands.rs` | `create_workspace_target` / `update_workspace_target` / `delete_workspace_target` | target CRUD；create 仅接受七个内置 id（其余报错），且不接收 `mcpConfigType`（后端按 AgentSpec 派生）；update 同样不接收 `mcpConfigType`，保留存量存储值（省略仍省略），存量自定义 target 照常编辑/删除 |
 | `src/features/workspace/api.ts` | `src-tauri/src/workspace/commands.rs` | `import_workspace_skill` | workspace skill 导入 |
 | `src/features/workspace/api.ts` | `src-tauri/src/workspace/commands.rs` | `delete_skill_source` / `delete_skill_sources` | source 删除（详见 2026-06-04 ADR） |
 | `src/features/workspace/api.ts` | `src-tauri/src/workspace/commands.rs` | `create_workspace_mcp` / `update_workspace_mcp` / `delete_workspace_mcp` | MCP CRUD |
@@ -66,7 +67,7 @@
 | `ManagedWorkspace` | `ManagedWorkspace` | `src-tauri/src/workspace/types.rs` |
 | `WorkspaceSelection` | `WorkspaceSelection` | `src-tauri/src/workspace/types.rs` |
 | `AgentTargetId` | `AgentTargetId` | `src-tauri/src/workspace/types.rs` |
-| `McpConfigType` | `McpConfigType` | `src-tauri/src/workspace/types.rs` |
+| `TargetPreset` | `TargetPreset` | `src-tauri/src/workspace/types.rs` |
 | `McpTransport` | `McpTransport` | `src-tauri/src/workspace/types.rs` |
 | `SkillDiscoveryResult` | `SkillDiscoveryResultView` | `src-tauri/src/workspace/types.rs` |
 | `SkillSourceSyncResult` | `SkillSourceSyncResult` | `src-tauri/src/workspace/types.rs` |
@@ -87,3 +88,4 @@
 ## 变更记录
 
 - 2026-06-04 增补：`delete_skill_source` / `delete_skill_sources` 与 `SkillSourceManageDialog` 一同引入，详见 `2026-06-04-skill-source-management.md`。
+- 2026-10-08 变更：移除自定义 target 创建能力。新增 `get_target_presets`（`TargetPreset[]`，AgentSpec 派生下发）；`create_workspace_target` 收紧为七个内置 id 且 MCP 格式由后端派生。`McpConfigType` 从契约面退役：ts 不再导出，`create/update_workspace_target` 参数与 `TargetPreset` 均不携带，target 视图以 `mcp_format_description`（格式 writer 的中文说明）代替类型暴露；Rust 枚举保留为 config.yaml 存储判别字段与 writer 分发键，磁盘格式不变。

@@ -2,20 +2,18 @@ import { reactive, ref } from "vue";
 import {
   createWorkspaceTarget,
   deleteWorkspaceTarget,
-  getBuiltinTargetPreset,
+  getTargetPresets,
   selectTargetMcpConfigFile,
   selectTargetSkillDirectory,
   updateWorkspaceTarget,
 } from "../api";
 import {
-  BUILTIN_TARGET_PRESETS,
   DEFAULT_TARGET_FORM,
-  type BuiltinTargetPresetId,
   type FieldErrors,
   type TargetDeleteDialogState,
   type TargetFormState,
 } from "../model";
-import type { TargetConfigView } from "../types";
+import type { TargetConfigView, TargetPreset } from "../types";
 import { useWorkspaceStore } from "../stores/workspace";
 import { useWorkspaceAction } from "./useWorkspaceAction";
 
@@ -23,8 +21,6 @@ function buildTargetErrors(form: TargetFormState): FieldErrors {
   const errors: FieldErrors = {};
   const targetId = form.targetId.trim();
   const skillDir = form.skillDir.trim();
-  const configPath = form.configPath.trim();
-  const mcpConfigPrefix = form.mcpConfigPrefix.trim();
 
   if (!targetId) {
     errors.targetId = "请填写 target id。";
@@ -32,15 +28,8 @@ function buildTargetErrors(form: TargetFormState): FieldErrors {
   if (!skillDir) {
     errors.skillDir = "请填写 skills 目录。";
   }
-  // MCP 配置文件和 configPrefix 成对填写；不需要 MCP 分发的 target 允许
-  // 两者都为空，此时只做 skill 分发。dsh 的 Cordis patch 按条目定位 server，
-  // 没有 configPrefix，允许“有路径 + 空 prefix”。
-  if (configPath && !mcpConfigPrefix && form.mcpConfigType !== "dsh") {
-    errors.mcpConfigPrefix = "请填写 configPrefix。";
-  }
-  if (!configPath && mcpConfigPrefix) {
-    errors.configPath = "填写了 configPrefix 时需要同时填写 MCP 配置文件路径。";
-  }
+  // MCP 配置文件与 configPrefix 的成对校验由后端按 target 的实际格式执行
+  //（dsh 等格式允许空 prefix），错误信息直接展示在弹窗错误区。
 
   return errors;
 }
@@ -54,11 +43,21 @@ export function useTargetMutations() {
     loading: boolean;
     error: string | null;
     form: TargetFormState;
+    // 内置工具预设由后端下发（路径是 env 解析后的真实值），仅创建模式使用。
+    presets: TargetPreset[];
+    presetsLoading: boolean;
+    presetsError: string | null;
+    // 编辑模式下后端下发的 MCP 配置格式说明，创建模式为 null。
+    mcpFormatDescription: string | null;
   }>({
     open: false,
     loading: false,
     error: null,
     form: { ...DEFAULT_TARGET_FORM, errors: {} },
+    presets: [],
+    presetsLoading: false,
+    presetsError: null,
+    mcpFormatDescription: null,
   });
 
   const targetDeleteDialog = reactive<TargetDeleteDialogState>({
@@ -80,10 +79,12 @@ export function useTargetMutations() {
     pendingToggleTargetIds.value = next;
   }
 
-  function openTargetCreateDialog() {
+  function openTargetCreateDialog(): Promise<void> {
     targetCreateDialog.form = { ...DEFAULT_TARGET_FORM, errors: {} };
     targetCreateDialog.error = null;
+    targetCreateDialog.mcpFormatDescription = null;
     targetCreateDialog.open = true;
+    return loadTargetPresets();
   }
 
   function openTargetEditDialog(target: TargetConfigView) {
@@ -94,16 +95,17 @@ export function useTargetMutations() {
       skillDir: target.skillDir ?? "",
       configPath: target.configPath ?? "",
       mcpConfigPrefix: target.mcpConfigPrefix,
-      mcpConfigType: target.mcpConfigType,
       errors: {},
     };
     targetCreateDialog.error = null;
+    targetCreateDialog.mcpFormatDescription = target.mcpFormatDescription;
     targetCreateDialog.open = true;
   }
 
   function closeTargetCreateDialog() {
     targetCreateDialog.open = false;
     targetCreateDialog.error = null;
+    targetCreateDialog.mcpFormatDescription = null;
     targetCreateDialog.form = { ...DEFAULT_TARGET_FORM, errors: {} };
   }
 
@@ -115,34 +117,38 @@ export function useTargetMutations() {
     targetCreateDialog.form.errors = next;
   }
 
-  async function handleApplyBuiltinTargetPreset(presetId: BuiltinTargetPresetId) {
-    if (targetCreateDialog.loading) return;
-    const preset = BUILTIN_TARGET_PRESETS[presetId];
-    if (preset) {
-      Object.assign(targetCreateDialog.form, preset, { errors: {} });
-      return;
-    }
-    targetCreateDialog.loading = true;
-    try {
-      await runWorkspaceAction({
-        action: () => getBuiltinTargetPreset(presetId),
-        error: "读取内置 target 默认值失败。",
-        onSuccess: (target) => Object.assign(targetCreateDialog.form, {
-          targetId: target.id,
-          enabled: target.enabled,
-          skillDir: target.skillDir,
-          configPath: target.configPath ?? "",
-          mcpConfigPrefix: target.mcpConfigPrefix,
-          mcpConfigType: target.mcpConfigType,
-          errors: {},
-        }),
-        onError: (message) => {
-          targetCreateDialog.error = message;
-        },
-      });
-    } finally {
-      targetCreateDialog.loading = false;
-    }
+  // 弹窗打开时拉取内置预设；失败常驻在预设区并给重试入口（不阻塞弹窗
+  // 其余部分），成功前预设按钮为空。拉取不占整页忙碌态。
+  async function loadTargetPresets() {
+    targetCreateDialog.presetsLoading = true;
+    targetCreateDialog.presetsError = null;
+    await runWorkspaceAction({
+      action: () => getTargetPresets(),
+      pageLock: false,
+      error: "读取内置工具预设失败。",
+      onSuccess: (presets) => {
+        targetCreateDialog.presets = presets;
+      },
+      onError: (message) => {
+        targetCreateDialog.presetsError = message;
+      },
+    });
+    targetCreateDialog.presetsLoading = false;
+  }
+
+  // 点击预设即回填表单：id 锁定为预设 id，路径/prefix 允许在回填后手改。
+  // presetId 是下发预设里的 targetId（封闭集合），故用 string 接收。
+  function handleApplyBuiltinTargetPreset(presetId: string) {
+    const preset = targetCreateDialog.presets.find((item) => item.targetId === presetId);
+    if (!preset) return;
+    Object.assign(targetCreateDialog.form, {
+      targetId: preset.targetId,
+      enabled: preset.enabled,
+      skillDir: preset.skillDir,
+      configPath: preset.configPath ?? "",
+      mcpConfigPrefix: preset.mcpConfigPrefix,
+      errors: {},
+    });
   }
 
   // 启停是显式按钮操作：按钮文案、状态 pill 与列表都会随 reload 更新，
@@ -163,7 +169,6 @@ export function useTargetMutations() {
               skillDir: target.skillDir,
               configPath: target.configPath,
               mcpConfigPrefix: target.mcpConfigPrefix,
-              mcpConfigType: target.mcpConfigType,
             }),
           reload: true,
           pageLock: false,
@@ -244,7 +249,6 @@ export function useTargetMutations() {
       skillDir: form.skillDir.trim(),
       configPath: form.configPath.trim() || null,
       mcpConfigPrefix: form.mcpConfigPrefix.trim(),
-      mcpConfigType: form.mcpConfigType,
     };
 
     targetCreateDialog.loading = true;
@@ -291,6 +295,7 @@ export function useTargetMutations() {
     openTargetEditDialog,
     closeTargetCreateDialog,
     clearTargetFormError,
+    loadTargetPresets,
     handleApplyBuiltinTargetPreset,
     toggleTargetEnabled,
     openTargetDeleteDialog,

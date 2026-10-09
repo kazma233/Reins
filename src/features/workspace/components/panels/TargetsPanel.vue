@@ -24,6 +24,7 @@ const {
   openTargetEditDialog,
   closeTargetCreateDialog,
   clearTargetFormError,
+  loadTargetPresets,
   handleApplyBuiltinTargetPreset,
   toggleTargetEnabled,
   openTargetDeleteDialog,
@@ -225,10 +226,15 @@ function isTogglingTarget(targetId: string): boolean {
     :open="targetCreateDialog.open"
     :loading="targetCreateDialog.loading || runningAction"
     :error="targetCreateDialog.error"
+    :presets="targetCreateDialog.presets"
+    :presets-loading="targetCreateDialog.presetsLoading"
+    :presets-error="targetCreateDialog.presetsError"
+    :mcp-format-description="targetCreateDialog.mcpFormatDescription"
     @close="closeTargetCreateDialog"
     @confirm="handleSubmitTarget"
     @clear-field-error="clearTargetFormError"
     @apply-builtin-preset="handleApplyBuiltinTargetPreset"
+    @retry-load-presets="loadTargetPresets"
     @pick-mcp-config-file="handlePickTargetMcpConfigFile"
     @pick-skill-directory="handlePickTargetSkillDirectory"
   />

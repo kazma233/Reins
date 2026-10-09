@@ -107,7 +107,10 @@ pub(crate) fn create_workspace_target_inner(
 ) -> Result<WorkspaceTargetMutationResult> {
     store.locked(|config| {
         let mut raw_config = config.parse_raw()?;
-        let (target_id, target_config) = normalize_raw_target_input(input, config.config_path())?;
+        // create 只接受内置工具，MCP 格式由 AgentSpec 派生，不信任客户端传值。
+        let config_type = builtin_create_config_type(&normalize_target_id(&input.target_id)?)?;
+        let (target_id, target_config) =
+            normalize_raw_target_input(input, Some(config_type), config.config_path())?;
 
         if raw_config.targets.contains_key(target_id.as_str()) {
             bail!("target 已存在：{}", target_id);
@@ -140,8 +143,14 @@ pub(crate) fn update_workspace_target_inner(
             bail!("target 不存在：{}", current_target_id);
         }
 
+        // 存量 config_type 原样保留（省略仍省略、显式仍显式），客户端不再
+        // 传 MCP 格式；有效类型回落内置 defaults 的口径与解析侧一致。
+        let stored_config_type = raw_config
+            .targets
+            .get(current_target_id.as_str())
+            .and_then(|target| target.mcp.config_type);
         let (next_target_id, next_target) =
-            normalize_raw_target_input(input, config.config_path())?;
+            normalize_raw_target_input(input, stored_config_type, config.config_path())?;
 
         if next_target_id != current_target_id
             && raw_config.targets.contains_key(next_target_id.as_str())
@@ -277,6 +286,8 @@ pub(crate) fn delete_workspace_project_inner(
 
 fn normalize_raw_target_input(
     input: RawTargetInput,
+    // 落盘的 config_type：create 传派生值，update 传存量原值。
+    persisted_config_type: Option<McpConfigType>,
     _config_path: &Path,
 ) -> Result<(AgentTargetId, RawTargetConfig)> {
     let target_id = normalize_target_id(&input.target_id)?;
@@ -294,8 +305,16 @@ fn normalize_raw_target_input(
     // 只有路径没有前缀无法定位写入节点。不需要 MCP 分发的 target
     // 允许两者都为空，此时只做 skill 分发。dsh 按 name+serverName 定位
     // 条目（writer 声明 prefix 不必填），允许“有路径 + 空 prefix”。
+    // 校验用的有效类型与解析侧同口径：存量值优先，其次内置 defaults。
+    let effective_config_type = persisted_config_type
+        .or_else(|| {
+            builtin_target_defaults_map()
+                .get(&target_id)
+                .map(|defaults| defaults.config_type)
+        })
+        .unwrap_or(McpConfigType::Common);
     let prefix_required =
-        super::mcp_formats::mcp_format_writer(input.mcp_config_type).prefix_required();
+        super::mcp_formats::mcp_format_writer(effective_config_type).prefix_required();
     match normalized_config_path.as_deref() {
         Some(_) if config_prefix.is_empty() && prefix_required => {
             bail!("target {} 的 MCP configPrefix 不能为空。", target_id);
@@ -317,7 +336,7 @@ fn normalize_raw_target_input(
             mcp: RawTargetMcpConfig {
                 config_path: normalized_config_path,
                 config_prefix: (!config_prefix.is_empty()).then_some(config_prefix),
-                config_type: Some(input.mcp_config_type),
+                config_type: persisted_config_type,
             },
         },
     ))
@@ -331,6 +350,22 @@ fn normalize_target_skill_dir(value: &str) -> Result<String> {
     }
 
     Ok(trimmed.to_string())
+}
+
+// create 只允许为内置工具建 target，并从同一份 defaults 派生 MCP 格式；
+// 存量自定义 target 不迁移，照常解析、渲染、编辑、删除（update 不走此校验）。
+fn builtin_create_config_type(target_id: &AgentTargetId) -> Result<McpConfigType> {
+    builtin_target_defaults_map()
+        .get(target_id)
+        .map(|defaults| defaults.config_type)
+        .ok_or_else(|| {
+            let allowed = crate::agents::AGENTS
+                .iter()
+                .filter_map(|spec| spec.target_id)
+                .collect::<Vec<_>>()
+                .join("、");
+            anyhow!("仅支持创建内置工具的 target：{allowed}。")
+        })
 }
 
 // ---------------------------------------------------------------------------
@@ -363,19 +398,23 @@ fn grokbuild_home_uses_environment_before_home_default() {
     );
 }
 
-pub(crate) fn builtin_target_preset_inner(target_id: &str) -> Result<TargetConfigView> {
-    let id = normalize_target_id(target_id)?;
-    let defaults = builtin_target_defaults_map()
-        .remove(&id)
-        .ok_or_else(|| anyhow!("未知内置 target：{id}"))?;
-    Ok(TargetConfigView {
-        id,
-        enabled: true,
-        skill_dir: display_path(&defaults.skill_dir),
-        config_path: defaults.config_path.as_deref().map(display_path),
-        mcp_config_prefix: defaults.config_prefix.to_string(),
-        mcp_config_type: defaults.config_type,
-    })
+pub(crate) fn target_presets_inner() -> Vec<TargetPreset> {
+    let defaults = builtin_target_defaults_map();
+    crate::agents::AGENTS
+        .iter()
+        .filter_map(|spec| {
+            let target_id = spec.target_id?;
+            let defaults = defaults.get(&AgentTargetId(target_id.to_string()))?;
+            Some(TargetPreset {
+                target_id: defaults.id.clone(),
+                label: spec.label.to_string(),
+                enabled: true,
+                skill_dir: display_path(&defaults.skill_dir),
+                config_path: defaults.config_path.as_deref().map(display_path),
+                mcp_config_prefix: defaults.config_prefix.to_string(),
+            })
+        })
+        .collect()
 }
 
 // 全局 defaults 从 agents 清单派生：路径 = GlobalRoot 解析结果 + spec 的

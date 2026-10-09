@@ -1,7 +1,6 @@
 import { AGENT_LABELS } from "@shared/lib/agent-labels";
 import type {
   AgentTargetId,
-  McpConfigType,
   McpTargetPreviewResult,
   McpTransport,
   BatchGitSkillImportResult,
@@ -67,22 +66,8 @@ export function groupTargetIds(targetIds: AgentTargetId[]): TargetGroup[] {
   ].filter((group) => group.targetIds.length > 0);
 }
 
-// Map configType to a human-readable description shown in the target row.
-// common = standard MCP { command, args, env } shape used by codex/claude/zcode.
-// opencode = OpenCode's own schema with $schema header.
-export function formatMcpConfigType(type: McpConfigType): string {
-  switch (type) {
-    case "common":
-      return "通用 MCP 配置格式（标准 command/args/env）";
-    case "opencode":
-      return "OpenCode 配置格式（带 $schema 标头）";
-    case "grokbuild":
-      return "Grok Build TOML 配置格式（远端 headers）";
-    case "dsh":
-      return "DeepSeek Harness 配置格式（Cordis patch YAML）";
-  }
-}
-
+// 七个内置工具的稳定 target id 契约；具体的创建预设（路径/prefix/configType）
+// 由后端 get_target_presets 下发，前端不再静态维护。
 export type BuiltinTargetPresetId =
   | "codex"
   | "claude"
@@ -91,63 +76,6 @@ export type BuiltinTargetPresetId =
   | "pi"
   | "grokbuild"
   | "dsh";
-
-export const BUILTIN_TARGET_PRESETS: Record<
-  BuiltinTargetPresetId,
-  Omit<TargetFormState, "originalTargetId"> | null
-> = {
-  // Grok 路径由后端解析 GROK_HOME，不能用静态路径覆盖运行时默认值。
-  grokbuild: null,
-  codex: {
-    targetId: "codex",
-    enabled: true,
-    skillDir: "~/.agents/skills",
-    configPath: "~/.codex/config.toml",
-    mcpConfigPrefix: "mcp_servers",
-    mcpConfigType: "common",
-    errors: {},
-  },
-  claude: {
-    targetId: "claude",
-    enabled: true,
-    skillDir: "~/.claude/skills",
-    configPath: "~/.claude.json",
-    mcpConfigPrefix: "mcpServers",
-    mcpConfigType: "common",
-    errors: {},
-  },
-  opencode: {
-    targetId: "opencode",
-    enabled: true,
-    skillDir: "~/.config/opencode/skills",
-    configPath: "~/.config/opencode/opencode.json",
-    mcpConfigPrefix: "mcp",
-    mcpConfigType: "opencode",
-    errors: {},
-  },
-  zcode: {
-    targetId: "zcode",
-    enabled: true,
-    skillDir: "~/.zcode/skills",
-    configPath: "~/.zcode/cli/config.json",
-    mcpConfigPrefix: "mcp.servers",
-    mcpConfigType: "common",
-    errors: {},
-  },
-  // pi 的 skills 与 MCP 路径由后端解析 PI_CODING_AGENT_DIR（默认 ~/.pi/agent），
-  // 不能用静态路径覆盖运行时默认值。
-  pi: null,
-  // dsh 固定使用 ~/.dsh（无环境变量重定向），Cordis patch 没有 configPrefix。
-  dsh: {
-    targetId: "dsh",
-    enabled: true,
-    skillDir: "~/.dsh/skills",
-    configPath: "~/.dsh/cordis.patch.yml",
-    mcpConfigPrefix: "",
-    mcpConfigType: "dsh",
-    errors: {},
-  },
-};
 
 export type SkillSourceFilter = "all" | "new" | `source:${string}`;
 
@@ -208,7 +136,6 @@ export type TargetFormState = {
   skillDir: string;
   configPath: string;
   mcpConfigPrefix: string;
-  mcpConfigType: McpConfigType;
   // 字段级校验错误：提交时一次算出全部，字段值变化时清空该字段。
   errors: FieldErrors;
 };
@@ -318,7 +245,6 @@ export const DEFAULT_TARGET_FORM: TargetFormState = {
   skillDir: "",
   configPath: "",
   mcpConfigPrefix: "",
-  mcpConfigType: "common",
   errors: {},
 };
 

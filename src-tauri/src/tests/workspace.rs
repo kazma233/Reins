@@ -1,7 +1,7 @@
 use super::*;
 use crate::support::fs::pi_agent_dir_path;
 use crate::test_support::{TestDir, TestEnvGuard};
-use crate::workspace::targets::builtin_target_preset_inner;
+use crate::workspace::targets::target_presets_inner;
 use std::time::{Duration, UNIX_EPOCH};
 
 #[path = "workspace_grokbuild.rs"]
@@ -689,12 +689,188 @@ fn global_pi_target_without_mcp_section_falls_back_to_preset() -> Result<()> {
 }
 
 #[test]
+fn target_presets_cover_builtin_agents_with_env_resolved_paths() -> Result<()> {
+    // 预设路径在派生时读取 GROK_HOME / PI_CODING_AGENT_DIR，断言需持锁防并行翻转。
+    let _guard = TestEnvGuard::lock();
+    let grok_root = TestDir::new("presets-grok-home")?;
+    let pi_root = TestDir::new("presets-pi-agent-dir")?;
+    unsafe { std::env::set_var("GROK_HOME", grok_root.path()) };
+    unsafe { std::env::set_var("PI_CODING_AGENT_DIR", pi_root.path()) };
+
+    let presets = target_presets_inner();
+    assert_eq!(presets.len(), 7, "七个内置工具各一条预设");
+    let by_id = |id: &str| {
+        presets
+            .iter()
+            .find(|preset| preset.target_id.as_str() == id)
+            .unwrap_or_else(|| panic!("缺少 {id} 预设"))
+    };
+
+    let home = home_dir().ok_or_else(|| anyhow!("测试环境缺少 HOME"))?;
+
+    let codex = by_id("codex");
+    assert_eq!(codex.label, "Codex");
+    assert!(codex.enabled);
+    assert_eq!(
+        codex.skill_dir,
+        home.join(".agents/skills").display().to_string()
+    );
+    assert_eq!(
+        codex.config_path.as_deref(),
+        Some(
+            home.join(".codex/config.toml")
+                .display()
+                .to_string()
+                .as_str()
+        )
+    );
+    assert_eq!(codex.mcp_config_prefix, "mcp_servers");
+
+    let claude = by_id("claude");
+    assert_eq!(claude.label, "Claude Code");
+    assert_eq!(
+        claude.skill_dir,
+        home.join(".claude/skills").display().to_string()
+    );
+    assert_eq!(
+        claude.config_path.as_deref(),
+        Some(home.join(".claude.json").display().to_string().as_str())
+    );
+    assert_eq!(claude.mcp_config_prefix, "mcpServers");
+
+    let opencode = by_id("opencode");
+    assert_eq!(opencode.label, "OpenCode");
+    assert_eq!(
+        opencode.skill_dir,
+        home.join(".config/opencode/skills").display().to_string()
+    );
+    assert_eq!(
+        opencode.config_path.as_deref(),
+        Some(
+            home.join(".config/opencode/opencode.json")
+                .display()
+                .to_string()
+                .as_str()
+        )
+    );
+    assert_eq!(opencode.mcp_config_prefix, "mcp.servers");
+
+    let zcode = by_id("zcode");
+    assert_eq!(zcode.label, "ZCode");
+    assert_eq!(
+        zcode.skill_dir,
+        home.join(".zcode/skills").display().to_string()
+    );
+    assert_eq!(
+        zcode.config_path.as_deref(),
+        Some(
+            home.join(".zcode/cli/config.json")
+                .display()
+                .to_string()
+                .as_str()
+        )
+    );
+    assert_eq!(zcode.mcp_config_prefix, "mcp.servers");
+
+    // grokbuild / pi 的路径跟随 env 重定向：这正是前端静态预设无法预填、
+    // 需要后端下发的原因。
+    let grokbuild = by_id("grokbuild");
+    assert_eq!(grokbuild.label, "Grok Build");
+    assert_eq!(
+        grokbuild.skill_dir,
+        grok_root.path().join("skills").display().to_string()
+    );
+    assert_eq!(
+        grokbuild.config_path.as_deref(),
+        Some(
+            grok_root
+                .path()
+                .join("config.toml")
+                .display()
+                .to_string()
+                .as_str()
+        )
+    );
+    assert_eq!(grokbuild.mcp_config_prefix, "mcp_servers");
+
+    let pi = by_id("pi");
+    assert_eq!(pi.label, "Pi");
+    assert_eq!(
+        pi.skill_dir,
+        pi_root.path().join("skills").display().to_string()
+    );
+    assert_eq!(
+        pi.config_path.as_deref(),
+        Some(
+            pi_root
+                .path()
+                .join("mcp.json")
+                .display()
+                .to_string()
+                .as_str()
+        )
+    );
+    assert_eq!(pi.mcp_config_prefix, "mcpServers");
+
+    // dsh 按现状 defaults：cordis patch 路径 + 空 prefix。
+    let dsh = by_id("dsh");
+    assert_eq!(dsh.label, "DeepSeek Harness");
+    assert_eq!(
+        dsh.skill_dir,
+        home.join(".dsh/skills").display().to_string()
+    );
+    assert_eq!(
+        dsh.config_path.as_deref(),
+        Some(
+            home.join(".dsh/cordis.patch.yml")
+                .display()
+                .to_string()
+                .as_str()
+        )
+    );
+    assert_eq!(dsh.mcp_config_prefix, "");
+
+    Ok(())
+}
+
+// 编辑页展示的格式说明是面向用户的契约文案，逐字锁定，改动须有意为之。
+#[test]
+fn target_view_carries_mcp_format_description_per_config_type() {
+    let mut target = resolved_target("codex", PathBuf::from("/tmp/reins-skills"));
+    assert_eq!(
+        target_to_view(&target).mcp_format_description,
+        "通用 MCP 条目（标准 command/args/env），按配置文件扩展名写入 JSON 或 TOML 的 mcp 节点下。"
+    );
+
+    target.mcp_config_type = McpConfigType::OpenCode;
+    assert_eq!(
+        target_to_view(&target).mcp_format_description,
+        "OpenCode 专属格式（JSON，带 $schema 头，command 为数组、environment 键），写入 mcp.servers 根。"
+    );
+
+    target.mcp_config_type = McpConfigType::GrokBuild;
+    assert_eq!(
+        target_to_view(&target).mcp_format_description,
+        "Grok Build TOML 格式（远端类型用 headers 携带自定义头），写入 config.toml。"
+    );
+
+    target.mcp_config_type = McpConfigType::Dsh;
+    assert_eq!(
+        target_to_view(&target).mcp_format_description,
+        "DeepSeek Harness 的 Cordis patch YAML（insert/remove 操作列表，按 serverName 定位，无 configPrefix）。"
+    );
+}
+
+#[test]
 fn pi_preset_and_template_follow_pi_coding_agent_dir() -> Result<()> {
     let _guard = TestEnvGuard::lock();
     let redirected = PathBuf::from("/tmp/reins-pi-agent-dir-redirect");
     unsafe { std::env::set_var("PI_CODING_AGENT_DIR", &redirected) };
 
-    let preset = builtin_target_preset_inner("pi")?;
+    let preset = target_presets_inner()
+        .into_iter()
+        .find(|preset| preset.target_id.as_str() == "pi")
+        .ok_or_else(|| anyhow!("缺少 pi 预设"))?;
     assert_eq!(
         preset.config_path.as_deref(),
         Some(redirected.join("mcp.json").display().to_string().as_str())
