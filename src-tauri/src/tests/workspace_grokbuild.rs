@@ -1,9 +1,12 @@
 use super::*;
+use crate::test_support::TestEnvGuard;
 use crate::workspace::targets::builtin_target_preset_inner;
 use serde_json::json;
 
 #[test]
 fn grokbuild_defaults_template_and_preset_agree() -> Result<()> {
+    // 读 ambient GROK_HOME/HOME 断言默认值,必须持全局锁防并行测试翻转 env。
+    let _guard = TestEnvGuard::lock();
     let path = PathBuf::from("/tmp/reins-grok-defaults.yaml");
     let config = parse_manager_config(&default_config_template(), &path)?;
     let target = resolve_target_from_id(&config, "grokbuild").unwrap();

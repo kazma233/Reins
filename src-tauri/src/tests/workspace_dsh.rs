@@ -125,6 +125,9 @@ fn dsh_project_defaults_are_skills_only() -> Result<()> {
 
 #[test]
 fn dsh_create_target_accepts_config_path_without_prefix() -> Result<()> {
+    // apply/preview 流程会把 cwd(home) 写进 patch 并在断言侧再读一次,
+    // 不持锁存在与并行 env 测试的 TOCTOU 窗口。
+    let _guard = TestEnvGuard::lock();
     let root = TestDir::new("dsh-create-target")?;
     let store = WorkspaceConfigStore::at(root.path());
     fs::write(store.config_path(), "{}\n")?;
@@ -239,6 +242,9 @@ fn dsh_apply_creates_patch_file_and_preview_matches() -> Result<()> {
 
 #[test]
 fn dsh_apply_merges_into_existing_file_and_preserves_user_entries() -> Result<()> {
+    // apply/preview 流程会把 cwd(home) 写进 patch 并在断言侧再读一次,
+    // 不持锁存在与并行 env 测试的 TOCTOU 窗口。
+    let _guard = TestEnvGuard::lock();
     let root = TestDir::new("dsh-merge")?;
     let store = dsh_fixture(&root, "stdio", None, "probe")?;
     let path = patch_path(&store);
@@ -353,6 +359,9 @@ fn dsh_apply_merges_into_existing_file_and_preserves_user_entries() -> Result<()
 
 #[test]
 fn dsh_remove_deletes_only_claimed_entries() -> Result<()> {
+    // apply/preview 流程会把 cwd(home) 写进 patch 并在断言侧再读一次,
+    // 不持锁存在与并行 env 测试的 TOCTOU 窗口。
+    let _guard = TestEnvGuard::lock();
     let root = TestDir::new("dsh-remove")?;
     let store = dsh_fixture(&root, "stdio", None, "probe")?;
     let path = patch_path(&store);
@@ -448,6 +457,9 @@ fn dsh_server_name_sanitization() -> Result<()> {
 
 #[test]
 fn dsh_rejects_http_transport_and_malformed_files_without_writing() -> Result<()> {
+    // apply/preview 流程会把 cwd(home) 写进 patch 并在断言侧再读一次,
+    // 不持锁存在与并行 env 测试的 TOCTOU 窗口。
+    let _guard = TestEnvGuard::lock();
     let root = TestDir::new("dsh-invalid")?;
     let store = dsh_fixture(&root, "http", None, "probe")?;
     let path = patch_path(&store);
