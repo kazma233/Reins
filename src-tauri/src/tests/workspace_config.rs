@@ -201,7 +201,6 @@ fn create_workspace_target_inner_rejects_non_builtin_id() -> Result<()> {
     Ok(())
 }
 
-#[test]
 // MCP 配置节点路径是各工具的固定知识,客户端不再传 prefix:create 时
 // 只有 prefix_required 的格式(codex/claude/opencode/common)才在 path
 // 缺失 + prefix 非空时报错;dsh 这类 prefix 不必填的格式允许无 MCP 配置。

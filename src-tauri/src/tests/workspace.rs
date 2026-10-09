@@ -865,35 +865,48 @@ fn target_view_carries_mcp_format_description_per_config_type() {
 // 键名或结构调整时必须同步改示例并有意为之。
 #[test]
 fn target_view_carries_mcp_format_example_per_config_type() {
+    // 示例由 writer 的 desired 构造 + serde 序列化生成(dsh 条目的 cwd 读
+    // home),需与并行 env 测试互斥。
+    let _guard = TestEnvGuard::lock();
+    let home = home_dir().expect("测试环境缺少 HOME");
+
     let mut target = resolved_target("codex", PathBuf::from("/tmp/reins-skills"));
     target.mcp_config_prefix = "mcpServers".to_string();
     assert_eq!(
         target_to_view(&target).mcp_format_example,
         r#"{
   "mcpServers": {
-"my-server": {
-  "type": "stdio",
-  "command": "node",
-  "args": ["server.js"],
-  "env": { "KEY": "value" }
-}
+    "my-server": {
+      "args": [
+        "server.js"
+      ],
+      "command": "node",
+      "env": {
+        "KEY": "value"
+      },
+      "type": "stdio"
+    }
   }
 }"#
     );
 
-    // 点分 prefix 逐段展开为 JSON 嵌套(zcode 的 mcp.servers)。
+    // 点分 prefix 结构化嵌套(zcode 的 mcp.servers)。
     target.mcp_config_prefix = "mcp.servers".to_string();
     assert_eq!(
         target_to_view(&target).mcp_format_example,
         r#"{
   "mcp": {
     "servers": {
-"my-server": {
-  "type": "stdio",
-  "command": "node",
-  "args": ["server.js"],
-  "env": { "KEY": "value" }
-}
+      "my-server": {
+        "args": [
+          "server.js"
+        ],
+        "command": "node",
+        "env": {
+          "KEY": "value"
+        },
+        "type": "stdio"
+      }
     }
   }
 }"#
@@ -905,12 +918,17 @@ fn target_view_carries_mcp_format_example_per_config_type() {
         r#"{
   "mcp": {
     "servers": {
-"my-server": {
-  "type": "local",
-  "enabled": true,
-  "command": ["node", "server.js"],
-  "environment": { "KEY": "value" }
-}
+      "my-server": {
+        "command": [
+          "node",
+          "server.js"
+        ],
+        "enabled": true,
+        "environment": {
+          "KEY": "value"
+        },
+        "type": "local"
+      }
     }
   }
 }"#
@@ -921,27 +939,45 @@ fn target_view_carries_mcp_format_example_per_config_type() {
     assert_eq!(
         target_to_view(&target).mcp_format_example,
         r#"[mcp_servers.my-server]
-enabled = true
-command = "node"
 args = ["server.js"]
-# 远端形态改写为：url = "https://example.com/mcp" 与 headers = { X-Key = "value" }"#
+command = "node"
+enabled = true
+
+[mcp_servers.my-server.env]
+KEY = "value"
+
+
+# 远端形态（HTTP 传输）改写为：
+[mcp_servers.my-server]
+enabled = true
+url = "https://example.com/mcp"
+
+[mcp_servers.my-server.headers]
+X-Key = "value"
+"#
     );
 
     target.mcp_config_type = McpConfigType::Dsh;
     assert_eq!(
         target_to_view(&target).mcp_format_example,
-        r#"- insert:
+        format!(
+            r#"- insert:
   - id: reins-mcp-my-server
-    name: "@deepseek-ai/dsh-mcp-client"
+    name: '@deepseek-ai/dsh-mcp-client'
     config:
       serverName: my-server
       transport: stdio
       command: node
-      args: [server.js]
-      env: { KEY: value }
-      cwd: /home/your-name
+      args:
+      - server.js
+      env:
+        KEY: value
+      cwd: {}
       toolCallTimeoutMs: 60000
-      failOnStartupError: false"#
+      failOnStartupError: false
+"#,
+            home.display()
+        )
     );
 }
 

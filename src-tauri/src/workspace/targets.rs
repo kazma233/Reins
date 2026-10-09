@@ -171,12 +171,8 @@ pub(crate) fn update_workspace_target_inner(
             .targets
             .get(current_target_id.as_str())
             .and_then(|target| target.mcp.config_type);
-        let (next_target_id, next_target) = normalize_raw_target_input(
-            input,
-            stored_config_type,
-            stored,
-            config.config_path(),
-        )?;
+        let (next_target_id, next_target) =
+            normalize_raw_target_input(input, stored_config_type, stored, config.config_path())?;
 
         if next_target_id != current_target_id
             && raw_config.targets.contains_key(next_target_id.as_str())
