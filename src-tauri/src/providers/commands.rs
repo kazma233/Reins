@@ -351,8 +351,9 @@ pub(crate) fn apply_provider_inner(
 ) -> Result<ProviderMutationResult> {
     let (files, warnings) = compute_apply(store, env, input, false)?;
     // 原子写逐个文件执行；中途失败时已写文件保持新内容，靠预览 +
-    // 幂等重试收敛，不做跨文件回滚。
-    super::apps::write_files(&files)?;
+    // 幂等重试收敛，不做跨文件回滚。敏感文件（如 dsh 凭据）强制
+    // owner-only 权限，按 adapter 的声明分发。
+    super::apps::write_files(&files, &adapter_for(input.app).restricted_paths(env))?;
     let written = files
         .iter()
         .map(|(path, _)| display_path(path))
@@ -380,7 +381,7 @@ pub(crate) fn remove_provider_from_app_inner(
     let provider = providers.get(provider_id);
     let adapter = adapter_for(app);
     let files = adapter.remove(env, provider_id, provider)?;
-    super::apps::write_files(&files)?;
+    super::apps::write_files(&files, &adapter.restricted_paths(env))?;
     let written = files
         .iter()
         .map(|(path, _)| display_path(path))
@@ -404,7 +405,7 @@ pub(crate) fn remove_external_entry_inner(
 ) -> Result<ProviderMutationResult> {
     let adapter = adapter_for(*app);
     let files = adapter.remove_external(env, entry_key)?;
-    super::apps::write_files(&files)?;
+    super::apps::write_files(&files, &adapter.restricted_paths(env))?;
     let written = files
         .iter()
         .map(|(path, _)| display_path(path))

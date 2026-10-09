@@ -1727,6 +1727,18 @@ fn dsh_apply_writes_patch_rows_and_credential() -> Result<()> {
         dsh.entries[0].protocol,
         Some(ProviderProtocol::OpenaiChatCompletions)
     );
+
+    // dsh 启动时拒绝加载非 owner-only 的凭据文件;apply 写入必须是 0600,
+    // 否则用户下次启动 dsh 整个 app 起不来(真实事故回归)。
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(dsh_credentials_file())?
+            .permissions()
+            .mode()
+            & 0o7777;
+        assert_eq!(mode, 0o600, "credentials 必须是 owner-only");
+    }
     Ok(())
 }
 

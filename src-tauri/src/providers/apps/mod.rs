@@ -14,7 +14,9 @@ use super::types::{
     ProviderAppId, ProviderAppState, ProviderProtocol, ReasoningEffortWrite, ReasoningLevel,
     ResolvedProvider,
 };
-use crate::support::fs::{display_path, grok_home_path, user_home_dir, write_atomic};
+use crate::support::fs::{
+    display_path, grok_home_path, user_home_dir, write_atomic, write_atomic_private,
+};
 
 pub(crate) mod claude;
 pub(crate) mod codex;
@@ -116,6 +118,13 @@ pub(crate) trait AppAdapter: Sync {
     // 注意与 inspect 内部读取的文件集不一定相同（如 dsh 的 inspect 还会
     // 读 workspace 域管理的全局 cordis patch）。
     fn config_paths(&self, env: &ToolEnv) -> Result<Vec<PathBuf>>;
+
+    // 敏感文件清单（凭据等）：写入时强制 owner-only 权限。默认空；
+    // 依赖方若对文件权限有守卫（如 dsh 启动时拒绝加载非 0600 的凭据），
+    // 必须在此声明，否则原子写会用默认 umask 权限落盘。
+    fn restricted_paths(&self, _env: &ToolEnv) -> Vec<PathBuf> {
+        Vec::new()
+    }
 
     // 思考等级在该平台配置文件里的实际写入值；必须与 apply 的写入
     // 逻辑同源（特殊映射的平台覆写，如 Grok max→xhigh、Pi off→off），
@@ -602,10 +611,16 @@ pub(crate) fn grok_config_path(env: &ToolEnv) -> Result<PathBuf> {
 // 共享写入助手
 // ---------------------------------------------------------------------------
 
-pub(crate) fn write_files(files: &[(PathBuf, String)]) -> Result<()> {
+// restricted 内的路径按敏感文件写（强制 owner-only 权限），其余沿用
+// 原子写；受限清单由写入方从 adapter 的 restricted_paths() 取。
+pub(crate) fn write_files(files: &[(PathBuf, String)], restricted: &[PathBuf]) -> Result<()> {
     for (path, content) in files {
-        write_atomic(path, content)
-            .with_context(|| format!("Failed to write {}", path.display()))?;
+        let write = if restricted.contains(path) {
+            write_atomic_private
+        } else {
+            write_atomic
+        };
+        write(path, content).with_context(|| format!("Failed to write {}", path.display()))?;
     }
     Ok(())
 }

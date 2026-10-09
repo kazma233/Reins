@@ -344,6 +344,12 @@ impl AppAdapter for DshAdapter {
         ])
     }
 
+    // dsh 启动时会拒绝加载非 owner-only(0600) 的凭据文件,整个 app 起不来;
+    // 凭据写入必须强制该权限(路径解析失败时返回空,由后续写入路径自己报错)。
+    fn restricted_paths(&self, env: &ToolEnv) -> Vec<PathBuf> {
+        dsh_credentials_path(env).into_iter().collect()
+    }
+
     fn capability(&self) -> AppCapability {
         AppCapability {
             supported_protocols: ProviderProtocol::all(),
