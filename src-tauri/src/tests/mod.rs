@@ -16,13 +16,18 @@ use crate::state;
 use crate::support;
 use crate::test_support::TestEnvGuard;
 
+mod agents;
+mod dsh;
 mod grokbuild;
 mod pi;
 mod session_cache;
 mod session_delete;
+mod session_delete_plan;
+mod session_engine;
 mod session_index;
 mod session_listing;
 mod session_readers;
+mod session_sources;
 mod session_token_usage;
 mod session_usage_stats;
 mod workspace_skills;
@@ -43,7 +48,13 @@ fn write_jsonl(path: &Path, lines: &[Value]) -> Result<()> {
 }
 
 fn seed_opencode_family(root_id: &str, child_id: &str) -> Result<()> {
-    let db_path = session::opencode::db_path()?;
+    seed_opencode_family_at(&session::opencode::root()?, root_id, child_id)
+}
+
+// env-free 版：直接向传入的 opencode 根目录写 opencode.db 夹具，供
+// engine_at 构造的 reader 级测试使用。
+fn seed_opencode_family_at(opencode_root: &Path, root_id: &str, child_id: &str) -> Result<()> {
+    let db_path = opencode_root.join("opencode.db");
 
     if let Some(parent) = db_path.parent() {
         fs::create_dir_all(parent)?;
@@ -185,12 +196,14 @@ struct DetailView {
     events: Vec<SessionEvent>,
 }
 
-fn read_detail(reader: &dyn session::SessionReader, path: &Path) -> Result<DetailView> {
+fn read_detail(reader: &dyn session::SessionReader, source_session_id: &str) -> Result<DetailView> {
     const ALL: usize = 10_000;
 
-    let overview = reader.parse_overview(path)?;
-    let messages = reader.parse_messages_page(path, 0, ALL)?.messages;
-    let events = reader.parse_events_page(path, 0, ALL)?.events;
+    let overview = reader.parse_overview(source_session_id)?;
+    let messages = reader
+        .parse_messages_page(source_session_id, 0, ALL)?
+        .messages;
+    let events = reader.parse_events_page(source_session_id, 0, ALL)?.events;
 
     Ok(DetailView {
         summary: overview.summary,

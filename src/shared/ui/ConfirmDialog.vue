@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import DialogShell from "./DialogShell.vue";
+import AppFieldError from "./AppFieldError.vue";
 import { joinClasses } from "../lib/join-classes";
 import "./confirm-dialog.css";
 
@@ -15,6 +16,8 @@ type ConfirmDialogProps = {
   cancelLabel?: string;
   dialogClassName?: string;
   loading?: boolean;
+  // 确认动作失败时留在对话框内：弹窗不关，用户能就地重试或取消。
+  error?: string | null;
 };
 
 const props = withDefaults(defineProps<ConfirmDialogProps>(), {
@@ -22,6 +25,7 @@ const props = withDefaults(defineProps<ConfirmDialogProps>(), {
   confirmLabel: "确认",
   confirmButtonClassName: "danger-button",
   loading: false,
+  error: null,
 });
 
 defineEmits<{
@@ -70,6 +74,7 @@ const descriptionId = computed(() =>
     <p v-if="description" :id="descriptionId" class="confirm-dialog__description">
       {{ description }}
     </p>
+    <AppFieldError :message="error ?? null" />
     <div v-if="$slots.default" class="confirm-dialog__content">
       <slot />
     </div>

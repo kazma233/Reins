@@ -55,6 +55,7 @@
 
 - `SourceSyncDialogProps.onConfirm` 签名改为 `(...) => void | Promise<void>`，子组件 `Promise.resolve(...).finally(() => setConfirming(false))` 在异步完成后复位。
 - `handleConfirmSourceSync` 成功路径调整为 sync → showNotice → 立即关弹窗 → reload 放后台（`preserveNotice: true`），不再让 reload 阻塞弹窗关闭。
+  - 已被 [2026-10-08 反馈就地化](./2026-10-08-inline-feedback-over-toast.md) 取代：同步结束不关弹窗，结果常驻在弹窗底部「开始同步」按钮旁；`showNotice` / `preserveNotice` 已不存在。
 
 ## 理由
 

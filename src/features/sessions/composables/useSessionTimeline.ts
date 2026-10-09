@@ -2,23 +2,15 @@ import { computed, ref, watch, type Ref } from "vue";
 import { getSessionEvents, getSessionMessages } from "../api";
 import { extractErrorMessage } from "@shared/lib/errors";
 import { createKeyGuard } from "@shared/lib/request-guard";
+import { sessionIdentityKey } from "../stores/session";
 import type {
   SessionEvent,
   SessionMessage,
-  SessionOverview,
-  SourceApp
+  SessionOverview
 } from "../types";
 
 // 详情时间线单页条数:滚动到底自动续拉,80 条在首屏成本与滚动频率间取衡。
 export const DETAIL_PAGE_SIZE = 80;
-
-export function sessionRequestKey(
-  sourceApp: SourceApp,
-  sourceSessionId: string,
-  transcriptPath: string
-): string {
-  return `${sourceApp}:${sourceSessionId}:${transcriptPath}`;
-}
 
 // messages/events 的加载流程完全同构,收敛成一个 loader,避免双份状态机漂移。
 export type TimelineLoader<T> = {
@@ -118,14 +110,13 @@ export function useSessionTimeline(
     if (!current) {
       return null;
     }
-    return sessionRequestKey(
+    return sessionIdentityKey(
       current.summary.sourceApp,
-      current.summary.sourceSessionId,
-      current.summary.transcriptPath
+      current.summary.sourceSessionId
     );
   });
 
-  // 切换会话后，未完成的消息/事件请求都要作废
+  // 切换会话后，未完成的消息/记录请求都要作废
   const requestGuard = createKeyGuard(() => detailKey.value);
 
   const messagesLoader = createTimelineLoader<SessionMessage>(
@@ -136,7 +127,6 @@ export function useSessionTimeline(
         currentOverview.summary.sourceApp,
         currentOverview.summary.sourceSessionId,
         {
-          transcriptPath: currentOverview.summary.transcriptPath,
           offset,
           limit: DETAIL_PAGE_SIZE
         }
@@ -154,18 +144,17 @@ export function useSessionTimeline(
         currentOverview.summary.sourceApp,
         currentOverview.summary.sourceSessionId,
         {
-          transcriptPath: currentOverview.summary.transcriptPath,
           offset,
           limit: DETAIL_PAGE_SIZE
         }
       );
       return { items: page.events, nextOffset: page.nextOffset };
     },
-    "加载更多事件失败。"
+    "加载更多记录失败。"
   );
 
   // overview 变化:两个 loader 全部重置,消息首页立即加载;
-  // 事件页懒加载,首页消息结束(成功或失败)后才置 0 允许拉取。
+  // raw 页懒加载,首页消息结束(成功或失败)后才置 0 允许拉取。
   watch(
     overview,
     currentOverview => {

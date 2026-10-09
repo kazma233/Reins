@@ -1,4 +1,4 @@
-import { reactive } from "vue";
+import { reactive, ref } from "vue";
 import { previewSourceSyncConflicts, syncSourceToTargets } from "../api";
 import type {
   SkillSourceConfigView,
@@ -8,7 +8,6 @@ import type {
   SyncSkillOption,
 } from "../types";
 import { extractErrorMessage } from "@shared/lib/errors";
-import { useWorkspaceNotice } from "./useWorkspaceNotice";
 import { useWorkspaceState } from "./useWorkspaceState";
 
 type SourceSyncSnapshot = {
@@ -24,8 +23,12 @@ type PendingSourceSync = {
 };
 
 export function useSourceSync() {
-  const { showNotice } = useWorkspaceNotice();
   const { reloadWorkspaceState } = useWorkspaceState();
+
+  // 同步结果回到弹窗底部同步按钮旁：弹窗保持打开，用户能直接看到结果并接着操作。
+  const sourceSyncDialogRef = ref<{ reportResult: (result: { text: string; failed: boolean }) => void } | null>(
+    null,
+  );
 
   // SourceSyncDialog is self-managing — we only track its open state and the
   // source it is operating on. Skill/target selection and the remove-sync
@@ -43,11 +46,13 @@ export function useSourceSync() {
   const sourceSyncOverwriteDialog = reactive<{
     open: boolean;
     loading: boolean;
+    error: string | null;
     conflicts: SourceSyncConflict[];
     pending: PendingSourceSync | null;
   }>({
     open: false,
     loading: false,
+    error: null,
     conflicts: [],
     pending: null,
   });
@@ -66,20 +71,23 @@ export function useSourceSync() {
     };
   }
 
+  // 同步结果只回写到弹窗按钮旁；面板列表由 reload 自行更新，
+  // 不再额外往来源行上挂一份结果。
   async function runSourceSync(pending: PendingSourceSync, overwriteExisting: boolean) {
     const result: SourceSyncResult = await syncSourceToTargets(
       buildSourceSyncInput(pending, overwriteExisting),
     );
-    if (result.warnings.length > 0) {
-      showNotice(result.warnings.join("\n"), "info");
-    } else {
-      showNotice(
-        `同步完成：移除 ${result.removed.length} 个旧链接，新建 ${result.applied.length} 个软链接。`,
-        "success",
-      );
-    }
-    closeSourceSyncDialog();
-    await reloadWorkspaceState({ preserveNotice: true });
+    sourceSyncDialogRef.value?.reportResult({
+      text:
+        result.warnings.length > 0
+          ? result.warnings.join("\n")
+          : `同步完成：移除 ${result.removed.length} 个旧链接，新建 ${result.applied.length} 个软链接。`,
+      failed: result.warnings.length > 0,
+    });
+    // 覆盖确认弹窗只在覆盖路径上叠在同步弹窗之上，同步结束就该收起来；
+    // 同步弹窗保持打开，结果与后续操作都在原地。
+    closeSourceSyncOverwriteDialog();
+    await reloadWorkspaceState({ background: true });
   }
 
   function closeSourceSyncDialog() {
@@ -112,12 +120,16 @@ export function useSourceSync() {
         sourceSyncOverwriteDialog.loading = false;
         sourceSyncOverwriteDialog.conflicts = conflicts;
         sourceSyncOverwriteDialog.pending = pending;
-        sourceSyncDialog.loading = false;
         return;
       }
       await runSourceSync(pending, false);
     } catch (error) {
-      showNotice(extractErrorMessage(error, "同步失败。"), "error");
+      sourceSyncDialogRef.value?.reportResult({
+        text: extractErrorMessage(error, "同步失败。"),
+        failed: true,
+      });
+    } finally {
+      // 弹窗不关，同步结束后必须解开按钮，不然用户接着操作会被锁住。
       sourceSyncDialog.loading = false;
     }
   }
@@ -125,6 +137,7 @@ export function useSourceSync() {
   function closeSourceSyncOverwriteDialog() {
     sourceSyncOverwriteDialog.open = false;
     sourceSyncOverwriteDialog.loading = false;
+    sourceSyncOverwriteDialog.error = null;
     sourceSyncOverwriteDialog.conflicts = [];
     sourceSyncOverwriteDialog.pending = null;
   }
@@ -141,9 +154,9 @@ export function useSourceSync() {
 
     try {
       await runSourceSync(pending, true);
-      closeSourceSyncOverwriteDialog();
     } catch (error) {
-      showNotice(extractErrorMessage(error, "覆盖并同步失败。"), "error");
+      sourceSyncOverwriteDialog.error = extractErrorMessage(error, "覆盖并同步失败。");
+    } finally {
       sourceSyncOverwriteDialog.loading = false;
       sourceSyncDialog.loading = false;
     }
@@ -151,6 +164,7 @@ export function useSourceSync() {
 
   return {
     sourceSyncDialog,
+    sourceSyncDialogRef,
     sourceSyncOverwriteDialog,
     handleOpenSourceSync,
     handleConfirmSourceSync,

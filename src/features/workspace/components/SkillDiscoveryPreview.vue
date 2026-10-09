@@ -5,13 +5,18 @@ type SkillDiscoveryPreviewProps = {
   discovery: SkillDiscoveryResult | null;
   emptyText: string;
   loading: boolean;
+  // 预览读取失败：错误优先于空态展示，下一次成功读取时由调用方清空。
+  error?: string | null;
 };
 
-const props = defineProps<SkillDiscoveryPreviewProps>();
+const props = withDefaults(defineProps<SkillDiscoveryPreviewProps>(), {
+  error: null,
+});
 </script>
 
 <template>
-  <div v-if="loading || !discovery" class="empty-state">{{ emptyText }}</div>
+  <div v-if="error" class="empty-state error-text">{{ error }}</div>
+  <div v-else-if="loading || !discovery" class="empty-state">{{ emptyText }}</div>
   <template v-else>
     <div class="manager-import-skill-list manager-import-skill-list--compact">
       <template v-if="discovery.skills.length > 0">

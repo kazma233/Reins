@@ -127,24 +127,22 @@ fn create_workspace_target_inner_writes_target_to_config() -> Result<()> {
     let result = create_workspace_target_inner(
         &store,
         RawTargetInput {
-            target_id: "cursor".to_string(),
+            target_id: "codex".to_string(),
             enabled: true,
-            skill_dir: root.path().join("cursor-skills").display().to_string(),
-            config_path: Some("~/.cursor/config.json".to_string()),
-            mcp_config_prefix: "mcpServers".to_string(),
-            mcp_config_type: McpConfigType::Common,
+            skill_dir: root.path().join("codex-skills").display().to_string(),
+            config_path: Some("~/.codex/config.toml".to_string()),
         },
     )?;
 
-    assert_eq!(result.target_id.as_str(), "cursor");
+    assert_eq!(result.target_id.as_str(), "codex");
     assert_eq!(
         result.updated_paths,
         vec![store.config_path().display().to_string()]
     );
 
     let raw: RawManagerConfig = serde_yaml::from_str(&fs::read_to_string(store.config_path())?)?;
-    assert!(raw.targets.contains_key("cursor"));
-    assert!(raw.targets["cursor"].skill_dir.contains("cursor-skills"));
+    assert!(raw.targets.contains_key("codex"));
+    assert!(raw.targets["codex"].skill_dir.contains("codex-skills"));
     Ok(())
 }
 
@@ -164,8 +162,6 @@ fn create_workspace_target_inner_allows_target_without_mcp_config() -> Result<()
             enabled: true,
             skill_dir: root.path().join("pi-skills").display().to_string(),
             config_path: None,
-            mcp_config_prefix: String::new(),
-            mcp_config_type: McpConfigType::Common,
         },
     )?;
 
@@ -177,7 +173,42 @@ fn create_workspace_target_inner_allows_target_without_mcp_config() -> Result<()
 }
 
 #[test]
-fn create_workspace_target_inner_requires_mcp_path_and_prefix_in_pairs() -> Result<()> {
+fn create_workspace_target_inner_rejects_non_builtin_id() -> Result<()> {
+    let root = TestDir::new("config-create-target-unknown-id")?;
+    let store = WorkspaceConfigStore::at(root.path());
+    fs::write(
+        store.config_path(),
+        serde_yaml::to_string(&RawManagerConfig::default())?,
+    )?;
+
+    let error = create_workspace_target_inner(
+        &store,
+        RawTargetInput {
+            target_id: "cursor".to_string(),
+            enabled: true,
+            skill_dir: root.path().join("skills").display().to_string(),
+            config_path: None,
+        },
+    )
+    .expect_err("非内置 target id 必须被拒绝");
+
+    assert!(
+        error.to_string().contains("仅支持创建内置工具的 target"),
+        "错误信息需说明仅支持内置工具，got: {error}"
+    );
+    let raw: RawManagerConfig = serde_yaml::from_str(&fs::read_to_string(store.config_path())?)?;
+    assert!(raw.targets.is_empty(), "被拒绝的 create 不能写入文件");
+    Ok(())
+}
+
+// MCP 配置节点路径是各工具的固定知识,客户端不再传 prefix:create 时
+// 只有 prefix_required 的格式(codex/claude/opencode/common)才在 path
+// 缺失 + prefix 非空时报错;dsh 这类 prefix 不必填的格式允许无 MCP 配置。
+// 旧「codex 显式传 path 但 prefix 由客户端漏传」的失败用例已无意义——
+// prefix 现在由 defaults 自动填,落盘后 codex 的 path + mcp_servers
+// 是配套的合理状态。
+#[test]
+fn create_workspace_target_inner_keeps_prefix_in_sync_with_path() -> Result<()> {
     let root = TestDir::new("config-create-target-mcp-pair")?;
     let store = WorkspaceConfigStore::at(root.path());
     fs::write(
@@ -185,34 +216,192 @@ fn create_workspace_target_inner_requires_mcp_path_and_prefix_in_pairs() -> Resu
         serde_yaml::to_string(&RawManagerConfig::default())?,
     )?;
 
-    let missing_prefix = create_workspace_target_inner(
+    // 显式传 path 时,prefix 由 defaults 派生(此处为 codex 的 mcp_servers),
+    // 落盘后两者配对——不再是错误。
+    create_workspace_target_inner(
         &store,
         RawTargetInput {
-            target_id: "cursor".to_string(),
+            target_id: "codex".to_string(),
             enabled: true,
             skill_dir: root.path().join("skills").display().to_string(),
-            config_path: Some("~/.cursor/config.json".to_string()),
-            mcp_config_prefix: String::new(),
-            mcp_config_type: McpConfigType::Common,
+            config_path: Some("~/.codex/config.toml".to_string()),
         },
-    )
-    .expect_err("config path without prefix must fail");
-    assert!(missing_prefix.to_string().contains("configPrefix"));
+    )?;
+    let raw: RawManagerConfig = serde_yaml::from_str(&fs::read_to_string(store.config_path())?)?;
+    let codex = &raw.targets["codex"];
+    assert_eq!(codex.mcp.config_prefix.as_deref(), Some("mcp_servers"));
+    assert_eq!(codex.mcp.config_type, Some(McpConfigType::Common));
 
-    let missing_path = create_workspace_target_inner(
+    // 隐式缺 path 时,create 不假设想要 MCP——prefix 留空,只有 dsh 这类
+    // prefix_required=false 的格式天然不报错;common 隐式缺 path 同样不报错
+    // (因 prefix 留空、prefix_required 校验无事可校)。
+    create_workspace_target_inner(
         &store,
         RawTargetInput {
-            target_id: "cursor".to_string(),
+            target_id: "zcode".to_string(),
             enabled: true,
             skill_dir: root.path().join("skills").display().to_string(),
             config_path: None,
-            mcp_config_prefix: "mcpServers".to_string(),
-            mcp_config_type: McpConfigType::Common,
         },
-    )
-    .expect_err("prefix without config path must fail");
-    assert!(missing_path.to_string().contains("MCP 配置文件路径"));
+    )?;
+    let raw: RawManagerConfig = serde_yaml::from_str(&fs::read_to_string(store.config_path())?)?;
+    let zcode = &raw.targets["zcode"];
+    assert!(zcode.mcp.config_prefix.is_none());
+    assert!(zcode.mcp.config_path.is_none());
 
+    Ok(())
+}
+
+// 收紧只影响新建：config.yaml 里已有的自定义 target 仍可照常编辑（改名/改路径）。
+#[test]
+fn update_workspace_target_inner_still_accepts_existing_custom_id() -> Result<()> {
+    let root = TestDir::new("config-update-custom-target")?;
+    let store = WorkspaceConfigStore::at(root.path());
+    let raw = RawManagerConfig {
+        targets: [(
+            "my-gateway".to_string(),
+            RawTargetConfig {
+                enabled: true,
+                skill_dir: root.path().join("gateway-skills").display().to_string(),
+                mcp: RawTargetMcpConfig {
+                    config_path: Some(
+                        root.path()
+                            .join("gateway/config.json")
+                            .display()
+                            .to_string(),
+                    ),
+                    config_prefix: Some("mcpServers".to_string()),
+                    config_type: Some(McpConfigType::Common),
+                },
+            },
+        )]
+        .into_iter()
+        .collect(),
+        ..RawManagerConfig::default()
+    };
+    fs::write(store.config_path(), serde_yaml::to_string(&raw)?)?;
+
+    let result = update_workspace_target_inner(
+        &store,
+        "my-gateway",
+        RawTargetInput {
+            target_id: "my-gateway-2".to_string(),
+            enabled: true,
+            skill_dir: root.path().join("gateway-skills-v2").display().to_string(),
+            config_path: Some(
+                root.path()
+                    .join("gateway/config.json")
+                    .display()
+                    .to_string(),
+            ),
+        },
+    )?;
+
+    assert_eq!(result.target_id.as_str(), "my-gateway-2");
+    let next: RawManagerConfig = serde_yaml::from_str(&fs::read_to_string(store.config_path())?)?;
+    assert!(next.targets.contains_key("my-gateway-2"));
+    assert!(!next.targets.contains_key("my-gateway"));
+    Ok(())
+}
+
+// create 的 MCP 格式从 AgentSpec 派生落盘，客户端不传也不可信客户端。
+#[test]
+fn create_workspace_target_inner_derives_config_type_from_builtin_defaults() -> Result<()> {
+    let root = TestDir::new("config-create-target-derives-type")?;
+    let store = WorkspaceConfigStore::at(root.path());
+    fs::write(
+        store.config_path(),
+        serde_yaml::to_string(&RawManagerConfig::default())?,
+    )?;
+
+    create_workspace_target_inner(
+        &store,
+        RawTargetInput {
+            target_id: "opencode".to_string(),
+            enabled: true,
+            skill_dir: "skills".to_string(),
+            config_path: Some("opencode.json".to_string()),
+        },
+    )?;
+
+    let raw: RawManagerConfig = serde_yaml::from_str(&fs::read_to_string(store.config_path())?)?;
+    assert_eq!(
+        raw.targets["opencode"].mcp.config_type,
+        Some(McpConfigType::OpenCode)
+    );
+    Ok(())
+}
+
+// update 保留存量存储值：显式 config_type 原样保留，省略仍省略（解析时回落
+// defaults 的口径不变）；校验用有效类型与解析侧一致。
+#[test]
+fn update_workspace_target_inner_preserves_stored_config_type() -> Result<()> {
+    let root = TestDir::new("config-update-keeps-type")?;
+    let store = WorkspaceConfigStore::at(root.path());
+    let raw = RawManagerConfig {
+        targets: [
+            (
+                "custom-dsh".to_string(),
+                RawTargetConfig {
+                    enabled: true,
+                    skill_dir: "custom-dsh/skills".to_string(),
+                    mcp: RawTargetMcpConfig {
+                        config_path: Some("custom/patch.yml".to_string()),
+                        config_prefix: None,
+                        config_type: Some(McpConfigType::Dsh),
+                    },
+                },
+            ),
+            (
+                "codex".to_string(),
+                RawTargetConfig {
+                    enabled: true,
+                    skill_dir: "codex/skills".to_string(),
+                    mcp: RawTargetMcpConfig {
+                        config_path: Some("codex/config.toml".to_string()),
+                        config_prefix: Some("mcp_servers".to_string()),
+                        config_type: None,
+                    },
+                },
+            ),
+        ]
+        .into_iter()
+        .collect(),
+        ..RawManagerConfig::default()
+    };
+    fs::write(store.config_path(), serde_yaml::to_string(&raw)?)?;
+
+    update_workspace_target_inner(
+        &store,
+        "custom-dsh",
+        RawTargetInput {
+            target_id: "custom-dsh".to_string(),
+            enabled: true,
+            skill_dir: "custom-dsh/skills-v2".to_string(),
+            config_path: Some("custom/patch.yml".to_string()),
+        },
+    )?;
+    update_workspace_target_inner(
+        &store,
+        "codex",
+        RawTargetInput {
+            target_id: "codex".to_string(),
+            enabled: true,
+            skill_dir: "codex/skills-v2".to_string(),
+            config_path: Some("codex/config.toml".to_string()),
+        },
+    )?;
+
+    let next: RawManagerConfig = serde_yaml::from_str(&fs::read_to_string(store.config_path())?)?;
+    assert_eq!(
+        next.targets["custom-dsh"].mcp.config_type,
+        Some(McpConfigType::Dsh),
+        "显式存量 config_type 必须原样保留"
+    );
+    assert_eq!(
+        next.targets["codex"].mcp.config_type, None,
+        "省略的 config_type 必须保持省略（解析回落 defaults）"
+    );
     Ok(())
 }
 

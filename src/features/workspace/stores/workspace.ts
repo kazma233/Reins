@@ -12,6 +12,14 @@ type WorkspaceStoreState = {
   loadingConfig: boolean;
   loadingInspection: boolean;
   runningAction: boolean;
+  // 整页读取失败：错误态由面板就地渲染并提供重试。
+  loadError: string | null;
+  // 项目 agent 选择器的部分失败目标：错误必须留在触发它的 mcp 卡片上，
+  // 因为弹窗关闭后失败目标已不在任何弹窗里。
+  projectPickerWarnings: Record<string, string>;
+  // 面板直发操作的失败与提示（启停、拾取路径等）：没有弹窗可承载，
+  // 按操作 key 常驻在面板顶部，同 key 的下一次操作覆盖它。
+  actionResults: Record<string, { message: string; failed: boolean }>;
 };
 
 export const useWorkspaceStore = defineStore("workspace", {
@@ -22,6 +30,9 @@ export const useWorkspaceStore = defineStore("workspace", {
     loadingConfig: false,
     loadingInspection: false,
     runningAction: false,
+    loadError: null,
+    projectPickerWarnings: {},
+    actionResults: {},
   }),
   actions: {
     setWorkspaceTab(tab: WorkspaceTab) {
@@ -41,6 +52,27 @@ export const useWorkspaceStore = defineStore("workspace", {
     },
     setRunningAction(running: boolean) {
       this.runningAction = running;
+    },
+    setLoadError(error: string | null) {
+      this.loadError = error;
+    },
+    setProjectPickerWarning(serverName: string, message: string | null) {
+      const next = { ...this.projectPickerWarnings };
+      if (message === null) {
+        delete next[serverName];
+      } else {
+        next[serverName] = message;
+      }
+      this.projectPickerWarnings = next;
+    },
+    setActionResult(key: string, result: { message: string; failed: boolean } | null) {
+      const next = { ...this.actionResults };
+      if (result === null) {
+        delete next[key];
+      } else {
+        next[key] = result;
+      }
+      this.actionResults = next;
     },
   },
 });

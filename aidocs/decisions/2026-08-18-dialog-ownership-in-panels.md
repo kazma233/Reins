@@ -19,11 +19,14 @@
 3. **跨域的 project agent picker 拆为 `useProjectAgentPicker`**：由 `McpPanel` 消费，`useProjectMutations` 瘦身回 target/project 域自身。
 4. **`Workspace.vue` 只做壳**：header 文案 + tab 导航（`store.setWorkspaceTab`）+ 三个 Panel + `AppToast`（notice 来自 `useWorkspaceNotice` 单例）+ `onMounted` 单一 bootstrap（`reloadWorkspaceState`）。568 行 → 58 行。
 
+> 注：第 4 条里的 `AppToast` / `useWorkspaceNotice` 已在 [2026-10-08 反馈就地化](./2026-10-08-inline-feedback-over-toast.md) 中移除，壳的职责与「`Workspace.vue` 只做壳 + Panel 自治」的结论不变。
+
 ## 生效约束
 
 - 新增 mutation / dialog 时放进对应面板域，不再上提到 `Workspace.vue`。
 - `DialogShell` 通过 Teleport 挂到 body，dialog 放在任意组件内都不受父级 `overflow` / 层级影响，位置自由。
 - store / notice 是单例（Pinia store + 模块级 ref），composable 可被多个面板安全调用，不会产生多份状态。
+  - 注：notice 单例已在 [2026-10-08 反馈就地化](./2026-10-08-inline-feedback-over-toast.md) 中移除，store 仍是单例。
 
 ## 验证
 

@@ -5,6 +5,7 @@ use std::sync::Arc;
 use anyhow::Result;
 use serde_json::Value as JsonValue;
 
+use super::mcp_formats::mcp_format_writer;
 use super::{
     AgentTargetId, McpConfigType, McpInspection, McpTargetInspection, PathInspection,
     ProjectInspection, ResolvedManagerConfig, ResolvedMcpConfig, ResolvedTargetConfig,
@@ -139,9 +140,13 @@ fn inspect_mcp_target(
     } else if let Some(config_path) = config_path {
         match read_existing_mcp_entries_cached(mcp_entry_cache, target, config_path) {
             Ok(existing) => {
+                // 条目 key 的归类由各 config type 的 writer 声明（dsh 为清洗后
+                // 的 serverName，其余与 Reins 的 mcp name 一致）。
+                let lookup_name =
+                    mcp_format_writer(target.mcp_config_type).entry_key_for(&mcp.name);
                 let state = if !mcp.enabled {
                     "disabled".to_string()
-                } else if existing.contains_key(&mcp.name) {
+                } else if existing.contains_key(&lookup_name) {
                     "present".to_string()
                 } else {
                     "missing".to_string()

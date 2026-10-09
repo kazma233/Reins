@@ -362,3 +362,65 @@ fn fetch_direct_anthropic_falls_back_to_root_models() -> Result<()> {
     );
     Ok(())
 }
+
+// 2xx 但不是 JSON：错误串要带出响应体开头，便于判断网关返回了什么。
+#[test]
+fn fetch_direct_reports_non_json_body_head() -> Result<()> {
+    use std::io::{BufRead, BufReader, Write};
+    use std::net::TcpListener;
+
+    fn serve_body(body: String) -> (u16, std::thread::JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let port = listener.local_addr().expect("addr").port();
+        let handle = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut request_line = String::new();
+            reader.read_line(&mut request_line).unwrap();
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            let mut stream = stream;
+            stream.write_all(response.as_bytes()).unwrap();
+        });
+        (port, handle)
+    }
+
+    // HTML 错误页：原样带出（单行化后）
+    let html = "<html>\n  <body>404 page not found</body>\n</html>".to_string();
+    let (port, server) = serve_body(html);
+    let err = crate::providers::commands::fetch_provider_models_direct_inner(
+        &crate::providers::types::ProviderProtocol::AnthropicMessages,
+        &format!("http://127.0.0.1:{port}"),
+        "sk-probe",
+    )
+    .unwrap_err()
+    .to_string();
+    server.join().unwrap();
+
+    assert!(
+        err.contains(&format!("http://127.0.0.1:{port}/v1/models")),
+        "{err}"
+    );
+    assert!(
+        err.contains("<html> <body>404 page not found</body> </html>"),
+        "{err}"
+    );
+    assert!(!err.contains('\n'), "错误串应压成单行：{err}");
+
+    // 超长响应体：截断并标记省略（截断阈值 1000 字符）
+    let long = format!("<html>{}</html>", "x".repeat(1200));
+    let (port, server) = serve_body(long);
+    let err = crate::providers::commands::fetch_provider_models_direct_inner(
+        &crate::providers::types::ProviderProtocol::AnthropicMessages,
+        &format!("http://127.0.0.1:{port}"),
+        "sk-probe",
+    )
+    .unwrap_err()
+    .to_string();
+    server.join().unwrap();
+
+    assert!(err.ends_with('…'), "超长响应体应截断：{err}");
+    Ok(())
+}

@@ -133,6 +133,8 @@ target 只扫描 Skills 目录的直接子项，不递归扫描 Skill 内容。�
 
 source 根路径重叠时，一个链接可能匹配多个 source；文件系统无法证明它最初由哪个 source 创建，因此接口返回 `matchedSourceIds`，不强行选择唯一归属。
 
+UI 给某个 target 打「关联」标签的条件，是它至少有一条链接的 `matchedSourceIds` 含当前 source。这覆盖 `linked` 和待清理的 `excluded` / `sourceMissing`：三种状态都说明该 target 里留有当前来源的产物，所以同步弹窗打开时按同一判定预选 target。`unmanaged` 链接没有归属 source，不产生标签也不预选。
+
 清理逻辑按“链接目标位于 source 根目录下”的路径前缀判断，而不是按 source ID 记录归属。嵌套 source 根目录因此可能互相命中：删除或同步外层 source 时，也可能清理指向其子目录的链接。
 
 ## 5. 普通同步流程
@@ -143,10 +145,11 @@ source 根路径重叠时，一个链接可能匹配多个 source；文件系统
 
 1. 加载 target 选项和 source 的 Skill 选项。
 2. Skills 选项包含全部发现结果及 `matched` 标记；默认选择 `matched=true` 的 Skill。
-3. 用户选择 Skill（传 `relative_path`）和 target ID。
-4. 点击同步后，前端先调用冲突预览。
-5. 若存在冲突，弹出覆盖确认；确认后把 `overwriteExisting=true` 重新提交。
-6. 弹窗加载时得到的 `sourceRoot` 和 Skill 列表作为 snapshot 传给后端。后端会验证 snapshot 根目录仍属于当前 source，并优先复用它，避免确认阶段重复 clone/扫描。
+3. Targets 默认勾选带「关联」标签的 target（判定见 4.2），其余默认不勾。用户打开弹窗后直接点同步，就能把来源新增的 Skill 补到上次同步过的 target，不用重新勾一遍。
+4. 用户选择 Skill（传 `relative_path`）和 target ID。
+5. 点击同步后，前端先调用冲突预览。
+6. 若存在冲突，弹出覆盖确认；确认后把 `overwriteExisting=true` 重新提交。
+7. 弹窗加载时得到的 `sourceRoot` 和 Skill 列表作为 snapshot 传给后端。后端会验证 snapshot 根目录仍属于当前 source，并优先复用它，避免确认阶段重复 clone/扫描。
 
 ### 5.2 后端执行顺序
 
@@ -249,3 +252,4 @@ source/b/tool/SKILL.md  -> target/tool
 - `src/features/workspace/composables/useSourceSync.ts`：同步、冲突覆盖、移除同步的请求编排。
 - `src/features/workspace/components/dialogs/SourceSyncDialog.vue`：加载 snapshot、选择 Skills/targets、发起同步。
 - `src/features/workspace/components/SyncTargetGroups.vue`：target 分组、继承关系和链接状态展示。
+- `src/features/workspace/syncAssociations.ts`：链接状态展示口径、「关联」判定以及同步 targets 预选。

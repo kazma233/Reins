@@ -16,7 +16,7 @@ use crate::providers::commands::{
 use crate::providers::config::ProviderConfigStore;
 use crate::providers::types::{
     ApplyProviderInput, ProviderAppEntryStatus, ProviderAppId, ProviderModelInput,
-    ProviderProtocol, ProviderUpsertInput, ReasoningLevel,
+    ProviderProtocol, ProviderUpsertInput, ProviderWriteMode, ReasoningLevel,
 };
 use crate::test_support::{TestDir, TestEnvGuard};
 
@@ -67,6 +67,7 @@ impl Isolated {
     ) -> Result<()> {
         self.store.upsert(ProviderUpsertInput {
             provider_id: id.to_string(),
+            mode: ProviderWriteMode::Upsert,
             label: format!("Label {id}"),
             protocol,
             base_url: base_url.to_string(),
@@ -137,6 +138,7 @@ impl Isolated {
 fn provider_input(id: &str, protocol: ProviderProtocol, base_url: &str) -> ProviderUpsertInput {
     ProviderUpsertInput {
         provider_id: id.to_string(),
+        mode: ProviderWriteMode::Upsert,
         label: format!("Label {id}"),
         protocol,
         base_url: base_url.to_string(),
@@ -225,6 +227,14 @@ fn grok_path() -> PathBuf {
         .unwrap()
         .join(".grok")
         .join("config.toml")
+}
+
+fn yaml_get<'a>(value: &'a serde_yaml::Value, path: &[&str]) -> Option<&'a serde_yaml::Value> {
+    let mut current = value;
+    for segment in path {
+        current = current.get(*segment)?;
+    }
+    Some(current)
 }
 
 // ---------------------------------------------------------------------------
@@ -370,6 +380,7 @@ fn codex_apply_writes_and_clears_model_context_window() -> Result<()> {
     // 元数据清空后替换应用不再写该键，避免残留旧窗口。
     isolated.store.upsert(ProviderUpsertInput {
         provider_id: "p1".to_string(),
+        mode: ProviderWriteMode::Upsert,
         label: "Label p1".to_string(),
         protocol: ProviderProtocol::OpenaiResponses,
         base_url: "https://p1.test/v1".to_string(),
@@ -419,9 +430,7 @@ fn codex_apply_writes_model_catalog_and_remove_clears_pointer() -> Result<()> {
     let config: TomlValue = toml::from_str(&read_text(&codex_path()))?;
     let catalog_path = codex_catalog_path();
     assert_eq!(
-        config
-            .get("model_catalog_json")
-            .and_then(TomlValue::as_str),
+        config.get("model_catalog_json").and_then(TomlValue::as_str),
         Some(catalog_path.display().to_string().as_str())
     );
     let catalog: JsonValue = serde_json::from_str(&read_text(&catalog_path))?;
@@ -461,10 +470,10 @@ fn codex_remove_keeps_user_model_catalog_json() -> Result<()> {
 
     let path = codex_path();
     let mut edited: TomlValue = toml::from_str(&read_text(&path))?;
-    edited
-        .as_table_mut()
-        .unwrap()
-        .insert("model_catalog_json".to_string(), TomlValue::String("C:/custom/models.json".to_string()));
+    edited.as_table_mut().unwrap().insert(
+        "model_catalog_json".to_string(),
+        TomlValue::String("C:/custom/models.json".to_string()),
+    );
     fs::write(&path, toml::to_string(&edited)?)?;
 
     isolated.remove_from("p1", ProviderAppId::Codex)?;
@@ -622,10 +631,12 @@ fn claude_apply_cleans_legacy_api_key_and_notes_it() -> Result<()> {
         .iter()
         .find(|app| app.app == ProviderAppId::Claude)
         .unwrap();
-    assert!(claude.entries[0]
-        .notes
-        .iter()
-        .any(|note| note.contains("ANTHROPIC_API_KEY")));
+    assert!(
+        claude.entries[0]
+            .notes
+            .iter()
+            .any(|note| note.contains("ANTHROPIC_API_KEY"))
+    );
 
     isolated.remove_from("agg", ProviderAppId::Claude)?;
     let removed: JsonValue = serde_json::from_str(&read_text(&path))?;
@@ -897,6 +908,7 @@ fn opencode_apply_omits_incomplete_limit_and_narrows_modalities() -> Result<()> 
     fs::write(&path, json!({}).to_string())?;
     isolated.store.upsert(ProviderUpsertInput {
         provider_id: "p1".to_string(),
+        mode: ProviderWriteMode::Upsert,
         label: "Label p1".to_string(),
         protocol: ProviderProtocol::OpenaiChatCompletions,
         base_url: "https://p1.test/v1".to_string(),
@@ -1099,23 +1111,35 @@ fn opencode_jsonc_takes_precedence_and_apply_migrates_registration() -> Result<(
         .iter()
         .find(|entry| entry.key == "reins-p1")
         .expect("reins-p1 in opencode.json");
-    assert!(shadowed
-        .notes
-        .iter()
-        .any(|note| note.contains("opencode.jsonc")));
+    assert!(
+        shadowed
+            .notes
+            .iter()
+            .any(|note| note.contains("opencode.jsonc"))
+    );
 
     // 再次应用：写入 .jsonc，.json 里的旧键清掉。
     isolated.apply("p1", ProviderAppId::Opencode, &["model-a"], "model-a", None)?;
     let json_root: JsonValue = serde_json::from_str(&read_text(&opencode_path()))?;
     let jsonc_root: JsonValue = serde_json::from_str(&read_text(&jsonc))?;
-    assert!(json_root.get("providers").and_then(|p| p.get("reins-p1")).is_none());
+    assert!(
+        json_root
+            .get("providers")
+            .and_then(|p| p.get("reins-p1"))
+            .is_none()
+    );
     assert!(jsonc_root["providers"]["reins-p1"].is_object());
     assert_eq!(jsonc_root["model"], "reins-p1/model-a");
 
     // 移除：从 .jsonc 清掉注册键与默认模型。
     isolated.remove_from("p1", ProviderAppId::Opencode)?;
     let after: JsonValue = serde_json::from_str(&read_text(&jsonc))?;
-    assert!(after.get("providers").and_then(|p| p.get("reins-p1")).is_none());
+    assert!(
+        after
+            .get("providers")
+            .and_then(|p| p.get("reins-p1"))
+            .is_none()
+    );
     assert!(after.get("model").is_none());
     Ok(())
 }
@@ -1191,6 +1215,7 @@ fn pi_apply_writes_thinking_level_map_from_model_levels() -> Result<()> {
     let isolated = Isolated::new()?;
     isolated.store.upsert(ProviderUpsertInput {
         provider_id: "p1".to_string(),
+        mode: ProviderWriteMode::Upsert,
         label: "Label p1".to_string(),
         protocol: ProviderProtocol::OpenaiResponses,
         base_url: "https://p1.test/v1".to_string(),
@@ -1413,6 +1438,7 @@ fn grok_apply_omits_absent_model_metadata() -> Result<()> {
     let isolated = Isolated::new()?;
     isolated.store.upsert(ProviderUpsertInput {
         provider_id: "p1".to_string(),
+        mode: ProviderWriteMode::Upsert,
         label: "Label p1".to_string(),
         protocol: ProviderProtocol::OpenaiChatCompletions,
         base_url: "https://p1.test/v1".to_string(),
@@ -1442,8 +1468,9 @@ fn grok_apply_omits_absent_model_metadata() -> Result<()> {
     Ok(())
 }
 
-// 应用弹窗的「不写入的模型元数据」清单来自能力表：四个工具都写窗口，Claude
-// 另写最大输出，OpenCode 与 Pi 四类全覆盖，Grok 缺最大输出与图像输入。
+// 应用弹窗的「不写入的模型元数据」清单来自能力表：各工具都写窗口，Claude
+// 另写最大输出，OpenCode 与 Pi 四类全覆盖，Grok 缺最大输出与图像输入，
+// dsh 缺"推理能力"布尔（只能经思考等级字典或显式 false 间接表达）。
 #[test]
 fn app_states_declare_unwritten_model_fields() -> Result<()> {
     let isolated = Isolated::new()?;
@@ -1469,6 +1496,9 @@ fn app_states_declare_unwritten_model_fields() -> Result<()> {
     assert_eq!(fields(ProviderAppId::Claude), vec!["图像输入", "推理能力"]);
     assert!(fields(ProviderAppId::Opencode).is_empty());
     assert!(fields(ProviderAppId::Pi).is_empty());
+    // dsh 的模型条目（PiAiModelProfile）有 contextWindow/maxTokens/input/
+    // reasoningEfforts 落点；"推理能力"布尔本身没有独立字段。
+    assert_eq!(fields(ProviderAppId::Dsh), vec!["推理能力"]);
     Ok(())
 }
 
@@ -1487,6 +1517,7 @@ fn applied_reasoning_level_is_read_back_for_each_app() -> Result<()> {
             ProviderAppId::Grokbuild,
             ProviderProtocol::OpenaiChatCompletions,
         ),
+        (ProviderAppId::Dsh, ProviderProtocol::OpenaiChatCompletions),
     ] {
         let isolated = Isolated::new()?;
         isolated.seed_provider("p1", protocol, "https://p1.test/v1")?;
@@ -1573,6 +1604,609 @@ fn grok_anthropic_base_url_gets_v1_suffix_and_inspect_stays_applied() -> Result<
 }
 
 // ---------------------------------------------------------------------------
+// dsh (DeepSeek Harness)：路由走全局 cordis.patch.yml 的 llm-pi-ai 行覆盖，
+// 默认模型走 desktop profile patch 的 agent-default-model 行，密钥行级写入
+// dsh 托管的 .credentials.yaml（apiKeyEnv 引用）。
+// ---------------------------------------------------------------------------
+
+fn dsh_llm_patch() -> PathBuf {
+    crate::support::fs::user_home_dir()
+        .unwrap()
+        .join(".dsh")
+        .join("profiles/desktop/cordis.patch.yml")
+}
+
+fn dsh_profile_patch() -> PathBuf {
+    crate::support::fs::user_home_dir()
+        .unwrap()
+        .join(".dsh")
+        .join("profiles/desktop/cordis.patch.yml")
+}
+
+fn dsh_credentials_file() -> PathBuf {
+    crate::support::fs::user_home_dir()
+        .unwrap()
+        .join(".dsh")
+        .join(".credentials.yaml")
+}
+
+fn dsh_root(path: &Path) -> Result<serde_yaml::Value> {
+    Ok(serde_yaml::from_str(&read_text(path))?)
+}
+
+fn find_patch_row<'a>(root: &'a serde_yaml::Value, row_id: &str) -> Option<&'a serde_yaml::Value> {
+    root.as_sequence()?
+        .iter()
+        .find(|op| op.get("id").and_then(serde_yaml::Value::as_str) == Some(row_id))
+}
+
+fn dsh_route<'a>(root: &'a serde_yaml::Value, route: &str) -> Option<&'a serde_yaml::Value> {
+    find_patch_row(root, "llm-pi-ai")?
+        .get("config")?
+        .get("providers")?
+        .get(route)
+}
+
+#[test]
+fn dsh_apply_writes_patch_rows_and_credential() -> Result<()> {
+    let isolated = Isolated::new()?;
+    isolated.seed_provider_with_models(
+        "p1",
+        ProviderProtocol::OpenaiChatCompletions,
+        "https://p1.test/v1",
+        vec!["model-a".to_string()],
+    )?;
+
+    isolated.apply("p1", ProviderAppId::Dsh, &["model-a"], "model-a", None)?;
+
+    let root = dsh_root(&dsh_llm_patch())?;
+    let route = dsh_route(&root, "reins-p1").expect("路由条目");
+    assert_eq!(
+        route.get("baseURL").and_then(serde_yaml::Value::as_str),
+        Some("https://p1.test/v1")
+    );
+    assert_eq!(
+        route.get("api").and_then(serde_yaml::Value::as_str),
+        Some("openai-completions")
+    );
+    assert_eq!(
+        route.get("apiKeyEnv").and_then(serde_yaml::Value::as_str),
+        Some("REINS_P1")
+    );
+    assert_eq!(
+        route
+            .get("models")
+            .and_then(serde_yaml::Value::as_sequence)
+            .map(Vec::len),
+        Some(1)
+    );
+    // 未选默认档时路由不带 reasoning，默认行也不落 reasoningEffort。
+    assert!(route.get("reasoning").is_none());
+
+    let profile = dsh_root(&dsh_profile_patch())?;
+    let default_row = find_patch_row(&profile, "agent-default-model").expect("默认模型行");
+    assert_eq!(
+        default_row
+            .get("config")
+            .and_then(|c| c.get("provider"))
+            .and_then(serde_yaml::Value::as_str),
+        Some("reins-p1")
+    );
+    assert_eq!(
+        default_row
+            .get("config")
+            .and_then(|c| c.get("model"))
+            .and_then(serde_yaml::Value::as_str),
+        Some("model-a")
+    );
+    assert!(
+        default_row
+            .get("config")
+            .and_then(|c| c.get("reasoningEffort"))
+            .is_none()
+    );
+
+    let credentials: serde_yaml::Value = serde_yaml::from_str(&read_text(&dsh_credentials_file()))?;
+    assert_eq!(
+        yaml_get(&credentials, &["refs", "REINS_P1"]).and_then(serde_yaml::Value::as_str),
+        Some("sk-test-secret")
+    );
+
+    // 反读：已应用 + 模型清单 + 默认模型 + 协议回显。
+    let state = isolated.state()?;
+    let dsh = state
+        .apps
+        .iter()
+        .find(|app| app.app == ProviderAppId::Dsh)
+        .expect("dsh state");
+    assert_eq!(dsh.entries.len(), 1);
+    assert_eq!(dsh.entries[0].status, ProviderAppEntryStatus::Applied);
+    assert_eq!(dsh.entries[0].model_ids, vec!["model-a"]);
+    assert_eq!(dsh.entries[0].default_model_id.as_deref(), Some("model-a"));
+    assert_eq!(
+        dsh.entries[0].protocol,
+        Some(ProviderProtocol::OpenaiChatCompletions)
+    );
+
+    // dsh 启动时拒绝加载非 owner-only 的凭据文件;apply 写入必须是 0600,
+    // 否则用户下次启动 dsh 整个 app 起不来(真实事故回归)。
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(dsh_credentials_file())?
+            .permissions()
+            .mode()
+            & 0o7777;
+        assert_eq!(mode, 0o600, "credentials 必须是 owner-only");
+    }
+    Ok(())
+}
+
+#[test]
+fn dsh_apply_writes_model_capabilities_and_default_reasoning() -> Result<()> {
+    let isolated = Isolated::new()?;
+    isolated.seed_provider_with_models(
+        "p1",
+        ProviderProtocol::OpenaiChatCompletions,
+        "https://p1.test/v1",
+        vec!["model-a".to_string()],
+    )?;
+
+    isolated.apply(
+        "p1",
+        ProviderAppId::Dsh,
+        &["model-a"],
+        "model-a",
+        Some(ReasoningLevel::Max),
+    )?;
+
+    let root = dsh_root(&dsh_llm_patch())?;
+    let route = dsh_route(&root, "reins-p1").expect("路由条目");
+    assert_eq!(
+        route.get("reasoning").and_then(serde_yaml::Value::as_str),
+        Some("max")
+    );
+    let model = route
+        .get("models")
+        .and_then(serde_yaml::Value::as_sequence)
+        .and_then(|models| models.first())
+        .expect("模型条目");
+    let input = model
+        .get("input")
+        .and_then(serde_yaml::Value::as_sequence)
+        .map(|items| items.iter().filter_map(|v| v.as_str()).collect::<Vec<_>>())
+        .expect("input 字段");
+    assert_eq!(input, ["text", "image"]);
+    let efforts = model
+        .get("reasoningEfforts")
+        .and_then(serde_yaml::Value::as_mapping)
+        .expect("reasoningEfforts 字典");
+    let wire_level = |name: &str| {
+        efforts
+            .iter()
+            .find(|(k, _)| k.as_str() == Some(name))
+            .and_then(|(_, v)| v.as_str())
+    };
+    assert_eq!(wire_level("low"), Some("low"));
+    assert_eq!(wire_level("medium"), Some("medium"));
+    assert_eq!(wire_level("high"), Some("high"));
+    // 未选档为 null（支持但不发参数）。
+    assert!(wire_level("off").is_none());
+    assert!(wire_level("max").is_none());
+
+    // 默认档必须落在 agent-default-model 行：dsh 的默认档插件值是 high，
+    // 只写路由级 reasoning 纠正不了旧导入行。
+    let profile = dsh_root(&dsh_profile_patch())?;
+    let default_row = find_patch_row(&profile, "agent-default-model").expect("默认模型行");
+    assert_eq!(
+        default_row
+            .get("config")
+            .and_then(|c| c.get("reasoningEffort"))
+            .and_then(serde_yaml::Value::as_str),
+        Some("max")
+    );
+    assert_eq!(
+        isolated
+            .state()?
+            .apps
+            .iter()
+            .find(|a| a.app == ProviderAppId::Dsh)
+            .unwrap()
+            .default_reasoning_level,
+        Some(ReasoningLevel::Max)
+    );
+    Ok(())
+}
+
+#[test]
+fn dsh_apply_writes_reasoning_false_for_non_reasoning_model() -> Result<()> {
+    let isolated = Isolated::new()?;
+    isolated.store.upsert(ProviderUpsertInput {
+        provider_id: "p1".to_string(),
+        mode: ProviderWriteMode::Upsert,
+        label: "Label p1".to_string(),
+        protocol: ProviderProtocol::OpenaiChatCompletions,
+        base_url: "https://p1.test/v1".to_string(),
+        api_key: "sk-test-secret".to_string(),
+        models: vec![ProviderModelInput {
+            id: "model-a".to_string(),
+            label: "Label model-a".to_string(),
+            context_window: None,
+            max_output_tokens: None,
+            supports_images: None,
+            reasoning: Some(false),
+            reasoning_levels: None,
+        }],
+    })?;
+
+    isolated.apply("p1", ProviderAppId::Dsh, &["model-a"], "model-a", None)?;
+    let root = dsh_root(&dsh_llm_patch())?;
+    let model = dsh_route(&root, "reins-p1")
+        .and_then(|route| route.get("models"))
+        .and_then(serde_yaml::Value::as_sequence)
+        .and_then(|models| models.first())
+        .expect("模型条目");
+    assert_eq!(
+        model
+            .get("reasoningEfforts")
+            .and_then(serde_yaml::Value::as_bool),
+        Some(false)
+    );
+    assert!(model.get("input").is_none());
+    Ok(())
+}
+
+#[test]
+fn dsh_apply_preserves_unrelated_content_and_external_provider() -> Result<()> {
+    let isolated = Isolated::new()?;
+    let profile = dsh_llm_patch();
+    fs::create_dir_all(profile.parent().unwrap())?;
+    fs::write(
+        &profile,
+        "- insert:\n    - id: memory-memorix\n      name: '@deepseek-ai/dsh-mcp-client'\n      config:\n        serverName: memorix\n        cwd: !!js process.cwd()\n- id: llm-pi-ai\n  name: '@deepseek-ai/dsh-llm-pi-ai'\n  config:\n    providers:\n      other-gw:\n        baseURL: https://other.test/v1\n        api: anthropic-messages\n        apiKeyEnv: OTHER_KEY\n        models:\n          - id: other-model\n- id: agent-default-model\n  name: '@deepseek-ai/dsh-agent-default-model'\n  config:\n    provider: other-gw\n    model: other-model\n    reasoningEffort: high\n- id: ui-chat\n  name: '@deepseek-ai/dsh-client-ui-chat'\n  config:\n    transcriptView: standard\n".replace("\\n", "\n"),
+    )?;
+    let credentials = dsh_credentials_file();
+    fs::write(
+        &credentials,
+        "# managed by dsh\nOTHER_KEY: 'other-secret'\n",
+    )?;
+
+    isolated.seed_provider_with_models(
+        "p1",
+        ProviderProtocol::OpenaiResponses,
+        "https://p1.test/v1",
+        vec!["model-a".to_string()],
+    )?;
+    isolated.apply(
+        "p1",
+        ProviderAppId::Dsh,
+        &["model-a"],
+        "model-a",
+        Some(ReasoningLevel::High),
+    )?;
+
+    let content = read_text(&profile);
+    assert!(content.contains("!!js process.cwd()"), "用户 !!js 标签保留");
+    assert!(content.contains("memory-memorix"), "MCP 条目保留");
+    assert!(content.contains("other-gw"), "外部路由保留");
+    let root = dsh_root(&profile)?;
+    assert_eq!(
+        dsh_route(&root, "other-gw")
+            .and_then(|r| r.get("apiKeyEnv"))
+            .and_then(serde_yaml::Value::as_str),
+        Some("OTHER_KEY")
+    );
+
+    let profile_root = dsh_root(&profile)?;
+    let default_row = find_patch_row(&profile_root, "agent-default-model").expect("默认模型行");
+    assert_eq!(
+        default_row
+            .get("config")
+            .and_then(|c| c.get("provider"))
+            .and_then(serde_yaml::Value::as_str),
+        Some("reins-p1"),
+        "默认模型切换到新平台"
+    );
+    assert_eq!(
+        default_row
+            .get("config")
+            .and_then(|c| c.get("reasoningEffort"))
+            .and_then(serde_yaml::Value::as_str),
+        Some("high")
+    );
+
+    let credentials: serde_yaml::Value = serde_yaml::from_str(&read_text(&credentials))?;
+    // 注释会因结构化往返丢失（设计取舍），但其它凭据值必须原样保留。
+    assert_eq!(
+        yaml_get(&credentials, &["refs", "OTHER_KEY"]).and_then(serde_yaml::Value::as_str),
+        Some("other-secret")
+    );
+    assert_eq!(
+        yaml_get(&credentials, &["refs", "REINS_P1"]).and_then(serde_yaml::Value::as_str),
+        Some("sk-test-secret")
+    );
+
+    // 反读：reins 条目 Applied，外部条目 External。
+    let state = isolated.state()?;
+    let dsh = state
+        .apps
+        .iter()
+        .find(|app| app.app == ProviderAppId::Dsh)
+        .expect("dsh state");
+    let reins = dsh
+        .entries
+        .iter()
+        .find(|entry| entry.key == "reins-p1")
+        .expect("reins 条目");
+    assert_eq!(reins.status, ProviderAppEntryStatus::Applied);
+    let external = dsh
+        .entries
+        .iter()
+        .find(|entry| entry.key == "other-gw")
+        .expect("外部条目");
+    assert_eq!(external.status, ProviderAppEntryStatus::External);
+    Ok(())
+}
+
+#[test]
+fn dsh_reapply_is_idempotent_and_providers_coexist() -> Result<()> {
+    let isolated = Isolated::new()?;
+    isolated.seed_provider(
+        "p1",
+        ProviderProtocol::OpenaiChatCompletions,
+        "https://p1.test/v1",
+    )?;
+    isolated.seed_provider(
+        "p2",
+        ProviderProtocol::AnthropicMessages,
+        "https://p2.test/v1",
+    )?;
+
+    isolated.apply("p1", ProviderAppId::Dsh, &["model-a"], "model-a", None)?;
+    let first = read_text(&dsh_llm_patch());
+    isolated.apply("p1", ProviderAppId::Dsh, &["model-a"], "model-a", None)?;
+    assert_eq!(first, read_text(&dsh_llm_patch()), "重应用幂等");
+
+    isolated.apply("p2", ProviderAppId::Dsh, &["model-a"], "model-a", None)?;
+    let root = dsh_root(&dsh_llm_patch())?;
+    assert!(dsh_route(&root, "reins-p1").is_some(), "多 provider 共存");
+    assert!(dsh_route(&root, "reins-p2").is_some());
+    let state = isolated.state()?;
+    let dsh = state
+        .apps
+        .iter()
+        .find(|app| app.app == ProviderAppId::Dsh)
+        .unwrap();
+    assert_eq!(dsh.entries.len(), 2);
+    Ok(())
+}
+
+#[test]
+fn dsh_changed_base_url_reports_drifted() -> Result<()> {
+    let isolated = Isolated::new()?;
+    isolated.seed_provider(
+        "p1",
+        ProviderProtocol::OpenaiChatCompletions,
+        "https://p1.test/v1",
+    )?;
+    isolated.apply("p1", ProviderAppId::Dsh, &["model-a"], "model-a", None)?;
+
+    isolated.store.upsert(provider_input(
+        "p1",
+        ProviderProtocol::OpenaiChatCompletions,
+        "https://p1.test/v2",
+    ))?;
+    let state = isolated.state()?;
+    let dsh = state
+        .apps
+        .iter()
+        .find(|app| app.app == ProviderAppId::Dsh)
+        .unwrap();
+    assert_eq!(dsh.entries[0].status, ProviderAppEntryStatus::Drifted);
+    Ok(())
+}
+
+#[test]
+fn dsh_remove_clears_route_credential_and_default_row() -> Result<()> {
+    let isolated = Isolated::new()?;
+    isolated.seed_provider(
+        "p1",
+        ProviderProtocol::OpenaiChatCompletions,
+        "https://p1.test/v1",
+    )?;
+    isolated.apply("p1", ProviderAppId::Dsh, &["model-a"], "model-a", None)?;
+
+    remove_provider_from_app_inner(&isolated.store, &isolated.env, "p1", ProviderAppId::Dsh)?;
+
+    let root = dsh_root(&dsh_llm_patch())?;
+    assert!(
+        find_patch_row(&root, "llm-pi-ai").is_none(),
+        "providers 清空后整行删除"
+    );
+    let credentials = read_text(&dsh_credentials_file());
+    assert!(!credentials.contains("REINS_P1"), "{credentials}");
+    let profile = dsh_root(&dsh_profile_patch())?;
+    assert!(
+        find_patch_row(&profile, "agent-default-model").is_none(),
+        "指向被删路由的默认行一并清理"
+    );
+    Ok(())
+}
+
+// 凭据文档 version:1 布局：refs 段级 upsert/remove，version/records 保留。
+#[test]
+fn dsh_credential_ref_upsert_and_remove_in_versioned_document() -> Result<()> {
+    let existing =
+        "version: 1\nrefs:\n  OTHER_KEY: 'other-secret'\nrecords:\n  gw/x:\n    key: v1\n";
+    let updated =
+        crate::providers::apps::dsh::patch_credential_ref(existing, "REINS_P1", Some("sk-secret"))?;
+    let root: serde_yaml::Value = serde_yaml::from_str(&updated)?;
+    assert_eq!(
+        yaml_get(&root, &["version"]).and_then(serde_yaml::Value::as_i64),
+        Some(1)
+    );
+    assert_eq!(
+        yaml_get(&root, &["refs", "REINS_P1"]).and_then(serde_yaml::Value::as_str),
+        Some("sk-secret")
+    );
+    assert_eq!(
+        yaml_get(&root, &["refs", "OTHER_KEY"]).and_then(serde_yaml::Value::as_str),
+        Some("other-secret")
+    );
+    assert!(
+        yaml_get(&root, &["records", "gw/x"]).is_some(),
+        "records 保留"
+    );
+
+    // 再次应用同 ref 更新值（幂等语义由行覆盖承担）。
+    let updated_again =
+        crate::providers::apps::dsh::patch_credential_ref(&updated, "REINS_P1", Some("sk-v2"))?;
+    assert!(updated_again.contains("sk-v2"));
+
+    // 移除：refs 清自己的 ref，文档与其余条目保留；refs 空段序列化为 {}。
+    let removed =
+        crate::providers::apps::dsh::patch_credential_ref(&updated_again, "REINS_P1", None)?;
+    let root: serde_yaml::Value = serde_yaml::from_str(&removed)?;
+    assert!(yaml_get(&root, &["refs", "REINS_P1"]).is_none());
+    assert_eq!(
+        yaml_get(&root, &["refs", "OTHER_KEY"]).and_then(serde_yaml::Value::as_str),
+        Some("other-secret")
+    );
+    assert_eq!(
+        yaml_get(&root, &["version"]).and_then(serde_yaml::Value::as_i64),
+        Some(1)
+    );
+    Ok(())
+}
+
+// 平铺旧布局（无 version）自动迁移到 version:1 后再写入。
+#[test]
+fn dsh_credential_ref_migrates_flat_layout() -> Result<()> {
+    let flat = "DEEPSEEK_API_KEY: 'sk-legacy'\n";
+    let updated =
+        crate::providers::apps::dsh::patch_credential_ref(flat, "REINS_P1", Some("sk-secret"))?;
+    let root: serde_yaml::Value = serde_yaml::from_str(&updated)?;
+    assert_eq!(
+        yaml_get(&root, &["version"]).and_then(serde_yaml::Value::as_i64),
+        Some(1)
+    );
+    assert_eq!(
+        yaml_get(&root, &["refs", "DEEPSEEK_API_KEY"]).and_then(serde_yaml::Value::as_str),
+        Some("sk-legacy")
+    );
+    assert_eq!(
+        yaml_get(&root, &["refs", "REINS_P1"]).and_then(serde_yaml::Value::as_str),
+        Some("sk-secret")
+    );
+    Ok(())
+}
+
+// 空文档从零建立 version:1 布局。
+#[test]
+fn dsh_credential_ref_creates_document_from_empty() -> Result<()> {
+    let created = crate::providers::apps::dsh::patch_credential_ref("", "REINS_P1", Some("sk-1"))?;
+    let root: serde_yaml::Value = serde_yaml::from_str(&created)?;
+    assert_eq!(
+        yaml_get(&root, &["version"]).and_then(serde_yaml::Value::as_i64),
+        Some(1)
+    );
+    assert_eq!(
+        yaml_get(&root, &["refs", "REINS_P1"]).and_then(serde_yaml::Value::as_str),
+        Some("sk-1")
+    );
+    Ok(())
+}
+
+#[test]
+fn dsh_remove_rejects_missing_entry() -> Result<()> {
+    let isolated = Isolated::new()?;
+    isolated.seed_model("p1", "model-a")?;
+    // 预置只有外部路由的 patch:reins-p1 无条目可删。
+    let global = dsh_llm_patch();
+    fs::create_dir_all(global.parent().unwrap())?;
+    fs::write(
+        &global,
+        "- id: llm-pi-ai\n  name: '@deepseek-ai/dsh-llm-pi-ai'\n  config:\n    providers:\n      other-gw:\n        baseURL: https://other.test/v1\n",
+    )?;
+
+    let error =
+        remove_provider_from_app_inner(&isolated.store, &isolated.env, "p1", ProviderAppId::Dsh)
+            .expect_err("没有可识别条目应报错");
+    assert!(error.to_string().contains("没有可识别"));
+    Ok(())
+}
+
+#[test]
+fn dsh_remove_external_clears_entry_and_default() -> Result<()> {
+    let isolated = Isolated::new()?;
+    let profile = dsh_llm_patch();
+    fs::create_dir_all(profile.parent().unwrap())?;
+    fs::write(
+        &profile,
+        "- id: llm-pi-ai\n  name: '@deepseek-ai/dsh-llm-pi-ai'\n  config:\n    providers:\n      other-gw:\n        baseURL: https://other.test/v1\n        api: anthropic-messages\n- id: agent-default-model\n  name: '@deepseek-ai/dsh-agent-default-model'\n  config:\n    provider: other-gw\n    model: other-model\n".replace("\\n", "\n"),
+    )?;
+
+    remove_external_entry_inner(&isolated.env, &ProviderAppId::Dsh, "other-gw")?;
+
+    let root = dsh_root(&profile)?;
+    assert!(find_patch_row(&root, "llm-pi-ai").is_none());
+    assert!(find_patch_row(&root, "agent-default-model").is_none());
+    Ok(())
+}
+
+#[test]
+fn dsh_honors_dsh_home() -> Result<()> {
+    let isolated = Isolated::new()?;
+    isolated.seed_provider_with_models(
+        "p1",
+        ProviderProtocol::OpenaiResponses,
+        "https://p1.test/v1",
+        vec!["model-a".to_string()],
+    )?;
+    let custom_dir = TestDir::new("dsh-home")?;
+    let env = ToolEnv {
+        dsh_home: Some(custom_dir.path().to_path_buf()),
+        ..ToolEnv::default()
+    };
+
+    apply_provider_inner(
+        &isolated.store,
+        &env,
+        &plan("p1", ProviderAppId::Dsh, &["model-a"], "model-a", None),
+    )?;
+
+    assert!(
+        custom_dir
+            .path()
+            .join("profiles/desktop/cordis.patch.yml")
+            .exists()
+    );
+    assert!(custom_dir.path().join(".credentials.yaml").exists());
+    assert!(!dsh_llm_patch().exists(), "默认 ~/.dsh 不应被触碰");
+    Ok(())
+}
+
+#[test]
+fn dsh_broken_patch_reports_load_error() -> Result<()> {
+    let isolated = Isolated::new()?;
+    let global = dsh_llm_patch();
+    fs::create_dir_all(global.parent().unwrap())?;
+    fs::write(
+        &global,
+        "- id: llm-pi-ai\n  config: [unclosed\n".replace("\\n", "\n"),
+    )?;
+
+    let state = isolated.state()?;
+    let dsh = state
+        .apps
+        .iter()
+        .find(|app| app.app == ProviderAppId::Dsh)
+        .expect("dsh state");
+    assert!(dsh.load_error.is_some());
+    assert!(dsh.entries.is_empty());
+    Ok(())
+}
+
 // 漂移、协议门控、平台删除、预览脱敏
 // ---------------------------------------------------------------------------
 

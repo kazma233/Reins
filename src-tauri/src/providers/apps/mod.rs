@@ -14,10 +14,13 @@ use super::types::{
     ProviderAppId, ProviderAppState, ProviderProtocol, ReasoningEffortWrite, ReasoningLevel,
     ResolvedProvider,
 };
-use crate::support::fs::{display_path, grok_home_path, user_home_dir, write_atomic};
+use crate::support::fs::{
+    display_path, grok_home_path, user_home_dir, write_atomic, write_atomic_private,
+};
 
 pub(crate) mod claude;
 pub(crate) mod codex;
+pub(crate) mod dsh;
 pub(crate) mod grokbuild;
 pub(crate) mod opencode;
 pub(crate) mod pi;
@@ -40,6 +43,7 @@ pub(crate) struct ToolEnv {
     pub(crate) pi_agent_dir: Option<PathBuf>,
     pub(crate) grok_home: Option<PathBuf>,
     pub(crate) claude_config_dir: Option<PathBuf>,
+    pub(crate) dsh_home: Option<PathBuf>,
 }
 
 impl ToolEnv {
@@ -49,6 +53,7 @@ impl ToolEnv {
             pi_agent_dir: std::env::var("PI_CODING_AGENT_DIR").ok().map(PathBuf::from),
             grok_home: std::env::var("GROK_HOME").ok().map(PathBuf::from),
             claude_config_dir: std::env::var("CLAUDE_CONFIG_DIR").ok().map(PathBuf::from),
+            dsh_home: std::env::var("DSH_HOME").ok().map(PathBuf::from),
         }
     }
 }
@@ -108,6 +113,19 @@ pub(crate) trait AppAdapter: Sync {
     fn id(&self) -> ProviderAppId;
     fn capability(&self) -> AppCapability;
 
+    // 该工具在 providers 域管理的配置文件清单（能力声明）：inspect 失败的
+    // 兜底展示与外部调用共用；路径解析失败由调用方兜底为空列表。
+    // 注意与 inspect 内部读取的文件集不一定相同（如 dsh 的 inspect 还会
+    // 读 workspace 域管理的全局 cordis patch）。
+    fn config_paths(&self, env: &ToolEnv) -> Result<Vec<PathBuf>>;
+
+    // 敏感文件清单（凭据等）：写入时强制 owner-only 权限。默认空；
+    // 依赖方若对文件权限有守卫（如 dsh 启动时拒绝加载非 0600 的凭据），
+    // 必须在此声明，否则原子写会用默认 umask 权限落盘。
+    fn restricted_paths(&self, _env: &ToolEnv) -> Vec<PathBuf> {
+        Vec::new()
+    }
+
     // 思考等级在该平台配置文件里的实际写入值；必须与 apply 的写入
     // 逻辑同源（特殊映射的平台覆写，如 Grok max→xhigh、Pi off→off），
     // 供应用弹窗展示映射，避免前端复刻规则。
@@ -155,6 +173,7 @@ pub(crate) fn adapter_for(app: ProviderAppId) -> &'static dyn AppAdapter {
         ProviderAppId::Opencode => &opencode::OpencodeAdapter,
         ProviderAppId::Pi => &pi::PiAdapter,
         ProviderAppId::Grokbuild => &grokbuild::GrokbuildAdapter,
+        ProviderAppId::Dsh => &dsh::DshAdapter,
     }
 }
 
@@ -535,10 +554,7 @@ pub(crate) fn opencode_config_dir() -> Result<PathBuf> {
 // 顺序即优先级：低 → 高。
 pub(crate) fn opencode_candidate_paths() -> Result<Vec<PathBuf>> {
     let dir = opencode_config_dir()?;
-    Ok(vec![
-        dir.join("opencode.json"),
-        dir.join("opencode.jsonc"),
-    ])
+    Ok(vec![dir.join("opencode.json"), dir.join("opencode.jsonc")])
 }
 
 // jsonc 容忍注释与尾逗号，用 json5 解析；行为与 read_json_object 对齐。
@@ -551,8 +567,8 @@ pub(crate) fn read_jsonc_object(path: &Path) -> Result<JsonMap<String, JsonValue
     if content.trim().is_empty() {
         return Ok(JsonMap::new());
     }
-    let value: JsonValue = json5::from_str(&content)
-        .with_context(|| format!("JSONC 解析失败：{}", path.display()))?;
+    let value: JsonValue =
+        json5::from_str(&content).with_context(|| format!("JSONC 解析失败：{}", path.display()))?;
     match value {
         JsonValue::Object(map) => Ok(map),
         _ => bail!("配置文件顶层必须是 JSON 对象：{}", path.display()),
@@ -587,14 +603,24 @@ pub(crate) fn grok_config_path(env: &ToolEnv) -> Result<PathBuf> {
     Ok(base.join("config.toml"))
 }
 
+// dsh 的 settings.yaml 与 GROK_HOME / PI_CODING_AGENT_DIR 同一重定向模式：
+// 优先 $DSH_HOME，默认 ~/.dsh。路径函数定义在 dsh.rs，由其
+// config_paths() 能力声明对外。
+
 // ---------------------------------------------------------------------------
 // 共享写入助手
 // ---------------------------------------------------------------------------
 
-pub(crate) fn write_files(files: &[(PathBuf, String)]) -> Result<()> {
+// restricted 内的路径按敏感文件写（强制 owner-only 权限），其余沿用
+// 原子写；受限清单由写入方从 adapter 的 restricted_paths() 取。
+pub(crate) fn write_files(files: &[(PathBuf, String)], restricted: &[PathBuf]) -> Result<()> {
     for (path, content) in files {
-        write_atomic(path, content)
-            .with_context(|| format!("Failed to write {}", path.display()))?;
+        let write = if restricted.contains(path) {
+            write_atomic_private
+        } else {
+            write_atomic
+        };
+        write(path, content).with_context(|| format!("Failed to write {}", path.display()))?;
     }
     Ok(())
 }

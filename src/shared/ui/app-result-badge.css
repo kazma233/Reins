@@ -1,0 +1,35 @@
+.app-result-badge {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+}
+
+.app-result-badge svg {
+  display: block;
+  width: 16px;
+  height: 16px;
+}
+
+.app-result-badge__fill {
+  fill: currentColor;
+}
+
+.app-result-badge__mark {
+  fill: none;
+  stroke: var(--color-on-primary);
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.app-result-badge--success {
+  color: var(--color-success);
+}
+
+.app-result-badge--danger {
+  color: var(--color-danger);
+}

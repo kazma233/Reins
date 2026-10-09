@@ -1,3 +1,4 @@
+mod agents;
 pub mod logger;
 mod providers;
 mod session;
@@ -23,9 +24,10 @@ pub fn run() {
             session::commands::get_session_agent_messages,
             session::commands::get_session_events,
             session::commands::get_usage_stats,
+            session::commands::get_delete_plan,
             session::commands::delete_session,
             workspace::commands::get_workspace_state,
-            workspace::commands::get_builtin_target_preset,
+            workspace::commands::get_target_presets,
             workspace::commands::select_project_path,
             workspace::commands::select_local_skill_source_directory,
             workspace::commands::select_target_skill_directory,
@@ -61,7 +63,6 @@ pub fn run() {
             providers::commands::get_provider_app_state,
             providers::commands::upsert_provider,
             providers::commands::delete_provider,
-            providers::commands::fetch_provider_models,
             providers::commands::fetch_provider_models_direct,
             providers::commands::fetch_modelsdev_catalog,
             providers::commands::preview_provider_apply,

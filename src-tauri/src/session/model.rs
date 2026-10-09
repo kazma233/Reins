@@ -25,6 +25,8 @@ pub(crate) enum SourceApp {
     GrokBuild,
     #[serde(rename = "zcode")]
     Zcode,
+    #[serde(rename = "dsh")]
+    Dsh,
 }
 
 impl FromStr for SourceApp {
@@ -38,6 +40,7 @@ impl FromStr for SourceApp {
             "pi" => Ok(Self::Pi),
             "grokbuild" => Ok(Self::GrokBuild),
             "zcode" => Ok(Self::Zcode),
+            "dsh" => Ok(Self::Dsh),
             _ => Err(anyhow!("Unsupported source app: {value}")),
         }
     }
@@ -52,6 +55,7 @@ impl SourceApp {
             Self::Pi => "pi",
             Self::GrokBuild => "grokbuild",
             Self::Zcode => "zcode",
+            Self::Dsh => "dsh",
         }
     }
 }
@@ -241,6 +245,33 @@ pub(crate) struct DeleteSessionResult {
     pub(crate) deleted_paths: Vec<String>,
 }
 
+// 一次会话删除的预演:动作清单与说明文案都由后端来源注册表给出,前端确认框
+// 只渲染,不再持有 per-source 删除语义。
+#[derive(Clone, Debug, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../src/features/sessions/generated/")]
+pub(crate) struct DeletePlan {
+    pub(crate) source_app: SourceApp,
+    /// false 时仅 reason 有意义:删除入口隐藏,不进对话框。
+    pub(crate) supported: bool,
+    #[ts(optional)]
+    pub(crate) reason: Option<String>,
+    pub(crate) description: String,
+    pub(crate) details: Vec<String>,
+    pub(crate) command_label: String,
+    pub(crate) actions: Vec<DeletePlanAction>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, TS)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+#[ts(export, export_to = "../../src/features/sessions/generated/")]
+pub(crate) enum DeletePlanAction {
+    RemoveFile { path: String },
+    RemoveDirectory { path: String },
+    RunCli { program: String, args: Vec<String> },
+    Sqlite { db_path: String, sql: String },
+}
+
 #[derive(Clone, Debug, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export, export_to = "../../src/features/sessions/generated/")]
@@ -292,6 +323,9 @@ pub(crate) struct SessionRefreshResult {
 #[derive(Clone, Debug)]
 pub(crate) struct SessionFileEntry {
     pub(crate) path: PathBuf,
+    /// 条目自身的会话身份;列表层用它按 id 取 summary(pi 的条目不带
+    /// summary,身份只能来自扫描时的 header)。
+    pub(crate) source_session_id: String,
     pub(crate) sort_timestamp: i64,
     pub(crate) summary: Option<SessionSummary>,
 }

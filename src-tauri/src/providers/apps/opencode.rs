@@ -272,6 +272,10 @@ impl AppAdapter for OpencodeAdapter {
         ProviderAppId::Opencode
     }
 
+    fn config_paths(&self, _env: &ToolEnv) -> Result<Vec<PathBuf>> {
+        opencode_candidate_paths()
+    }
+
     fn capability(&self) -> AppCapability {
         AppCapability {
             supported_protocols: &[
@@ -302,7 +306,12 @@ impl AppAdapter for OpencodeAdapter {
             .collect();
         let state_paths = if existing.is_empty() {
             // 两个候选都不存在时展示默认写入目标。
-            vec![opencode_candidate_paths()?.first().expect("候选非空").clone()]
+            vec![
+                opencode_candidate_paths()?
+                    .first()
+                    .expect("候选非空")
+                    .clone(),
+            ]
         } else {
             existing
         };
@@ -449,7 +458,8 @@ impl AppAdapter for OpencodeAdapter {
                             "output".to_string(),
                             JsonValue::Array(vec![JsonValue::String("text".to_string())]),
                         );
-                        model_entry.insert("capabilities".to_string(), JsonValue::Object(capabilities));
+                        model_entry
+                            .insert("capabilities".to_string(), JsonValue::Object(capabilities));
                     }
                     if let Some(level) = plan.default_reasoning_level {
                         model_entry.insert(

@@ -2,21 +2,29 @@
 import { computed } from "vue";
 import ConfirmDialog from "@shared/ui/ConfirmDialog.vue";
 import AppCard from "@shared/ui/AppCard.vue";
+import AppLoadError from "@shared/ui/AppLoadError.vue";
+import AppResultBadge from "@shared/ui/AppResultBadge.vue";
 import ProjectCreateDialog from "../dialogs/ProjectCreateDialog.vue";
 import TargetCreateDialog from "../dialogs/TargetCreateDialog.vue";
 import { useProjectMutations } from "../../composables/useProjectMutations";
 import { useTargetMutations } from "../../composables/useTargetMutations";
 import { useWorkspaceState } from "../../composables/useWorkspaceState";
+import { useWorkspaceStore } from "../../stores/workspace";
 import { formatTargetLabel } from "../../model";
 
-const { configDocument, loadingInspection, runningAction } = useWorkspaceState();
+const store = useWorkspaceStore();
+const { configDocument, loadingInspection, runningAction, loadError, retryWorkspaceState } =
+  useWorkspaceState();
 
 const {
   targetCreateDialog,
   targetDeleteDialog,
+  pendingToggleTargetIds,
   openTargetCreateDialog,
   openTargetEditDialog,
   closeTargetCreateDialog,
+  clearTargetFormError,
+  loadTargetPresets,
   handleApplyBuiltinTargetPreset,
   toggleTargetEnabled,
   openTargetDeleteDialog,
@@ -33,6 +41,7 @@ const {
   openProjectCreateDialog,
   openProjectEditDialog,
   closeProjectCreateDialog,
+  clearProjectFormError,
   handlePickProjectPath,
   handleSubmitProject,
   openProjectDeleteDialog,
@@ -42,6 +51,16 @@ const {
 
 const configTargets = computed(() => configDocument.value?.config?.targets ?? []);
 const configProjects = computed(() => configDocument.value?.config?.projects ?? []);
+
+// 启停失败的结果跟卡片按钮放在一起：结果按 target id 常驻，reload 重建卡片后仍在。
+function toggleError(targetId: string): string | null {
+  return store.actionResults[`target-toggle:${targetId}`]?.message ?? null;
+}
+
+// 启停不进整页忙碌态，进行中的卡片自己锁定（文案不变，按钮宽度不会跟着跳）。
+function isTogglingTarget(targetId: string): boolean {
+  return pendingToggleTargetIds.value.has(targetId);
+}
 </script>
 
 <template>
@@ -65,6 +84,13 @@ const configProjects = computed(() => configDocument.value?.config?.projects ?? 
       </button>
     </Teleport>
     <article class="manager-panel manager-panel--fill">
+      <!-- 读取失败时错误条压在内容之上，重试入口就在出错的地方 -->
+      <AppLoadError
+        v-if="loadError"
+        :message="loadError"
+        :retrying="loadingInspection"
+        @retry="retryWorkspaceState"
+      />
       <div v-if="loadingInspection" class="loading-pill">正在检查状态...</div>
 
       <div class="manager-panel-section manager-panel-section--fill">
@@ -86,9 +112,15 @@ const configProjects = computed(() => configDocument.value?.config?.projects ?? 
                   </template>
                   <template #ext>
                     <div class="manager-target-row__actions">
+                      <AppResultBadge
+                        v-if="toggleError(target.id)"
+                        placement="bottom"
+                        :message="toggleError(target.id) ?? ''"
+                        tone="danger"
+                      />
                       <button
                         class="secondary-button"
-                        :disabled="runningAction"
+                        :disabled="runningAction || isTogglingTarget(target.id)"
                         type="button"
                         @click="openTargetEditDialog(target)"
                       >
@@ -96,7 +128,7 @@ const configProjects = computed(() => configDocument.value?.config?.projects ?? 
                       </button>
                       <button
                         class="secondary-button"
-                        :disabled="runningAction"
+                        :disabled="runningAction || isTogglingTarget(target.id)"
                         type="button"
                         @click="toggleTargetEnabled(target)"
                       >
@@ -104,7 +136,7 @@ const configProjects = computed(() => configDocument.value?.config?.projects ?? 
                       </button>
                       <button
                         class="danger-button"
-                        :disabled="runningAction"
+                        :disabled="runningAction || isTogglingTarget(target.id)"
                         type="button"
                         @click="openTargetDeleteDialog(target.id)"
                       >
@@ -193,9 +225,17 @@ const configProjects = computed(() => configDocument.value?.config?.projects ?? 
     :form="targetCreateDialog.form"
     :open="targetCreateDialog.open"
     :loading="targetCreateDialog.loading || runningAction"
+    :error="targetCreateDialog.error"
+    :presets="targetCreateDialog.presets"
+    :presets-loading="targetCreateDialog.presetsLoading"
+    :presets-error="targetCreateDialog.presetsError"
+    :mcp-format-description="targetCreateDialog.mcpFormatDescription"
+    :mcp-format-examples="targetCreateDialog.mcpFormatExamples"
     @close="closeTargetCreateDialog"
     @confirm="handleSubmitTarget"
+    @clear-field-error="clearTargetFormError"
     @apply-builtin-preset="handleApplyBuiltinTargetPreset"
+    @retry-load-presets="loadTargetPresets"
     @pick-mcp-config-file="handlePickTargetMcpConfigFile"
     @pick-skill-directory="handlePickTargetSkillDirectory"
   />
@@ -209,6 +249,7 @@ const configProjects = computed(() => configDocument.value?.config?.projects ?? 
     confirm-button-class-name="danger-button"
     :confirm-label="runningAction ? '删除中...' : '确认删除'"
     :loading="runningAction"
+    :error="targetDeleteDialog.error"
     description="删除后该 target 的 skills 目录与 mcp 配置路径不会被清理，但不再参与后续同步。"
     @close="closeTargetDeleteDialog"
     @confirm="handleConfirmDeleteTarget"
@@ -220,8 +261,10 @@ const configProjects = computed(() => configDocument.value?.config?.projects ?? 
     :form="projectCreateDialog.form"
     :open="projectCreateDialog.open"
     :loading="projectCreateDialog.loading || runningAction"
+    :error="projectCreateDialog.error"
     @close="closeProjectCreateDialog"
     @confirm="handleSubmitProject"
+    @clear-field-error="clearProjectFormError"
     @pick-project-path="handlePickProjectPath"
   />
 
@@ -234,6 +277,7 @@ const configProjects = computed(() => configDocument.value?.config?.projects ?? 
     confirm-button-class-name="danger-button"
     :confirm-label="runningAction ? '删除中...' : '确认删除'"
     :loading="runningAction"
+    :error="projectDeleteDialog.error"
     description="删除后该项目的 agent 配置会从工作区移除，已分发的软链接和配置不会自动回滚。"
     @close="closeProjectDeleteDialog"
     @confirm="handleConfirmDeleteProject"

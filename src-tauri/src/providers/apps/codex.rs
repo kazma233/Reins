@@ -59,10 +59,7 @@ fn catalog_efforts(
 // supports_parallel_tool_calls 已在 0.158.0 删除、不再写；系统提示用
 // model_messages.instructions_template（0.158.0 起的规范形式，旧顶层
 // base_instructions 只是保留的 legacy 提升路径），visibility=list 让模型进选择器。
-fn build_catalog(
-    provider: &ResolvedProvider,
-    plan: &ApplyProviderInput,
-) -> Result<String> {
+fn build_catalog(provider: &ResolvedProvider, plan: &ApplyProviderInput) -> Result<String> {
     let mut models = Vec::new();
     for (index, model_id) in plan.model_ids.iter().enumerate() {
         let model = provider
@@ -146,6 +143,10 @@ const SUPPORTED_LEVELS: &[ReasoningLevel] = &[
 impl AppAdapter for CodexAdapter {
     fn id(&self) -> ProviderAppId {
         ProviderAppId::Codex
+    }
+
+    fn config_paths(&self, env: &ToolEnv) -> Result<Vec<PathBuf>> {
+        Ok(vec![codex_config_path(env)?])
     }
 
     fn capability(&self) -> AppCapability {

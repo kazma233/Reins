@@ -127,9 +127,9 @@
   margin-bottom: 2px;
   color: var(--color-danger);
   font-size: var(--font-size-xs);
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
+  font-weight: 600;
+  /* 文案按传入的大小写展示（如 mcp / Target），不再强制转大写 */
+  letter-spacing: 0.02em;
 }
 
 .dialog-actions {

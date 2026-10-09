@@ -1,23 +1,23 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::{LazyLock, Mutex};
+use std::sync::Arc;
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Context, Result};
 use rusqlite::{Connection, OpenFlags, params_from_iter};
 use serde_json::{Value, json};
 
+use super::family_index::{Family, FamilyRow};
+use super::family_timeline::FamilyAgentLabel;
+use super::reader_engine::{
+    FamilyReader, FamilySpec, Freshness, MarkerShape, MemberTimeline, OverviewCounts, SummaryKind,
+};
 use super::{
-    ContentBlock, SessionEvent, SessionEventPage, SessionFileEntry, SessionMessage,
-    SessionMessagePage, SessionOverview, SessionReader, SessionSummary, SessionTokenUsage,
-    SourceApp, TimelineCacheEntry, UsageHourBuckets, usage_stats::SqlUsageHours,
-    family_index::{Family, FamilyIndexCacheEntry, FamilyRow},
-    family_timeline::{
-        FamilyAgentLabel, cached_family_events, cached_family_messages, family_agents,
-    },
+    ContentBlock, SessionEvent, SessionMessage, SessionSummary, SessionTokenUsage, SourceApp,
+    UsageHourBuckets, usage_stats::SqlUsageHours,
 };
 
 #[derive(Clone, Debug)]
-struct ZcodeSessionRow {
+pub(crate) struct ZcodeSessionRow {
     id: String,
     parent_id: Option<String>,
     directory: String,
@@ -26,16 +26,16 @@ struct ZcodeSessionRow {
     time_updated: i64,
     // 一次 GROUP BY 查询按 session_id 预聚合,避免列表逐会话全表扫。
     token_usage: Option<SessionTokenUsage>,
+    // "db路径:id" 组合串:list_rows 时按实例 db 生成,作为该记录的稳定
+    // 展示 key(行来自 SQLite,没有真实转录文件)。
+    path: PathBuf,
 }
 
 type ZcodeSessionFamily = Family<ZcodeSessionRow>;
-type ZcodeFamilyIndexCacheEntry = FamilyIndexCacheEntry<ZcodeSessionRow>;
 
 impl FamilyRow for ZcodeSessionRow {
-    // zcode 会话只存在于 SQLite,没有 transcript 文件;用 "db路径:id" 组合串
-    // 作为该记录的稳定 key,写入与查询两侧同经 session_path,保持一致。
     fn member_path(&self) -> std::borrow::Cow<'_, Path> {
-        std::borrow::Cow::Owned(session_path(&self.id))
+        std::borrow::Cow::Borrowed(&self.path)
     }
 
     fn family_root_id(&self) -> &str {
@@ -72,93 +72,185 @@ struct ZcodeMessageRow {
     value: Value,
 }
 
-static ZCODE_TIMELINE_CACHE: LazyLock<Mutex<HashMap<String, TimelineCacheEntry>>> =
-    LazyLock::new(|| Mutex::new(HashMap::new()));
-static ZCODE_FAMILY_INDEX_CACHE: LazyLock<Mutex<Option<ZcodeFamilyIndexCacheEntry>>> =
-    LazyLock::new(|| Mutex::new(None));
+#[derive(Clone)]
+pub(crate) struct ZcodeSpec;
 
-pub(crate) struct ZcodeBackend;
+impl FamilySpec for ZcodeSpec {
+    type Row = ZcodeSessionRow;
 
-pub(crate) static BACKEND: ZcodeBackend = ZcodeBackend;
+    fn app(&self) -> SourceApp {
+        SourceApp::Zcode
+    }
 
-fn lock_timeline_cache() -> Result<std::sync::MutexGuard<'static, HashMap<String, TimelineCacheEntry>>> {
-    ZCODE_TIMELINE_CACHE
-        .lock()
-        .map_err(|_| anyhow!("ZCode timeline cache lock was poisoned"))
-}
+    fn label(&self) -> &'static str {
+        "ZCode"
+    }
 
-fn lock_family_index_cache() -> Result<std::sync::MutexGuard<'static, Option<ZcodeFamilyIndexCacheEntry>>> {
-    ZCODE_FAMILY_INDEX_CACHE
-        .lock()
-        .map_err(|_| anyhow!("ZCode family index cache lock was poisoned"))
-}
+    // root() 就是 db 文件本身:可用性以 db 为准,扫描根与其重合。
+    fn scan_root(&self, root: &Path) -> PathBuf {
+        root.to_path_buf()
+    }
 
-impl SessionReader for ZcodeBackend {
-    fn list_entries(&self) -> Result<Vec<SessionFileEntry>> {
-        let mut entries = list_session_families()?
-            .into_iter()
-            .map(|family| {
-                let summary = family_summary(&family);
-                SessionFileEntry {
-                    path: session_path(&family.root.id),
-                    sort_timestamp: family_updated_at(&family),
-                    summary: Some(summary),
+    fn list_rows(&self, scan_root: &Path) -> Result<Vec<ZcodeSessionRow>> {
+        list_session_rows(scan_root)
+    }
+
+    fn group_families(&self, rows: Vec<ZcodeSessionRow>) -> Result<Vec<ZcodeSessionFamily>> {
+        Ok(build_session_families(rows))
+    }
+
+    // 索引失效只看 db 文件 mtime:全部行都从它 join 出来,行内时间不参与。
+    fn index_freshness(&self, scan_root: &Path) -> Result<Freshness> {
+        zcode_db_timestamp_at(scan_root).map(Freshness::Stamp)
+    }
+
+    fn summary_kind(&self) -> SummaryKind {
+        SummaryKind::Rows
+    }
+
+    // 原始行摘要;(+N) 标题、transcript_path、族级时间戳与 usage 求和由
+    // 引擎统一聚合。cwd/git_branch 引擎不动,在这里给。
+    fn summary_from_rows(&self, root: &ZcodeSessionRow) -> SessionSummary {
+        SessionSummary {
+            source_app: SourceApp::Zcode,
+            source_session_id: root.id.clone(),
+            title: root.title.clone(),
+            cwd: Some(root.directory.clone()),
+            git_branch: None,
+            transcript_path: root.member_path().display().to_string(),
+            created_at: Some(root.time_created),
+            updated_at: Some(root.time_updated),
+            token_usage: None,
+        }
+    }
+
+    // usage 已在索引扫描时按 session_id 预聚合,family 总量交给引擎默认求和。
+    fn row_usage(&self, row: &ZcodeSessionRow) -> Option<SessionTokenUsage> {
+        row.token_usage
+    }
+
+    // 时间线失效:max(db mtime, family updated_at)。
+    fn family_freshness(&self, scan_root: &Path, family: &ZcodeSessionFamily) -> Result<i64> {
+        Ok(zcode_db_timestamp_at(scan_root)?.max(family.updated_at().unwrap_or_default()))
+    }
+
+    // message/part 两表一次查询装配双半,替代原先 messages/events 各查一遍。
+    fn load_members(
+        &self,
+        scan_root: &Path,
+        members: &[ZcodeSessionRow],
+    ) -> Result<Vec<MemberTimeline>> {
+        let connection = open_connection_at(scan_root)?;
+        let member_ids = members.iter().map(|row| row.id.clone()).collect::<Vec<_>>();
+        let message_rows = load_message_rows(&connection, &member_ids)?;
+        let parts_by_message = load_parts_by_message(&connection, &member_ids)?;
+
+        let mut messages_by_session = HashMap::<String, Vec<SessionMessage>>::new();
+        let mut events_by_session = HashMap::<String, Vec<SessionEvent>>::new();
+
+        for row in message_rows {
+            if row.kind == "user_prompt" || row.kind == "assistant_response" {
+                let parts = parts_by_message.get(&row.id).cloned().unwrap_or_default();
+                let mut blocks = load_message_blocks(&row, &parts);
+                if row.kind == "user_prompt" {
+                    blocks = super::sanitize_user_blocks(blocks);
                 }
+
+                if blocks.is_empty() {
+                    blocks.push(super::empty_message_block(
+                        "ZCode",
+                        "message has no visible parts",
+                        Some(row.value.clone()),
+                    ));
+                }
+
+                messages_by_session
+                    .entry(row.session_id.clone())
+                    .or_default()
+                    .push(SessionMessage {
+                        id: row.id.clone(),
+                        role: row.role.clone(),
+                        timestamp: message_row_timestamp(&row),
+                        blocks,
+                        session_id: Some(row.session_id.clone()),
+                    });
+            } else {
+                let parts = parts_by_message.get(&row.id).cloned().unwrap_or_default();
+                events_by_session
+                    .entry(row.session_id.clone())
+                    .or_default()
+                    .push(event_from_message_row(row, &parts));
+            }
+        }
+
+        Ok(members
+            .iter()
+            .map(|row| MemberTimeline {
+                messages: Arc::new(messages_by_session.remove(&row.id).unwrap_or_default()),
+                events: Arc::new(events_by_session.remove(&row.id).unwrap_or_default()),
             })
-            .collect::<Vec<_>>();
-
-        super::sort_entries(&mut entries);
-        Ok(entries)
+            .collect())
     }
 
-    fn clear_cache(&self) -> Result<()> {
-        lock_timeline_cache()?.clear();
-        *lock_family_index_cache()? = None;
-        Ok(())
+    fn agent_name(&self, row: &ZcodeSessionRow) -> String {
+        row.title.clone()
     }
 
-    fn resolve_path(&self, source_session_id: &str) -> Result<PathBuf> {
-        Ok(session_path(source_session_id))
+    // marker id 沿用历史拼写 "_started"(引擎默认是 "-start-");payload 差异
+    // 字段 directory/parent_id 全放 extras,基底由引擎组装。
+    fn marker(&self, member_id: &str, row: &ZcodeSessionRow) -> MarkerShape {
+        let extras = json!({
+            "directory": row.directory,
+            "parent_id": row.parent_id,
+        });
+
+        MarkerShape {
+            message_id: format!("zcode-subagent_started-{member_id}"),
+            event_id: format!("zcode-subagent_started-{member_id}"),
+            message_extras: extras.clone(),
+            event_extras: extras,
+        }
     }
 
-    fn parse_summary(&self, path: &Path) -> Result<SessionSummary> {
-        parse_summary(path)
+    fn overview_counts(&self) -> OverviewCounts {
+        OverviewCounts::Declared
     }
 
-    fn parse_overview(&self, path: &Path) -> Result<SessionOverview> {
-        parse_overview(path)
-    }
-
-    fn parse_messages_page(
+    fn count_family_records(
         &self,
-        path: &Path,
-        offset: usize,
-        limit: usize,
-    ) -> Result<SessionMessagePage> {
-        parse_messages_page(path, offset, limit)
+        scan_root: &Path,
+        family: &ZcodeSessionFamily,
+    ) -> Result<(usize, usize)> {
+        let member_ids: Vec<&str> = family.members.iter().map(|row| row.id.as_str()).collect();
+        count_family_records(scan_root, &member_ids)
     }
 
-    fn parse_events_page(
-        &self,
-        path: &Path,
-        offset: usize,
-        limit: usize,
-    ) -> Result<SessionEventPage> {
-        parse_events_page(path, offset, limit)
+    fn agent_label(&self, family: &ZcodeSessionFamily, row: &ZcodeSessionRow) -> FamilyAgentLabel {
+        if row.id == family.root.id {
+            FamilyAgentLabel::Root
+        } else {
+            FamilyAgentLabel::Child(row.title.clone())
+        }
     }
 
-    fn parse_agent_messages(
-        &self,
-        path: &Path,
-        agent_session_id: &str,
-    ) -> Result<Vec<SessionMessage>> {
-        let family = session_family_for_path(path)?;
-        let messages = cached_messages_for_family(&family)?;
-        Ok(super::family_timeline::agent_messages(
-            messages,
-            agent_session_id,
-        ))
+    // overview.source_paths:db 文件打头,成员行由它 join 出来。
+    fn family_source_paths(&self, scan_root: &Path, family: &ZcodeSessionFamily) -> Vec<String> {
+        let mut paths = vec![scan_root.display().to_string()];
+
+        paths.extend(family.source_paths());
+        paths
     }
+}
+
+pub(crate) static BACKEND: FamilyReader<ZcodeSpec> = FamilyReader::new(ZcodeSpec, root);
+
+// 测试直接按根构造引擎实例:完全脱离进程 env 与全局锁,可并行。
+#[cfg(test)]
+pub(crate) fn engine_at(
+    root: PathBuf,
+    store_dir: PathBuf,
+) -> super::reader_engine::ReaderEngine<ZcodeSpec> {
+    super::reader_engine::ReaderEngine::new(ZcodeSpec, root, store_dir)
 }
 
 // 可用性以 db 文件本身为准而不是 ~/.zcode:目录存在但 db 缺失时,只读打开会
@@ -167,6 +259,8 @@ pub(crate) fn root() -> Result<PathBuf> {
     db_path()
 }
 
+// 模块级 env 版 db 路径仅供生产路径(usage)使用;reader 引擎实例的数据
+// 查询一律以实例 scan_root(即 db 文件路径)为准,env 与实例互不串扰。
 pub(crate) fn db_path() -> Result<PathBuf> {
     Ok(crate::support::fs::user_home_dir()
         .context("Unable to determine home directory")?
@@ -174,11 +268,6 @@ pub(crate) fn db_path() -> Result<PathBuf> {
         .join("cli")
         .join("db")
         .join("db.sqlite"))
-}
-
-pub(crate) fn session_path(session_id: &str) -> PathBuf {
-    let db = db_path().unwrap_or_else(|_| PathBuf::from("/tmp/zcode.db"));
-    PathBuf::from(format!("{}:{}", db.display(), session_id))
 }
 
 // db 属主是常驻的 ZCode 进程,只读打开避免与其写入争锁;WAL 模式支持并发读。
@@ -190,27 +279,22 @@ fn open_connection() -> Result<Connection> {
     .context("Failed to open ZCode sqlite database")
 }
 
-// 判定表是否已建:db 文件与表都随 zcode 首次写入落地,表缺失只说明该来源
-// 还没有会话。
-fn table_exists(connection: &Connection, table: &str) -> Result<bool> {
-    let exists: Option<i64> = connection
-        .query_row(
-            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1",
-            [table],
-            |row| row.get(0),
-        )
-        .map(Some)
-        .or_else(|error| match error {
-            rusqlite::Error::QueryReturnedNoRows => Ok(None),
-            other => Err(other),
-        })
-        .with_context(|| format!("Failed to inspect ZCode table {table}"))?;
-    Ok(exists.is_some())
+fn open_connection_at(scan_root: &Path) -> Result<Connection> {
+    Connection::open_with_flags(
+        scan_root,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .context("Failed to open ZCode sqlite database")
 }
 
-fn list_session_rows() -> Result<Vec<ZcodeSessionRow>> {
-    let connection = open_connection()?;
-    if !table_exists(&connection, "session")? {
+fn zcode_db_timestamp_at(scan_root: &Path) -> Result<i64> {
+    crate::support::time::file_modified_timestamp_millis(scan_root)
+}
+
+fn list_session_rows(scan_root: &Path) -> Result<Vec<ZcodeSessionRow>> {
+    let connection = open_connection_at(scan_root)?;
+    // db 文件与数据表都随 zcode 首次写入才落地,表缺失只说明该来源还没有会话。
+    if !super::sqlite_table_exists(&connection, "session")? {
         return Ok(Vec::new());
     }
 
@@ -222,6 +306,10 @@ fn list_session_rows() -> Result<Vec<ZcodeSessionRow>> {
         let id: String = row.get(0)?;
         let title: Option<String> = row.get(3)?;
         let token_usage = token_usages.get(&id).copied();
+        // zcode 会话只存在于 SQLite,没有 transcript 文件;用 "db路径:id"
+        // 组合串作为该记录的稳定 key。整体不是真实路径,path_key 会走
+        // 原样字符串分支,写入与查询两侧同源,key 保持一致。
+        let path = PathBuf::from(format!("{}:{}", scan_root.display(), id));
         Ok(ZcodeSessionRow {
             title: title
                 .filter(|title| !title.is_empty())
@@ -232,6 +320,7 @@ fn list_session_rows() -> Result<Vec<ZcodeSessionRow>> {
             time_created: row.get(4)?,
             time_updated: row.get(5)?,
             token_usage,
+            path,
         })
     })?;
 
@@ -261,10 +350,9 @@ fn session_token_usages(connection: &Connection) -> Result<HashMap<String, Sessi
     let rows = statement
         .query_map([], |row| {
             let session_id: String = row.get(0)?;
-            let usage_column =
-                |index: usize| -> rusqlite::Result<u64> {
-                    Ok(row.get::<_, Option<i64>>(index)?.unwrap_or_default().max(0) as u64)
-                };
+            let usage_column = |index: usize| -> rusqlite::Result<u64> {
+                Ok(row.get::<_, Option<i64>>(index)?.unwrap_or_default().max(0) as u64)
+            };
             Ok((
                 session_id,
                 SessionTokenUsage {
@@ -283,13 +371,13 @@ fn session_token_usages(connection: &Connection) -> Result<HashMap<String, Sessi
 
 // 用量曲线的小时桶:turn_usage 每 turn 预聚合且自带 started_at,归一口径与
 // session_token_usages 一致(input 拆掉 cache_read,output 并入 reasoning)。
-// db 缺失表示来源不可用,返回 None。
+// db 缺失、或 turn_usage 表还没建,都表示来源不可用,返回 None。
 pub(crate) fn usage_hours() -> Result<Option<SqlUsageHours>> {
     let connection = match open_connection() {
         Ok(connection) => connection,
         Err(_) => return Ok(None),
     };
-    if !table_exists(&connection, "turn_usage")? {
+    if !super::sqlite_table_exists(&connection, "turn_usage")? {
         return Ok(None);
     }
 
@@ -345,10 +433,8 @@ pub(crate) fn usage_hours() -> Result<Option<SqlUsageHours>> {
     }))
 }
 
-fn list_session_families() -> Result<Vec<ZcodeSessionFamily>> {
-    Ok(family_index()?.index.families)
-}
-
+// Member/family ordering and the path map live in the shared engine; this
+// only groups rows along the SQL parent_id chain and picks each family root.
 fn build_session_families(rows: Vec<ZcodeSessionRow>) -> Vec<ZcodeSessionFamily> {
     let by_id = rows
         .iter()
@@ -376,33 +462,6 @@ fn build_session_families(rows: Vec<ZcodeSessionRow>) -> Vec<ZcodeSessionFamily>
         .collect()
 }
 
-fn zcode_db_timestamp() -> Result<i64> {
-    crate::support::time::file_modified_timestamp_millis(&db_path()?)
-}
-
-fn family_index() -> Result<ZcodeFamilyIndexCacheEntry> {
-    let source_key = db_path()?.display().to_string();
-    let updated_at = zcode_db_timestamp()?;
-
-    if let Some(entry) = lock_family_index_cache()?
-        .as_ref()
-        .filter(|entry| entry.is_valid(&source_key, updated_at))
-        .cloned()
-    {
-        return Ok(entry);
-    }
-
-    let entry = ZcodeFamilyIndexCacheEntry {
-        source_key,
-        updated_at,
-        index: super::family_index::FamilyIndex::build(build_session_families(list_session_rows()?)),
-    };
-
-    *lock_family_index_cache()? = Some(entry.clone());
-
-    Ok(entry)
-}
-
 fn root_session_id(row: &ZcodeSessionRow, by_id: &HashMap<String, ZcodeSessionRow>) -> String {
     let mut current_id = row.id.clone();
     let mut parent_id = row.parent_id.clone();
@@ -425,146 +484,8 @@ fn root_session_id(row: &ZcodeSessionRow, by_id: &HashMap<String, ZcodeSessionRo
     current_id
 }
 
-fn parse_summary(path: &Path) -> Result<SessionSummary> {
-    let family = session_family_for_path(path)?;
-    Ok(family_summary(&family))
-}
-
-fn parse_overview(path: &Path) -> Result<SessionOverview> {
-    let family = session_family_for_path(path)?;
-    let summary = family_summary(&family);
-    let member_ids: Vec<&str> = family.members.iter().map(|row| row.id.as_str()).collect();
-    let marker_count = family.members.len().saturating_sub(1);
-    let (message_count, event_count) = count_family_records(&member_ids)?;
-
-    Ok(SessionOverview {
-        summary,
-        source_paths: family_source_paths(&family),
-        message_count: Some(message_count + marker_count),
-        event_count: Some(event_count + marker_count),
-        agents: family_agents(&family, |row| {
-            if row.id == family.root.id {
-                FamilyAgentLabel::Root
-            } else {
-                FamilyAgentLabel::Child(row.title.clone())
-            }
-        }),
-    })
-}
-
-fn parse_messages_page(path: &Path, offset: usize, limit: usize) -> Result<SessionMessagePage> {
-    let family = session_family_for_path(path)?;
-    let all_messages = cached_messages_for_family(&family)?;
-    let (messages, start, next_offset, total_count) =
-        crate::support::paging::slice_page(&all_messages, offset, limit);
-
-    Ok(SessionMessagePage {
-        messages,
-        offset: start,
-        limit,
-        next_offset,
-        total_count,
-        has_more: next_offset.is_some(),
-    })
-}
-
-fn parse_events_page(path: &Path, offset: usize, limit: usize) -> Result<SessionEventPage> {
-    let family = session_family_for_path(path)?;
-    let all_events = cached_events_for_family(&family)?;
-    let (page_events, start, next_offset, total_count) =
-        crate::support::paging::slice_page(&all_events, offset, limit);
-
-    Ok(SessionEventPage {
-        events: page_events,
-        offset: start,
-        limit,
-        next_offset,
-        total_count,
-        has_more: next_offset.is_some(),
-    })
-}
-
-fn session_family_for_path(path: &Path) -> Result<ZcodeSessionFamily> {
-    let key = crate::support::fs::path_key(path);
-    family_index()?
-        .index
-        .sessions_by_path
-        .get(&key)
-        .cloned()
-        .ok_or_else(|| anyhow!("Could not find ZCode session for {}", path.display()))
-}
-
-fn family_title(family: &ZcodeSessionFamily) -> String {
-    let child_count = family.members.len().saturating_sub(1);
-
-    if child_count == 0 {
-        return family.root.title.clone();
-    }
-
-    format!("{} (+{} subagents)", family.root.title, child_count)
-}
-
-fn family_summary(family: &ZcodeSessionFamily) -> SessionSummary {
-    SessionSummary {
-        source_app: SourceApp::Zcode,
-        source_session_id: family.root.id.clone(),
-        title: family_title(family),
-        cwd: Some(family.root.directory.clone()),
-        git_branch: None,
-        transcript_path: session_path(&family.root.id).display().to_string(),
-        created_at: Some(family_created_at(family)),
-        updated_at: Some(family_updated_at(family)),
-        token_usage: family.sum_token_usage(|row| row.token_usage),
-    }
-}
-
-// zcode 时间列 NOT NULL,引擎的 Option 聚合在后端边界收敛为 i64。
-fn family_created_at(family: &ZcodeSessionFamily) -> i64 {
-    family.created_at().unwrap_or_default()
-}
-
-fn family_updated_at(family: &ZcodeSessionFamily) -> i64 {
-    family.updated_at().unwrap_or_default()
-}
-
-// 会话行都在 db 里,source_paths 以 db 文件本身打头。
-fn family_source_paths(family: &ZcodeSessionFamily) -> Vec<String> {
-    let mut paths = vec![
-        db_path()
-            .map(|path| path.display().to_string())
-            .unwrap_or_else(|_| "<zcode-db>".to_string()),
-    ];
-
-    paths.extend(family.source_paths());
-    paths
-}
-
-fn cached_messages_for_family(family: &ZcodeSessionFamily) -> Result<Vec<SessionMessage>> {
-    cached_family_messages(
-        &ZCODE_TIMELINE_CACHE,
-        "ZCode timeline",
-        family.root.id.clone(),
-        family_cache_timestamp(family)?,
-        || load_messages_for_family(family),
-    )
-}
-
-fn cached_events_for_family(family: &ZcodeSessionFamily) -> Result<Vec<SessionEvent>> {
-    cached_family_events(
-        &ZCODE_TIMELINE_CACHE,
-        "ZCode timeline",
-        family.root.id.clone(),
-        family_cache_timestamp(family)?,
-        || load_events_for_family(family),
-    )
-}
-
-fn family_cache_timestamp(family: &ZcodeSessionFamily) -> Result<i64> {
-    Ok(zcode_db_timestamp()?.max(family_updated_at(family)))
-}
-
-fn count_family_records(member_ids: &[&str]) -> Result<(usize, usize)> {
-    let connection = open_connection()?;
+fn count_family_records(scan_root: &Path, member_ids: &[&str]) -> Result<(usize, usize)> {
+    let connection = open_connection_at(scan_root)?;
     let member_ids = member_ids
         .iter()
         .map(|id| (*id).to_string())
@@ -593,10 +514,6 @@ fn count_family_records(member_ids: &[&str]) -> Result<(usize, usize)> {
         .context("Failed to count ZCode events")?;
 
     Ok((message_count, event_count))
-}
-
-fn family_member_ids(family: &ZcodeSessionFamily) -> Vec<String> {
-    family.members.iter().map(|row| row.id.clone()).collect()
 }
 
 fn load_message_rows(
@@ -647,10 +564,7 @@ fn load_parts_by_message(
         "SELECT message_id, data FROM part WHERE session_id IN ({placeholders}) ORDER BY message_id, sequence, time_created, id"
     ))?;
     let rows = statement.query_map(params_from_iter(member_ids.iter()), |row| {
-        Ok((
-            row.get::<_, String>(0)?,
-            row.get::<_, String>(1)?,
-        ))
+        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
     })?;
 
     let mut parts_by_message = HashMap::<String, Vec<Value>>::new();
@@ -787,7 +701,7 @@ fn tool_blocks(value: &Value) -> Vec<ContentBlock> {
 
     if input.is_some_and(|item| !item.is_null()) {
         let mut payload = value.clone();
-        // 输出内容不重复放进输入块,避免 payload 成倍变大
+        // 输出内容不重复放进输入块，避免 payload 成倍变大
         if let Some(state) = payload.get_mut("state").and_then(Value::as_object_mut) {
             state.remove("output");
         }
@@ -809,7 +723,7 @@ fn tool_blocks(value: &Value) -> Vec<ContentBlock> {
 
     if let Some(output_text) = output_text {
         let mut payload = value.clone();
-        // 输出文本提到顶层,前端 resultOutputText 直接读 payload.output
+        // 输出文本提到顶层，前端 resultOutputText 直接读 payload.output
         if let Some(object) = payload.as_object_mut() {
             object.insert("output".to_string(), Value::String(output_text.clone()));
             if let Some(input) = input {
@@ -842,96 +756,12 @@ fn tool_input_text(input: Option<&Value>) -> Option<String> {
     super::stringify_json(input)
 }
 
-fn load_messages_for_family(family: &ZcodeSessionFamily) -> Result<Vec<SessionMessage>> {
-    let connection = open_connection()?;
-    let member_ids = family_member_ids(family);
-    let message_rows = load_message_rows(&connection, &member_ids)?;
-    let parts_by_message = load_parts_by_message(&connection, &member_ids)?;
-    let mut messages = family
-        .members
-        .iter()
-        .filter(|row| row.id != family.root.id)
-        .map(|row| session_marker_message(row, "subagent_started"))
-        .collect::<Vec<_>>();
-
-    for row in message_rows {
-        if row.kind != "user_prompt" && row.kind != "assistant_response" {
-            continue;
-        }
-
-        let parts = parts_by_message
-            .get(&row.id)
-            .cloned()
-            .unwrap_or_default();
-        let mut blocks = load_message_blocks(&row, &parts);
-        if row.kind == "user_prompt" {
-            blocks = super::sanitize_user_blocks(blocks);
-        }
-
-        if blocks.is_empty() {
-            blocks.push(super::empty_message_block(
-                "ZCode",
-                "message has no visible parts",
-                Some(row.value.clone()),
-            ));
-        }
-
-        messages.push(SessionMessage {
-            id: row.id.clone(),
-            role: row.role.clone(),
-            timestamp: message_row_timestamp(&row),
-            blocks,
-            session_id: Some(row.session_id.clone()),
-        });
-    }
-
-    messages.sort_by(|left, right| {
-        left.timestamp
-            .cmp(&right.timestamp)
-            .then_with(|| left.id.cmp(&right.id))
-    });
-
-    Ok(messages)
-}
-
-fn load_events_for_family(family: &ZcodeSessionFamily) -> Result<Vec<SessionEvent>> {
-    let connection = open_connection()?;
-    let member_ids = family_member_ids(family);
-    let message_rows = load_message_rows(&connection, &member_ids)?;
-    let parts_by_message = load_parts_by_message(&connection, &member_ids)?;
-    let mut events = family
-        .members
-        .iter()
-        .filter(|row| row.id != family.root.id)
-        .map(|row| session_marker_event(row, "subagent_started"))
-        .collect::<Vec<_>>();
-
-    for row in message_rows {
-        if row.kind == "user_prompt" || row.kind == "assistant_response" {
-            continue;
-        }
-
-        let parts = parts_by_message
-            .get(&row.id)
-            .cloned()
-            .unwrap_or_default();
-        events.push(event_from_message_row(row, &parts));
-    }
-
-    events.sort_by(|left, right| {
-        left.timestamp
-            .cmp(&right.timestamp)
-            .then_with(|| left.id.cmp(&right.id))
-    });
-
-    Ok(events)
-}
-
 // 非 timeline 语义的消息(todo_reminder、timeline_event 等)转事件;正文不
 // 在 message.data 里而在 part 表,summary 与 payload 都要借 part 文本补全。
+// raw 页要看到原始记录：message 行 + part 表内容一起给出去（事件类型的正文
+// 在 part 表里）。摘要仍按 part 文本生成可读文案。
 fn event_from_message_row(row: ZcodeMessageRow, parts: &[Value]) -> SessionEvent {
     let timestamp = message_row_timestamp(&row);
-    let mut payload = row.value.clone();
     let mut summary = super::summarize_event(&row.kind, &row.value);
 
     match row.kind.as_str() {
@@ -944,10 +774,7 @@ fn event_from_message_row(row: ZcodeMessageRow, parts: &[Value]) -> SessionEvent
                 .join("\n");
 
             if !text.is_empty() {
-                summary = format!("todo reminder: {}", super::normalize_title(text.clone()));
-                if let Some(object) = payload.as_object_mut() {
-                    object.insert("text".to_string(), Value::String(text));
-                }
+                summary = format!("todo reminder: {}", super::normalize_title(text));
             }
         }
         "timeline_event" => {
@@ -958,62 +785,25 @@ fn event_from_message_row(row: ZcodeMessageRow, parts: &[Value]) -> SessionEvent
 
             if let Some(timeline_type) = timeline_type {
                 summary = format!("timeline: {timeline_type}");
-                if let Some(object) = payload.as_object_mut() {
-                    object.insert(
-                        "timelineType".to_string(),
-                        Value::String(timeline_type.clone()),
-                    );
-                }
             }
         }
         _ => {}
     }
+
+    let payload = json!({
+        "id": row.id,
+        "session_id": row.session_id,
+        "time_created": row.time_created,
+        "data": row.value,
+        "parts": parts,
+    });
 
     SessionEvent {
         id: row.id,
         kind: row.kind.clone(),
         timestamp,
         summary,
-        payload: Some(payload),
+        payload: Some(super::record_payload(&payload)),
         session_id: Some(row.session_id),
-    }
-}
-
-fn session_marker_message(row: &ZcodeSessionRow, kind: &str) -> SessionMessage {
-    SessionMessage {
-        id: format!("zcode-{}-{}", kind, row.id),
-        role: "assistant".to_string(),
-        timestamp: Some(row.time_created),
-        blocks: vec![ContentBlock {
-            kind: "output_text".to_string(),
-            text: Some(format!("Sub-agent session: {}\n{}", row.title, row.id)),
-            tool_name: None,
-            tool_call_id: None,
-            is_error: None,
-            payload: Some(json!({
-                "type": kind,
-                "session_id": row.id,
-                "title": row.title,
-                "directory": row.directory,
-                "parent_id": row.parent_id,
-            })),
-        }],
-        session_id: Some(row.id.clone()),
-    }
-}
-
-fn session_marker_event(row: &ZcodeSessionRow, kind: &str) -> SessionEvent {
-    SessionEvent {
-        id: format!("zcode-{}-{}", kind, row.id),
-        kind: kind.to_string(),
-        timestamp: Some(row.time_created),
-        summary: format!("Sub-agent session started: {}", row.title),
-        payload: Some(json!({
-            "session_id": row.id,
-            "title": row.title,
-            "directory": row.directory,
-            "parent_id": row.parent_id,
-        })),
-        session_id: Some(row.id.clone()),
     }
 }

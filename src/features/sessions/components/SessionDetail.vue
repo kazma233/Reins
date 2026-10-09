@@ -22,17 +22,22 @@ import {
 import { extractErrorMessage } from "@shared/lib/errors";
 import { createRequestGuard } from "@shared/lib/request-guard";
 import { formatTimestamp, formatTokenCount } from "@shared/lib/format";
-import { canDeleteSession } from "../model";
 import { formatSourceAppName } from "../source-app";
 import SessionDetailDialogs from "./SessionDetailDialogs.vue";
 import MessageTimeline from "./MessageTimeline.vue";
 import EventTimeline from "./EventTimeline.vue";
-import type { SessionAgent, SessionOverview, SessionTokenUsage } from "../types";
+import type {
+  DeletePlan,
+  SessionAgent,
+  SessionOverview,
+  SessionTokenUsage
+} from "../types";
 import SubagentGroupDialog from "./SubagentGroupDialog.vue";
 import "./session-detail.css";
 
 type SessionDetailProps = {
   overview: SessionOverview | null;
+  deletePlan: DeletePlan | null;
   loading: boolean;
 };
 
@@ -80,6 +85,7 @@ const deferredTimelineFilter = refDebounced(timelineFilter, 300);
 // --- timeline ---
 
 const overviewRef = toRef(props, "overview");
+const deletePlanRef = toRef(props, "deletePlan");
 const { detailKey, messagesLoader, eventsLoader } = useSessionTimeline(overviewRef);
 
 // ref 解构不丢响应性,沿用原有变量名,模板与滚动加载逻辑无需改动
@@ -109,7 +115,9 @@ const {
   openDeleteDialog,
   closeDeleteDialog,
   handleDelete
-} = useSessionDetailActions(overviewRef, detailKey, () => emit("deleted"));
+} = useSessionDetailActions(overviewRef, detailKey, deletePlanRef, () =>
+  emit("deleted")
+);
 
 // Reset UI toggles when the overview changes (dialog state resets inside
 // useSessionDetailActions).
@@ -221,8 +229,7 @@ async function openSubagentDialog(sessionId: string, label: string) {
     const agentMessages = await getSessionAgentMessages(
       detail.summary.sourceApp,
       detail.summary.sourceSessionId,
-      sessionId,
-      detail.summary.transcriptPath
+      sessionId
     );
 
     if (!subagentRequestGuard.isLatest(requestId)) {
@@ -267,7 +274,7 @@ function handleAgentTabClick(agent: SessionAgent) {
 const timelineFilterPlaceholder = computed(() =>
   timelineTab.value === "messages"
     ? "按消息内容、工具名、块类型筛选"
-    : "按事件类型、摘要、载荷筛选"
+    : "按记录类型、摘要、载荷筛选"
 );
 
 // --- auto-load more when the timeline needs more data ---
@@ -429,7 +436,7 @@ watch(
         </div>
         <div class="detail-header-actions">
           <button
-            v-if="canDeleteSession(overview.summary.sourceApp)"
+            v-if="deletePlan?.supported"
             class="danger-button"
             :disabled="deleteLoading"
             type="button"
@@ -465,7 +472,7 @@ watch(
           <dd>{{ overview.summary.cwd ?? "未知" }}</dd>
         </div>
         <div v-if="overview.summary.tokenUsage" class="summary-grid__wide">
-          <dt>Token 用量</dt>
+          <dt>Token 消耗</dt>
           <dd class="token-usage-detail">
             <span>命中率 {{ cacheHitRate(overview.summary.tokenUsage) }}</span>
             <span>
@@ -512,7 +519,7 @@ watch(
             type="button"
             @click="timelineTab = 'events'"
           >
-            事件
+            raw
           </button>
           <input
             v-model="timelineFilter"
@@ -570,6 +577,8 @@ watch(
     />
 
     <SessionDetailDialogs
+      v-if="deletePlan?.supported"
+      :delete-plan="deletePlan"
       :overview="overview"
       :delete-dialog-open="deleteDialogOpen"
       :delete-loading="deleteLoading"

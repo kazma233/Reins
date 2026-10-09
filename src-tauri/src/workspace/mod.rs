@@ -14,9 +14,10 @@ use dirs::home_dir;
 pub(crate) mod commands;
 mod config;
 mod inspect;
+pub(crate) mod mcp_formats;
 mod mcps;
 mod skills;
-mod targets;
+pub(crate) mod targets;
 pub(crate) mod types;
 
 use self::types::*;
@@ -104,96 +105,114 @@ fn default_true() -> bool {
     true
 }
 
-fn default_config_template() -> String {
-    // pi 段在生成模板时按 PI_CODING_AGENT_DIR 解析并固化具体路径；
-    // 之后以 config.yaml 里写入的路径为准，环境变量变化不再跟随。
-    // 默认场景沿用 ~ 前缀写法，与模板其他条目风格一致。
-    let (pi_skill_dir, pi_mcp_path) = match std::env::var_os("PI_CODING_AGENT_DIR") {
-        Some(dir) => {
-            let dir = PathBuf::from(dir);
-            (
-                dir.join("skills").display().to_string(),
-                dir.join("mcp.json").display().to_string(),
-            )
+// 默认模板的一个 target 条目：从 agents 清单构造，再渲染成 YAML 文本。
+// 注释与字段省略是模板契约的一部分（留空 = 解析时回落 builtin defaults）。
+struct TemplateTarget {
+    id: &'static str,
+    note: Option<String>,
+    // 模板原文的写法原样输出（含 grokbuild 的 "" 空串字面量）
+    skill_dir: String,
+    // None = 不写出该键（mcp.enabled 仅 Standard 条目携带）
+    mcp_enabled: Option<bool>,
+    mcp_config_path: Option<String>,
+    config_prefix: &'static str,
+    config_type_key: String,
+}
+
+// pi 段在生成模板时按 PI_CODING_AGENT_DIR 解析并固化具体路径；
+// 之后以 config.yaml 里写入的路径为准，环境变量变化不再跟随。
+// 默认场景沿用 ~ 前缀写法，与模板其他条目风格一致。
+pub(crate) fn default_config_template() -> String {
+    let targets = template_targets();
+
+    let mut out = String::from("targets:\n");
+    for (index, target) in targets.iter().enumerate() {
+        if index > 0 {
+            out.push('\n');
         }
-        None => (
-            "~/.pi/agent/skills".to_string(),
-            "~/.pi/agent/mcp.json".to_string(),
-        ),
-    };
+        if let Some(note) = &target.note {
+            out.push_str(&format!("  # {note}\n"));
+        }
+        out.push_str(&format!("  {}:\n", target.id));
+        out.push_str("    enabled: true\n");
+        out.push_str(&format!("    skill_dir: {}\n", target.skill_dir));
+        out.push_str("    mcp:\n");
+        if target.mcp_enabled.is_some() {
+            out.push_str("      enabled: true\n");
+        }
+        if let Some(path) = &target.mcp_config_path {
+            out.push_str(&format!("      config_path: {path}\n"));
+        }
+        out.push_str(&format!("      config_prefix: {}\n", target.config_prefix));
+        out.push_str(&format!("      config_type: {}\n", target.config_type_key));
+    }
 
-    format!(
-        r#"targets:
-  codex:
-    enabled: true
-    skill_dir: ~/.agents/skills
-    mcp:
-      enabled: true
-      config_path: ~/.codex/config.toml
-      config_prefix: mcp_servers
-      config_type: common
+    out.push_str(
+        "\nmcps: []\n\n# projects:\n#   my-app:\n#     path: ~/code/my-app\n#     agents:\n#       claude:\n#         enabled: true\n#       codex:\n#         enabled: true\n#       opencode:\n#         enabled: true\n#       zcode:\n#         enabled: true\n#       grokbuild:\n#         enabled: true\n",
+    );
+    out
+}
 
-  claude:
-    enabled: true
-    skill_dir: ~/.claude/skills
-    mcp:
-      enabled: true
-      config_path: ~/.claude.json
-      config_prefix: mcpServers
-      config_type: common
+fn template_targets() -> Vec<TemplateTarget> {
+    use crate::agents::{AGENTS, TemplateEntry};
 
-  opencode:
-    enabled: true
-    skill_dir: ~/.config/opencode/skills
-    mcp:
-      enabled: true
-      config_path: ~/.config/opencode/opencode.json
-      config_prefix: mcp.servers
-      config_type: opencode
+    AGENTS
+        .iter()
+        .filter_map(|spec| {
+            let target_id = spec.target_id?;
+            match spec.template {
+                TemplateEntry::Absent => None,
+                TemplateEntry::Standard { mcp_enabled } => Some(TemplateTarget {
+                    id: target_id,
+                    note: None,
+                    skill_dir: template_global_path(spec.global.root, spec.global.skill_dir),
+                    mcp_enabled: mcp_enabled.then_some(true),
+                    mcp_config_path: spec
+                        .global
+                        .mcp_config_path
+                        .map(|rel| template_global_path(spec.global.root, rel)),
+                    config_prefix: spec.mcp.prefix,
+                    config_type_key: mcp_config_type_key(spec.mcp.config_type),
+                }),
+                TemplateEntry::FollowEnv => {
+                    let root_prefix = spec.global.root.home_prefix();
+                    let note = format!(
+                        "留空路径以跟随 GROK_HOME；默认 {}/{} 和 {}/{}。",
+                        root_prefix,
+                        spec.global.skill_dir,
+                        root_prefix,
+                        spec.global.mcp_config_path.unwrap_or_default()
+                    );
+                    Some(TemplateTarget {
+                        id: target_id,
+                        note: Some(note),
+                        skill_dir: "\"\"".to_string(),
+                        mcp_enabled: None,
+                        mcp_config_path: None,
+                        config_prefix: spec.mcp.prefix,
+                        config_type_key: mcp_config_type_key(spec.mcp.config_type),
+                    })
+                }
+            }
+        })
+        .collect()
+}
 
-  zcode:
-    enabled: true
-    skill_dir: ~/.zcode/skills
-    mcp:
-      enabled: true
-      config_path: ~/.zcode/cli/config.json
-      config_prefix: mcp.servers
-      config_type: common
+// 模板里的全局路径写法：默认 ~ 缩写；根目录被 env 重定向时固化为绝对路径。
+fn template_global_path(root: crate::agents::GlobalRoot, rel: &str) -> String {
+    use crate::agents::GlobalRoot;
+    match (root, std::env::var_os("PI_CODING_AGENT_DIR")) {
+        (GlobalRoot::PiAgentDir, Some(dir)) => PathBuf::from(dir).join(rel).display().to_string(),
+        _ => format!("{}/{}", root.home_prefix(), rel),
+    }
+}
 
-  # 留空路径以跟随 GROK_HOME；默认 ~/.grok/skills 和 ~/.grok/config.toml。
-  grokbuild:
-    enabled: true
-    skill_dir: ""
-    mcp:
-      config_prefix: mcp_servers
-      config_type: grokbuild
-
-  pi:
-    enabled: true
-    skill_dir: {pi_skill_dir}
-    mcp:
-      config_path: {pi_mcp_path}
-      config_prefix: mcpServers
-      config_type: common
-
-mcps: []
-
-# projects:
-#   my-app:
-#     path: ~/code/my-app
-#     agents:
-#       claude:
-#         enabled: true
-#       codex:
-#         enabled: true
-#       opencode:
-#         enabled: true
-#       zcode:
-#         enabled: true
-#       grokbuild:
-#         enabled: true
-"#
-    )
+// config_type 的 YAML 键取 serde 的 wire 串，不另维护一份映射。
+fn mcp_config_type_key(config_type: McpConfigType) -> String {
+    serde_yaml::to_string(&config_type)
+        .expect("McpConfigType 序列化不会失败")
+        .trim_end()
+        .to_string()
 }
 
 // ---------------------------------------------------------------------------
@@ -392,13 +411,24 @@ fn config_to_view(
 }
 
 fn target_to_view(target: &ResolvedTargetConfig) -> TargetConfigView {
+    let format_writer = mcp_formats::mcp_format_writer(target.mcp_config_type);
     TargetConfigView {
         id: target.id.clone(),
         enabled: target.enabled,
         skill_dir: display_path(&target.skill_dir),
         config_path: target.config_path.as_ref().map(|path| display_path(path)),
         mcp_config_prefix: target.mcp_config_prefix.clone(),
-        mcp_config_type: target.mcp_config_type,
+        mcp_format_description: format_writer.description().to_string(),
+        // 示例生成失败(序列化异常)时留空,前端隐藏示例区——说明行仍在。
+        mcp_format_examples: format_writer
+            .shape_examples(&target.mcp_config_prefix, "my-server")
+            .unwrap_or_default()
+            .into_iter()
+            .map(|example| McpFormatExample {
+                label: example.label.to_string(),
+                body: example.body,
+            })
+            .collect(),
     }
 }
 
@@ -432,10 +462,20 @@ fn parse_manager_config(raw_content: &str, config_path: &Path) -> Result<Resolve
             .unwrap_or_default()
             .trim()
             .to_string();
+        let config_type = raw_target
+            .mcp
+            .config_type
+            .or_else(|| defaults.map(|item| item.config_type))
+            .unwrap_or(McpConfigType::Common);
 
         // 与 normalize_raw_target_input 的契约一致：configPrefix 只在
         // 真正有 MCP 配置文件可写时才必填（不需要 MCP 的 target 两者皆空）。
-        if config_file_path.is_some() && config_prefix.is_empty() {
+        // dsh 按 name+serverName 定位条目（writer 声明 prefix 不必填），
+        // 允许留空。
+        if config_file_path.is_some()
+            && config_prefix.is_empty()
+            && mcp_formats::mcp_format_writer(config_type).prefix_required()
+        {
             bail!("目标 {} 的 mcp.config_prefix 不能为空。", id);
         }
 
@@ -448,11 +488,7 @@ fn parse_manager_config(raw_content: &str, config_path: &Path) -> Result<Resolve
                 skill_dir,
                 config_path: config_file_path,
                 mcp_config_prefix: config_prefix,
-                mcp_config_type: raw_target.mcp.config_type.unwrap_or_else(|| {
-                    defaults
-                        .map(|item| item.config_type)
-                        .unwrap_or(McpConfigType::Common)
-                }),
+                mcp_config_type: config_type,
             },
         );
     }
@@ -813,3 +849,7 @@ mod tests;
 #[cfg(test)]
 #[path = "../tests/workspace_config.rs"]
 mod config_tests;
+
+#[cfg(test)]
+#[path = "../tests/workspace_dsh.rs"]
+mod dsh_tests;

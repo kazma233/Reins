@@ -22,5 +22,6 @@ export * from "./ProviderMutationResult";
 export * from "./ProviderProtocol";
 export * from "./ProviderUpsertInput";
 export * from "./ProviderView";
+export * from "./ProviderWriteMode";
 export * from "./ProvidersState";
 export * from "./ReasoningLevel";

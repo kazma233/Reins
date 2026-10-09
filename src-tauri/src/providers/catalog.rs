@@ -77,9 +77,19 @@ pub(crate) fn fetch_provider_models_inner(
             }
             bail!("模型列表请求失败：HTTP {status}");
         }
-        let body: JsonValue = response
-            .json()
-            .with_context(|| format!("模型列表返回的不是 JSON：{url}"))?;
+        // 先取原始字节再解析：2xx 但不是 JSON 时要把响应体开头带出来，
+        // 否则只报「不是 JSON」看不出网关到底回了什么（HTML 错误页 / 纯文本 404）。
+        // 4xx/5xx 仍然不落响应体，那条路径可能回显请求头里的 Key。
+        let raw = response
+            .bytes()
+            .with_context(|| format!("读取模型列表响应失败：{url}"))?;
+        let body: JsonValue = match serde_json::from_slice(&raw) {
+            Ok(value) => value,
+            Err(_) => bail!(
+                "模型列表返回的不是 JSON：{url}：{}",
+                describe_non_json_body(&raw)
+            ),
+        };
         match parse_models_payload(&body) {
             Ok(models) => {
                 return Ok(FetchedModelsResult {
@@ -103,6 +113,22 @@ pub(crate) fn fetch_provider_models_inner(
         }
     }
     unreachable!("候选路径列表非空，循环内必然返回")
+}
+
+// 非 JSON 响应体的展示形态：压成单行并截断到 1000 字符，
+// 足够看清网关返回了什么，又不会把整页内容塞进错误串。
+fn describe_non_json_body(raw: &[u8]) -> String {
+    const MAX_CHARS: usize = 1000;
+    let text = String::from_utf8_lossy(raw);
+    let flattened = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if flattened.is_empty() {
+        return "（响应体为空）".to_string();
+    }
+    let mut head: String = flattened.chars().take(MAX_CHARS).collect();
+    if flattened.chars().count() > MAX_CHARS {
+        head.push('…');
+    }
+    head
 }
 
 fn build_client() -> Result<reqwest::blocking::Client> {

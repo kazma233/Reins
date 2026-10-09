@@ -14,6 +14,7 @@ export const SOURCE_COLORS: Record<SourceApp, string> = {
   pi: "#9333ea",
   grokbuild: "#dc2626",
   zcode: "#0e7490",
+  dsh: "#db2777"
 };
 
 // days=1 是"今日"窗口:轴与序列切换为小时粒度;0 表示全部。

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import AppCheckbox from "@shared/ui/AppCheckbox.vue";
+import AppFieldError from "@shared/ui/AppFieldError.vue";
 import DialogShell from "@shared/ui/DialogShell.vue";
 import type { McpFormState } from "../../model";
 
@@ -8,13 +9,15 @@ type McpCreateDialogProps = {
   form: McpFormState;
   open: boolean;
   loading: boolean;
+  error: string | null;
 };
 
 const props = defineProps<McpCreateDialogProps>();
 
-defineEmits<{
+const emit = defineEmits<{
   close: [];
   confirm: [];
+  clearFieldError: [field: string];
 }>();
 
 const dialogTitle = computed(() => (props.form.originalName ? "修改 mcp" : "新增 mcp"));
@@ -43,13 +46,26 @@ const confirmLabel = computed(() => (props.form.originalName ? "保存" : "添�
     </template>
 
     <div class="manager-target-form-shell">
+      <AppFieldError :message="form.errors.form ?? null" />
+
       <label class="manager-field">
         <span>
           名称
           <span class="manager-required-mark"> *</span>
+          <AppFieldError
+            class="manager-field__error"
+            id="mcp-name-error"
+            :message="form.errors.name ?? null"
+          />
         </span>
         <small class="manager-field__hint">唯一标识。会作为配置里的 mcp 名称。</small>
-        <input v-model="form.name" type="text" />
+        <input
+          v-model="form.name"
+          :aria-describedby="form.errors.name ? 'mcp-name-error' : undefined"
+          :aria-invalid="Boolean(form.errors.name)"
+          type="text"
+          @input="$emit('clearFieldError', 'name')"
+        />
       </label>
 
       <AppCheckbox v-model="form.enabled">启用</AppCheckbox>
@@ -57,7 +73,11 @@ const confirmLabel = computed(() => (props.form.originalName ? "保存" : "添�
       <label class="manager-field">
         <span>主页</span>
         <small class="manager-field__hint">选填。用于记录作者主页、项目地址或文档地址，不参与连接。</small>
-        <input v-model="form.homepage" type="text" />
+        <input
+          v-model="form.homepage"
+          type="text"
+          @input="$emit('clearFieldError', 'homepage')"
+        />
       </label>
 
       <div class="manager-stack">
@@ -94,9 +114,20 @@ const confirmLabel = computed(() => (props.form.originalName ? "保存" : "添�
             <span>
               Command
               <span class="manager-required-mark"> *</span>
+              <AppFieldError
+                class="manager-field__error"
+                id="mcp-command-error"
+                :message="form.errors.command ?? null"
+              />
             </span>
             <small class="manager-field__hint">本地启动命令，比如 `npx`、`uvx`、`docker`。</small>
-            <input v-model="form.command" type="text" />
+            <input
+              v-model="form.command"
+              :aria-describedby="form.errors.command ? 'mcp-command-error' : undefined"
+              :aria-invalid="Boolean(form.errors.command)"
+              type="text"
+              @input="$emit('clearFieldError', 'command')"
+            />
           </label>
           <label class="manager-field">
             <span>Args</span>
@@ -104,9 +135,23 @@ const confirmLabel = computed(() => (props.form.originalName ? "保存" : "添�
             <textarea v-model="form.args" class="manager-editor manager-textarea" rows="4" />
           </label>
           <label class="manager-field">
-            <span>Env</span>
+            <span>
+              Env
+              <AppFieldError
+                class="manager-field__error"
+                id="mcp-env-error"
+                :message="form.errors.env ?? null"
+              />
+            </span>
             <small class="manager-field__hint">每行一条 `KEY=VALUE`。只有符合格式的内容会进入预览。</small>
-            <textarea v-model="form.env" class="manager-editor manager-textarea" rows="5" />
+            <textarea
+              v-model="form.env"
+              :aria-describedby="form.errors.env ? 'mcp-env-error' : undefined"
+              :aria-invalid="Boolean(form.errors.env)"
+              class="manager-editor manager-textarea"
+              rows="5"
+              @input="$emit('clearFieldError', 'env')"
+            />
           </label>
         </div>
       </template>
@@ -117,22 +162,60 @@ const confirmLabel = computed(() => (props.form.originalName ? "保存" : "添�
             <span>
               连接地址
               <span class="manager-required-mark"> *</span>
+              <AppFieldError
+                class="manager-field__error"
+                id="mcp-url-error"
+                :message="form.errors.url ?? null"
+              />
             </span>
             <small class="manager-field__hint">远程 mcp 服务地址，`http` 和 `sse` 都填这里。</small>
-            <input v-model="form.url" type="text" />
+            <input
+              v-model="form.url"
+              :aria-describedby="form.errors.url ? 'mcp-url-error' : undefined"
+              :aria-invalid="Boolean(form.errors.url)"
+              type="text"
+              @input="$emit('clearFieldError', 'url')"
+            />
           </label>
           <label class="manager-field">
-            <span>Headers</span>
+            <span>
+              Headers
+              <AppFieldError
+                class="manager-field__error"
+                id="mcp-headers-error"
+                :message="form.errors.headers ?? null"
+              />
+            </span>
             <small class="manager-field__hint">每行一条 `KEY=VALUE`，会写入远程请求头。</small>
-            <textarea v-model="form.headers" class="manager-editor manager-textarea" rows="5" />
+            <textarea
+              v-model="form.headers"
+              :aria-describedby="form.errors.headers ? 'mcp-headers-error' : undefined"
+              :aria-invalid="Boolean(form.errors.headers)"
+              class="manager-editor manager-textarea"
+              rows="5"
+              @input="$emit('clearFieldError', 'headers')"
+            />
           </label>
         </div>
       </template>
 
       <label class="manager-field">
-        <span>Timeout</span>
+        <span>
+          Timeout
+          <AppFieldError
+            class="manager-field__error"
+            id="mcp-timeout-error"
+            :message="form.errors.timeout ?? null"
+          />
+        </span>
         <small class="manager-field__hint">选填，单位毫秒。留空则不写入。</small>
-        <input v-model="form.timeout" type="text" />
+        <input
+          v-model="form.timeout"
+          :aria-describedby="form.errors.timeout ? 'mcp-timeout-error' : undefined"
+          :aria-invalid="Boolean(form.errors.timeout)"
+          type="text"
+          @input="$emit('clearFieldError', 'timeout')"
+        />
       </label>
     </div>
   </DialogShell>

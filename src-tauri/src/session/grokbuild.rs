@@ -11,9 +11,9 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use super::{
-    ContentBlock, SessionEvent, SessionEventPage, SessionFileEntry, SessionMessage,
-    SessionMessagePage, SessionOverview, SessionReader, SessionSummary, SessionTokenUsage,
-    SourceApp, UsageHourBuckets,
+    ContentBlock, DeletePlanAction, SessionEvent, SessionEventPage, SessionFileEntry,
+    SessionMessage, SessionMessagePage, SessionOverview, SessionReader, SessionSummary,
+    SessionTokenUsage, SourceApp, UsageHourBuckets,
 };
 
 use super::family_index::{Family, FamilyIndex, FamilyRow};
@@ -346,23 +346,23 @@ fn family_index() -> Result<FamilyIndex<Row>> {
     Ok(FamilyIndex::build(families))
 }
 
-fn family(path: &Path) -> Result<Family<Row>> {
-    let path = validate_path(path)?;
-    let index = family_index()?;
-    index
-        .families
+// 会话身份的唯一寻址入口:id → family 直查,未命中文案逐字保留现状契约。
+fn family_for_id(source_session_id: &str) -> Result<Family<Row>> {
+    family_index()?
+        .family_for_id(source_session_id)
+        .ok_or_else(|| anyhow!("Grok Build session not found"))
+}
+
+// events 按成员自身目录读取:id 解析到该成员的 transcript 路径(索引里的
+// 每个 id 都是某条成员的 member id)。
+fn member_path_for_id(source_session_id: &str) -> Result<PathBuf> {
+    let family = family_for_id(source_session_id)?;
+    family
+        .members
         .iter()
-        .find(|family| family.root.member_path().as_ref() == path.as_path())
-        .or_else(|| {
-            index.families.iter().find(|family| {
-                family
-                    .members
-                    .iter()
-                    .any(|row| row.member_path().as_ref() == path.as_path())
-            })
-        })
-        .cloned()
-        .context("Grok Build parent session not found")
+        .find(|row| row.member_id() == source_session_id)
+        .map(|row| PathBuf::from(row.summary.transcript_path.clone()))
+        .ok_or_else(|| anyhow!("Grok Build session not found"))
 }
 
 fn family_summary(family: &Family<Row>) -> SessionSummary {
@@ -498,7 +498,9 @@ fn session_usage(path: &Path) -> Result<Option<SessionTokenUsage>> {
     // inputTokens 含缓存命中部分(实测 input+output==totalTokens),扣除后与
     // 其他来源的"新输入"口径一致;outputTokens 已含 reasoning。
     Ok(file.session.map(|totals| SessionTokenUsage {
-        input_tokens: totals.input_tokens.saturating_sub(totals.cached_read_tokens),
+        input_tokens: totals
+            .input_tokens
+            .saturating_sub(totals.cached_read_tokens),
         output_tokens: totals.output_tokens,
         cache_read_tokens: totals.cached_read_tokens,
         cache_write_tokens: totals.cache_creation_tokens,
@@ -680,9 +682,9 @@ fn messages(path: &Path) -> Result<Vec<SessionMessage>> {
                     match required(item, "type")? {
                         "text" => blocks.push(block("text", Some(required(item, "text")?.into()))),
                         "image" => {
-                            let mut image = block("image", None);
-                            image.payload =
-                                Some(json!({"type":"image", "url": required(item, "url")?}));
+                            let url = required(item, "url")?;
+                            let mut image = block("image", Some(url.into()));
+                            image.payload = Some(json!({"type":"image", "url": url}));
                             blocks.push(image);
                         }
                         _ => bail!("Unsupported Grok Build user content type"),
@@ -765,23 +767,6 @@ fn events_page(path: &Path, offset: usize, limit: usize) -> Result<SessionEventP
     scan(path, "events.jsonl", |index, value| {
         let kind = required(&value, "type")?;
         if total >= offset && total < offset.saturating_add(limit) {
-            let payload = [
-                "tool_name",
-                "duration_ms",
-                "outcome",
-                "tool_call_id",
-                "turn_number",
-                "model_id",
-                "session_relationship",
-            ]
-            .into_iter()
-            .filter_map(|key| {
-                value
-                    .get(key)
-                    .filter(|v| v.is_string() || v.is_number() || v.is_boolean())
-                    .map(|v| (key.to_owned(), v.clone()))
-            })
-            .collect::<serde_json::Map<_, _>>();
             events.push(SessionEvent {
                 id: format!("grok-event-{index}"),
                 kind: kind.into(),
@@ -789,7 +774,8 @@ fn events_page(path: &Path, offset: usize, limit: usize) -> Result<SessionEventP
                     .as_str()
                     .and_then(crate::support::time::parse_timestamp),
                 summary: kind.into(),
-                payload: (!payload.is_empty()).then_some(Value::Object(payload)),
+                // raw 页展示原始记录：不裁剪字段（加密字段仍不下发）
+                payload: Some(super::record_payload(&value)),
                 session_id: None,
             });
         }
@@ -827,6 +813,7 @@ impl SessionReader for GrokBuildBackend {
                 let summary = family_summary(&family);
                 SessionFileEntry {
                     path: PathBuf::from(&summary.transcript_path),
+                    source_session_id: family.root.member_id().to_string(),
                     sort_timestamp: summary.updated_at.unwrap_or_default(),
                     summary: Some(summary),
                 }
@@ -835,23 +822,13 @@ impl SessionReader for GrokBuildBackend {
         super::sort_entries(&mut entries);
         Ok(entries)
     }
-    fn resolve_path(&self, id: &str) -> Result<PathBuf> {
-        valid_id(id)?;
-        family_index()?
-            .families
-            .into_iter()
-            .flat_map(|family| family.members)
-            .find(|row| row.member_id() == id)
-            .map(|row| PathBuf::from(row.summary.transcript_path))
-            .context("Grok Build session not found")
-    }
-    fn parse_summary(&self, path: &Path) -> Result<SessionSummary> {
-        // 与 family 聚合语义一致：成员路径解析到所属 family 的 root 摘要。
-        let family = family(path)?;
+    fn parse_summary(&self, source_session_id: &str) -> Result<SessionSummary> {
+        // 与 family 聚合语义一致：成员 id 解析到所属 family 的 root 摘要。
+        let family = family_for_id(source_session_id)?;
         Ok(family_summary(&family))
     }
-    fn parse_overview(&self, path: &Path) -> Result<SessionOverview> {
-        let family = family(path)?;
+    fn parse_overview(&self, source_session_id: &str) -> Result<SessionOverview> {
+        let family = family_for_id(source_session_id)?;
         Ok(SessionOverview {
             summary: family_summary(&family),
             source_paths: family_source_paths(&family)?,
@@ -865,11 +842,11 @@ impl SessionReader for GrokBuildBackend {
     }
     fn parse_messages_page(
         &self,
-        path: &Path,
+        source_session_id: &str,
         offset: usize,
         limit: usize,
     ) -> Result<SessionMessagePage> {
-        let family = family(path)?;
+        let family = family_for_id(source_session_id)?;
         let (messages, offset, next_offset, total_count) =
             crate::support::paging::slice_page(&parent_messages(&family)?, offset, limit);
         Ok(SessionMessagePage {
@@ -883,19 +860,20 @@ impl SessionReader for GrokBuildBackend {
     }
     fn parse_events_page(
         &self,
-        path: &Path,
+        source_session_id: &str,
         offset: usize,
         limit: usize,
     ) -> Result<SessionEventPage> {
-        summary(path)?;
-        events_page(path, offset, limit)
+        let path = member_path_for_id(source_session_id)?;
+        summary(&path)?;
+        events_page(&path, offset, limit)
     }
     fn parse_agent_messages(
         &self,
-        path: &Path,
+        source_session_id: &str,
         agent_session_id: &str,
     ) -> Result<Vec<SessionMessage>> {
-        let family = family(path)?;
+        let family = family_for_id(source_session_id)?;
         let row = family
             .members
             .iter()
@@ -915,8 +893,8 @@ impl SessionReader for GrokBuildBackend {
 // root 会话交给官方 `grok sessions delete`（目录、搜索索引、活跃保护都由
 // grok 自己处理）；该命令只认顶层会话、够不到 subagent 子会话，子会话按
 // 本地清理：成员目录 + session_search.sqlite 索引行。
-pub(crate) fn delete_session(path: &Path) -> Result<()> {
-    let family = family(path)?;
+pub(crate) fn delete_session(source_session_id: &str) -> Result<()> {
+    let family = family_for_id(source_session_id)?;
 
     run_official_delete(family.root.member_id())?;
 
@@ -944,6 +922,56 @@ pub(crate) fn delete_session(path: &Path) -> Result<()> {
         }
     }
     Ok(())
+}
+
+// delete_session 的预演:root 交官方命令,官方够不到的子会话目录与搜索
+// 索引行走本地清理;root 自身的目录与索引行由官方命令负责,不进动作清单。
+pub(crate) fn delete_plan(overview: &SessionOverview) -> Result<Vec<DeletePlanAction>> {
+    let root_id = &overview.summary.source_session_id;
+
+    let mut actions = vec![DeletePlanAction::RunCli {
+        program: "grok".to_string(),
+        args: vec![
+            "sessions".to_string(),
+            "delete".to_string(),
+            root_id.clone(),
+        ],
+    }];
+
+    // sourcePaths 指向各会话目录内的文件,取父目录去重(首见顺序)即成员
+    // 会话目录;再排除 root 自己的目录。
+    let mut session_dirs = Vec::<String>::new();
+    for path in &overview.source_paths {
+        if let Some((dir, _)) = path.rsplit_once('/') {
+            if !session_dirs.iter().any(|seen| seen == dir) {
+                session_dirs.push(dir.to_string());
+            }
+        }
+    }
+    for dir in session_dirs {
+        if !dir.ends_with(&format!("/{root_id}")) {
+            actions.push(DeletePlanAction::RemoveDirectory { path: dir });
+        }
+    }
+
+    // 搜索索引只清本地删除的子会话行;SQL 单引号转义规则与 sqlite 一致。
+    let child_ids = super::delete::delete_target_session_ids(overview)
+        .into_iter()
+        .filter(|id| id != root_id)
+        .collect::<Vec<_>>();
+    if !child_ids.is_empty() {
+        let ids = child_ids
+            .iter()
+            .map(|id| format!("'{}'", id.replace('\'', "''")))
+            .collect::<Vec<_>>()
+            .join(", ");
+        actions.push(DeletePlanAction::Sqlite {
+            db_path: "~/.grok/sessions/session_search.sqlite".to_string(),
+            sql: format!("DELETE FROM session_docs WHERE session_id IN ({ids});"),
+        });
+    }
+
+    Ok(actions)
 }
 
 // grok 对不存在的会话输出 "No session found" 但 exit 0（幂等语义），只有
@@ -1000,7 +1028,10 @@ fn delete_search_index_rows(family: &Family<Row>) -> Result<()> {
         .with_context(|| format!("Failed to open {}", db_path.display()))?;
     for row in family.members.iter().skip(1) {
         connection
-            .execute("DELETE FROM session_docs WHERE session_id = ?1", params![row.member_id()])
+            .execute(
+                "DELETE FROM session_docs WHERE session_id = ?1",
+                params![row.member_id()],
+            )
             .with_context(|| {
                 format!(
                     "Failed to delete Grok Build search index for {}",

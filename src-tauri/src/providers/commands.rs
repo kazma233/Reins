@@ -67,17 +67,8 @@ pub(crate) async fn delete_provider(
     run_blocking(move || delete_provider_inner(&store, &ToolEnv::from_env(), &provider_id)).await
 }
 
-#[tauri::command]
-pub(crate) async fn fetch_provider_models(
-    store: tauri::State<'_, ProviderConfigStore>,
-    provider_id: String,
-) -> std::result::Result<FetchedModelsResult, String> {
-    let store = store.inner().clone();
-    run_blocking(move || fetch_models_inner(&store, &provider_id)).await
-}
-
-// 新增平台未落盘时的直连拉取：只用表单数据与当次输入的密钥，
-// 不读 providers.yaml、不写任何持久状态。
+// 按表单当前值拉取模型列表：不读 providers.yaml、不写任何持久状态，
+// 因此用户改了表单还没保存时，拉取也按改后的值走。
 #[tauri::command]
 pub(crate) async fn fetch_provider_models_direct(
     protocol: ProviderProtocol,
@@ -226,20 +217,8 @@ fn inspect_app(
     }
 }
 
-fn app_config_paths(env: &ToolEnv, app: ProviderAppId) -> Vec<PathBuf> {
-    let resolve = || -> Result<Vec<PathBuf>> {
-        Ok(match app {
-            ProviderAppId::Codex => vec![super::apps::codex_config_path(env)?],
-            ProviderAppId::Claude => vec![super::apps::claude_settings_path(env)?],
-            ProviderAppId::Opencode => super::apps::opencode_candidate_paths()?,
-            ProviderAppId::Pi => vec![
-                super::apps::pi_models_path(env)?,
-                super::apps::pi_settings_path(env)?,
-            ],
-            ProviderAppId::Grokbuild => vec![super::apps::grok_config_path(env)?],
-        })
-    };
-    resolve().unwrap_or_default()
+pub(crate) fn app_config_paths(env: &ToolEnv, app: ProviderAppId) -> Vec<PathBuf> {
+    adapter_for(app).config_paths(env).unwrap_or_default()
 }
 
 fn provider_view(provider: &ResolvedProvider) -> Result<ProviderView> {
@@ -281,7 +260,8 @@ pub(crate) fn delete_provider_inner(
             .iter()
             .any(|entry| entry.provider_id.as_deref() == Some(provider_id))
         {
-            bail!("Claude Code 仍在引用该平台，请先从 Claude Code 移除后再删除平台。");
+            let claude_label = ProviderAppId::Claude.label();
+            bail!("{claude_label} 仍在引用该平台，请先从 {claude_label} 移除后再删除平台。");
         }
     }
 
@@ -292,20 +272,6 @@ pub(crate) fn delete_provider_inner(
         action: "delete".to_string(),
         detail: format!("平台 {provider_id} 已删除。"),
     })
-}
-
-pub(crate) fn fetch_models_inner(
-    store: &ProviderConfigStore,
-    provider_id: &str,
-) -> Result<FetchedModelsResult> {
-    let providers = store.load()?;
-    let provider = providers
-        .get(provider_id)
-        .ok_or_else(|| anyhow::anyhow!("平台不存在：{provider_id}"))?;
-    let Some(api_key) = provider.stored_api_key() else {
-        bail!("请先设置平台 {provider_id} 的 API Key。");
-    };
-    fetch_provider_models_inner(provider, &api_key)
 }
 
 // 生成应用产物。preview=true 时内容里的密钥用脱敏占位符，不读真实密钥。
@@ -385,8 +351,9 @@ pub(crate) fn apply_provider_inner(
 ) -> Result<ProviderMutationResult> {
     let (files, warnings) = compute_apply(store, env, input, false)?;
     // 原子写逐个文件执行；中途失败时已写文件保持新内容，靠预览 +
-    // 幂等重试收敛，不做跨文件回滚。
-    super::apps::write_files(&files)?;
+    // 幂等重试收敛，不做跨文件回滚。敏感文件（如 dsh 凭据）强制
+    // owner-only 权限，按 adapter 的声明分发。
+    super::apps::write_files(&files, &adapter_for(input.app).restricted_paths(env))?;
     let written = files
         .iter()
         .map(|(path, _)| display_path(path))
@@ -414,7 +381,7 @@ pub(crate) fn remove_provider_from_app_inner(
     let provider = providers.get(provider_id);
     let adapter = adapter_for(app);
     let files = adapter.remove(env, provider_id, provider)?;
-    super::apps::write_files(&files)?;
+    super::apps::write_files(&files, &adapter.restricted_paths(env))?;
     let written = files
         .iter()
         .map(|(path, _)| display_path(path))
@@ -438,7 +405,7 @@ pub(crate) fn remove_external_entry_inner(
 ) -> Result<ProviderMutationResult> {
     let adapter = adapter_for(*app);
     let files = adapter.remove_external(env, entry_key)?;
-    super::apps::write_files(&files)?;
+    super::apps::write_files(&files, &adapter.restricted_paths(env))?;
     let written = files
         .iter()
         .map(|(path, _)| display_path(path))

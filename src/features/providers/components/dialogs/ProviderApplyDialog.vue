@@ -2,6 +2,7 @@
 import { computed, ref, watch } from "vue";
 import DialogShell from "@shared/ui/DialogShell.vue";
 import AppSelect from "@shared/ui/AppSelect.vue";
+import AppLoadError from "@shared/ui/AppLoadError.vue";
 import { extractErrorMessage } from "@shared/lib/errors";
 import { previewProviderApply } from "../../api";
 import type {
@@ -23,7 +24,6 @@ import {
   REASONING_LEVEL_LABELS,
   unwrittenModelFieldsText,
 } from "../../model";
-import { useProvidersNotice } from "../../composables/useProvidersNotice";
 
 type ProviderApplyDialogProps = {
   open: boolean;
@@ -31,6 +31,8 @@ type ProviderApplyDialogProps = {
   app: ProviderAppId;
   provider: ProviderView;
   state: ProvidersState | null;
+  // 父层确认应用失败时写入的错误文案，展示在本弹窗内。
+  error?: string | null;
 };
 
 const props = defineProps<ProviderApplyDialogProps>();
@@ -39,8 +41,6 @@ const emit = defineEmits<{
   close: [];
   confirm: [input: ApplyProviderInput];
 }>();
-
-const { showNotice } = useProvidersNotice();
 
 const selectedModelIds = ref<string[]>([]);
 const defaultModelId = ref("");
@@ -54,6 +54,8 @@ const defaultReasoningLevelValue = computed({
 });
 const preview = ref<ProviderApplyPreview | null>(null);
 const previewLoading = ref(false);
+// 预览失败的重试入口就在原位，错误文案不必随着下一次成功消失得无影无踪。
+const previewError = ref<string | null>(null);
 
 // 父组件在打开时才挂载本弹窗，且 open 与 app/providerId 在同一次更新里置位，
 // 首次挂载时 open 已是 true 而 watch 不会触发；必须 immediate 才能做首次初始化。
@@ -64,6 +66,7 @@ watch(
       return;
     }
     preview.value = null;
+    previewError.value = null;
     const selection = initialApplySelection(
       findAppState(props.state, props.app),
       props.provider
@@ -139,11 +142,12 @@ function buildInput(): ApplyProviderInput {
 
 async function runPreview() {
   previewLoading.value = true;
+  previewError.value = null;
   try {
     preview.value = await previewProviderApply(buildInput());
   } catch (error) {
     // Tauri invoke 的错误是字符串，extractErrorMessage 才能透出后端原因。
-    showNotice(extractErrorMessage(error, "生成预览失败。"), "error");
+    previewError.value = extractErrorMessage(error, "生成预览失败。");
     preview.value = null;
   } finally {
     previewLoading.value = false;
@@ -189,6 +193,8 @@ function renderDiff(lines: DiffLine[]): string {
     @close="$emit('close')"
   >
     <template #actions>
+      <!-- 确认应用失败的回执跟在按钮旁边；预览失败是有重试入口的状态，留在预览位置 -->
+      <p v-if="error" class="providers-apply-hint">{{ error }}</p>
       <button
         class="secondary-button"
         :disabled="loading || blockers.length > 0 || previewLoading"
@@ -272,6 +278,13 @@ function renderDiff(lines: DiffLine[]): string {
           </small>
         </div>
       </div>
+
+      <AppLoadError
+        v-if="previewError"
+        :message="previewError"
+        :retrying="previewLoading"
+        @retry="runPreview"
+      />
 
       <div v-if="preview">
         <h4 class="providers-section-title">变更预览（密钥已脱敏）</h4>

@@ -48,6 +48,10 @@ impl AppAdapter for ClaudeAdapter {
         ProviderAppId::Claude
     }
 
+    fn config_paths(&self, env: &ToolEnv) -> Result<Vec<PathBuf>> {
+        Ok(vec![claude_settings_path(env)?])
+    }
+
     fn capability(&self) -> AppCapability {
         AppCapability {
             supported_protocols: &[ProviderProtocol::AnthropicMessages],
@@ -109,9 +113,9 @@ impl AppAdapter for ClaudeAdapter {
                     .push(format!("缺少 {AUTH_TOKEN_KEY}，应用后才能生效。"));
             }
             if env_table.get(LEGACY_API_KEY_KEY).is_some() {
-                entry
-                    .notes
-                    .push(format!("检测到遗留的 {LEGACY_API_KEY_KEY}，重新应用可清理。"));
+                entry.notes.push(format!(
+                    "检测到遗留的 {LEGACY_API_KEY_KEY}，重新应用可清理。"
+                ));
             }
             entry
         } else {

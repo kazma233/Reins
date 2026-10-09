@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from "vue";
+import ConfirmDialog from "@shared/ui/ConfirmDialog.vue";
 import DialogShell from "@shared/ui/DialogShell.vue";
+import AppFieldError from "@shared/ui/AppFieldError.vue";
 import AppInput from "@shared/ui/AppInput.vue";
 import AppSelect from "@shared/ui/AppSelect.vue";
 import AppSecretInput from "@shared/ui/AppSecretInput.vue";
@@ -8,12 +10,12 @@ import type { FetchedModel, ModelsDevMeta, ProviderModelInput } from "../../gene
 import {
   applyModelsDevMeta,
   emptyModelForm,
+  mergeFetchedModels,
   normalizeProviderIdInput,
   PROTOCOL_OPTIONS,
   toggleReasoning,
   type ProviderFormState,
 } from "../../model";
-import { useProvidersNotice } from "../../composables/useProvidersNotice";
 import ModelsDevCompleteDialog from "./ModelsDevCompleteDialog.vue";
 import ProviderFetchModelsDialog from "./ProviderFetchModelsDialog.vue";
 import ProviderModelDialog from "./ProviderModelDialog.vue";
@@ -38,8 +40,6 @@ const emit = defineEmits<{
   confirm: [];
 }>();
 
-const { showNotice } = useProvidersNotice();
-
 // models.dev 补全的查询状态：弹窗打开后自行发请求，回填落回对应模型行。
 const modelsDevDialog = reactive({
   open: false,
@@ -50,6 +50,8 @@ const modelsDevDialog = reactive({
 // 可选密钥：随表单状态一并落盘，弹窗不再单独拉取。
 const fetchDialogOpen = ref(false);
 const modelDialogOpen = ref(false);
+// 加入时被跳过的重名模型 ID，非空时弹窗提示。
+const skippedPromptIds = ref<string[]>([]);
 
 // 新增 step 1 只展示服务商元数据；step 2（及编辑态）展示模型目录。
 const showMeta = computed(() => !props.creating || props.step === 1);
@@ -78,6 +80,43 @@ const dialogTitle = computed(() => {
   return props.step === 1 ? "新增提供商" : "新增提供商 · 模型目录";
 });
 
+// 新增流程第一步的成功结果没有弹窗外的反馈位置：进入第二步后把已保存的
+// 提供商 ID 常驻在弹窗内，提示当前处于哪一步、接下来做什么。
+const flowHint = computed(() => {
+  if (props.creating && props.step === 2 && props.form.originalProviderId) {
+    return `提供商 ${props.form.originalProviderId} 已保存，请继续设置模型目录。`;
+  }
+  return null;
+});
+
+// models.dev 补全的查询键：已保存的提供商用落库 ID（originalProviderId），
+// 新增第一步还没保存时退回表单 ID。
+const modelsDevProviderId = computed(() =>
+  (props.form.originalProviderId ?? props.form.providerId).trim()
+);
+
+type ProviderFormErrorField = keyof NonNullable<ProviderFormState["errors"]>;
+
+// 字段错误只在用户改到该字段时消失：改完重新具备提交条件。
+function clearFieldError(field: ProviderFormErrorField) {
+  const errors = props.form.errors;
+  if (errors?.[field]) {
+    errors[field] = undefined;
+  }
+}
+
+watch(() => props.form.providerId, () => clearFieldError("providerId"));
+watch(() => props.form.label, () => clearFieldError("label"));
+watch(() => props.form.baseUrl, () => clearFieldError("baseUrl"));
+watch(
+  () => props.form.models.length,
+  (length) => {
+    if (length > 0) {
+      clearFieldError("models");
+    }
+  }
+);
+
 watch(
   () => props.open,
   (open) => {
@@ -94,6 +133,7 @@ function resetTransient() {
   modelsDevDialog.modelId = "";
   fetchDialogOpen.value = false;
   modelDialogOpen.value = false;
+  skippedPromptIds.value = [];
 }
 
 // Key 可选：留空时面板只保存提供商元数据，同时清除已存 Key。
@@ -103,14 +143,11 @@ function confirm() {
 
 // 拉取/新增都在子弹窗内完成，确认后把结果落回模型目录。
 function addFetchedModels(models: FetchedModel[]) {
-  for (const model of models) {
-    props.form.models.push({
-      ...emptyModelForm(model.id),
-      id: model.id,
-      label: model.name ?? model.id,
-    });
-  }
+  const { added, skipped } = mergeFetchedModels(props.form.models, models);
+  props.form.models.push(...added);
   fetchDialogOpen.value = false;
+  // 拉取结果内部重名（弹窗标记覆盖不到）时，被忽略项也弹窗提示。
+  skippedPromptIds.value = skipped.map((model) => model.id);
 }
 
 function addModelRow(model: ProviderModelInput) {
@@ -128,12 +165,10 @@ function removeModel(index: number) {
 }
 
 function openModelsDevDialog(row: ProviderFormState["models"][number]) {
-  // models.dev 补全只按提供商名 + 模型 ID 查公共目录；已保存提供商用落库 ID
-  // （originalProviderId），新增第一步还没保存时退回表单 ID。
-  const providerId = (props.form.originalProviderId ?? props.form.providerId).trim();
+  // 缺失查询键时按钮已禁用，这里再做一次防御非按钮路径的调用。
+  const providerId = modelsDevProviderId.value;
   const modelId = row.id.trim();
   if (!providerId || !modelId) {
-    showNotice("请先填写提供商 ID 与模型 ID。", "error");
     return;
   }
   modelsDevDialog.rowKey = row.rowKey;
@@ -148,7 +183,6 @@ function applyModelsDevCompletion(meta: ModelsDevMeta) {
   modelsDevDialog.open = false;
   if (row) {
     applyModelsDevMeta(row, meta);
-    showNotice("已从 models.dev 预填空缺字段。", "success");
   }
 }
 </script>
@@ -169,14 +203,24 @@ function applyModelsDevCompletion(meta: ModelsDevMeta) {
       </button>
     </template>
 
+    <p v-if="flowHint" class="providers-section-hint">{{ flowHint }}</p>
+
+    <AppFieldError :message="form.errors?.form ?? null" />
+
     <div v-if="showMeta" class="providers-form-grid">
       <label class="providers-field">
         <span>
           ID
           <span aria-hidden="true"> *</span>
+          <AppFieldError
+            class="providers-field__error"
+            id="provider-id-error"
+            :message="form.errors?.providerId ?? null"
+          />
         </span>
         <AppInput
           :model-value="form.providerId"
+          :aria-describedby="form.errors?.providerId ? 'provider-id-error' : undefined"
           :disabled="loading || form.originalProviderId !== null"
           @update:model-value="form.providerId = normalizeProviderIdInput(String($event))"
         />
@@ -190,8 +234,17 @@ function applyModelsDevCompletion(meta: ModelsDevMeta) {
         <span>
           名称
           <span aria-hidden="true"> *</span>
+          <AppFieldError
+            class="providers-field__error"
+            id="provider-label-error"
+            :message="form.errors?.label ?? null"
+          />
         </span>
-        <AppInput v-model="form.label" :disabled="loading" />
+        <AppInput
+          v-model="form.label"
+          :aria-describedby="form.errors?.label ? 'provider-label-error' : undefined"
+          :disabled="loading"
+        />
         <small class="providers-field__hint">提供商显示名，可随时修改。</small>
       </label>
 
@@ -210,8 +263,17 @@ function applyModelsDevCompletion(meta: ModelsDevMeta) {
         <span>
           Base URL
           <span aria-hidden="true"> *</span>
+          <AppFieldError
+            class="providers-field__error"
+            id="provider-base-url-error"
+            :message="form.errors?.baseUrl ?? null"
+          />
         </span>
-        <AppInput v-model="form.baseUrl" :disabled="loading" />
+        <AppInput
+          v-model="form.baseUrl"
+          :aria-describedby="form.errors?.baseUrl ? 'provider-base-url-error' : undefined"
+          :disabled="loading"
+        />
         <small class="providers-field__hint">聚合提供商的 API 根地址，例如 https://openrouter.ai/api/v1。</small>
       </label>
 
@@ -225,6 +287,11 @@ function applyModelsDevCompletion(meta: ModelsDevMeta) {
     <div v-if="showModels">
       <div class="providers-section-header" style="margin-top: 18px">
         <h4 class="providers-section-title">模型目录</h4>
+        <AppFieldError
+          class="providers-field__error"
+          id="provider-models-error"
+          :message="form.errors?.models ?? null"
+        />
         <div class="providers-card__actions">
           <button class="secondary-button" :disabled="loading" type="button" @click="fetchDialogOpen = true">
             从提供商拉取
@@ -250,8 +317,13 @@ function applyModelsDevCompletion(meta: ModelsDevMeta) {
           <div class="providers-card__actions">
             <button
               class="secondary-button"
-              :disabled="loading"
+              :disabled="loading || !modelsDevProviderId || !row.id.trim()"
               type="button"
+              :title="
+                modelsDevProviderId && row.id.trim()
+                  ? ''
+                  : '请先填写提供商 ID 与模型 ID。'
+              "
               @click="openModelsDevDialog(row)"
             >
               从 models.dev 补全
@@ -336,11 +408,10 @@ function applyModelsDevCompletion(meta: ModelsDevMeta) {
     <ProviderFetchModelsDialog
       v-if="showModels"
       :open="fetchDialogOpen"
-      :provider-id="form.originalProviderId ?? ''"
-      :key-present="keyPresent"
       :protocol="form.protocol"
       :base-url="form.baseUrl"
       :api-key="form.apiKey"
+      :existing-ids="form.models.map((model) => model.id)"
       @close="fetchDialogOpen = false"
       @confirm="addFetchedModels"
     />
@@ -349,6 +420,7 @@ function applyModelsDevCompletion(meta: ModelsDevMeta) {
       v-if="showModels"
       :open="modelDialogOpen"
       :provider-id="form.originalProviderId ?? form.providerId"
+      :existing-ids="form.models.map((model) => model.id)"
       @close="modelDialogOpen = false"
       @confirm="addModelRow"
     />
@@ -359,6 +431,18 @@ function applyModelsDevCompletion(meta: ModelsDevMeta) {
       :model-id="modelsDevDialog.modelId"
       @close="modelsDevDialog.open = false"
       @apply="applyModelsDevCompletion"
+    />
+
+    <ConfirmDialog
+      :open="skippedPromptIds.length > 0"
+      title-id="provider-fetched-skipped-title"
+      eyebrow="模型目录"
+      title="部分模型未加入"
+      :description="`以下模型已在模型目录中，已自动忽略：${skippedPromptIds.join('、')}。`"
+      confirm-label="知道了"
+      confirm-button-class-name="primary-button"
+      @close="skippedPromptIds = []"
+      @confirm="skippedPromptIds = []"
     />
   </DialogShell>
 </template>

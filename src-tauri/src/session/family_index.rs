@@ -4,12 +4,12 @@
 //! grouping strategies genuinely differ per source app (Claude groups by the
 //! shared transcript sessionId, Codex walks the parent-thread chain, OpenCode
 //! joins on SQL parent_id), so grouping stays out. Everything downstream of
-//! grouping lives here exactly once: member and family ordering, the
-//! path-keyed family lookup, and the optional id-keyed dual-write map.
+//! grouping lives here exactly once: member and family ordering, and the
+//! id-keyed family lookup that backs session addressing for every source.
 
 use std::borrow::Cow;
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 /// Row contract the engine needs from a backend.
 pub(crate) trait FamilyRow {
@@ -71,65 +71,37 @@ impl<Row: FamilyRow> Family<Row> {
 #[derive(Clone)]
 pub(crate) struct FamilyIndex<Row> {
     pub(crate) families: Vec<Family<Row>>,
-    pub(crate) sessions_by_path: HashMap<String, Family<Row>>,
-    /// `None` marks a backend without id resolution (OpenCode resolves ids
-    /// directly from the database instead).
-    pub(crate) sessions_by_id: Option<HashMap<String, PathBuf>>,
+    /// id → family 下标,会话身份的唯一寻址面。双写胜者规则:family key
+    /// (根自身 id)首见占位、成员 id 后写覆盖——与迁移前 id→path 双写图
+    /// 逐字一致,由 family_index 前置核验测试钉住。
+    sessions_by_id: HashMap<String, usize>,
 }
 
 impl<Row: FamilyRow + Clone> FamilyIndex<Row> {
-    /// Index without id resolution.
     pub(crate) fn build(families: Vec<Family<Row>>) -> Self {
         let mut families = families;
         sort_members(&mut families);
         sort_families(&mut families);
 
-        let mut sessions_by_path = HashMap::new();
-
-        for family in &families {
+        let mut sessions_by_id = HashMap::new();
+        for (position, family) in families.iter().enumerate() {
+            sessions_by_id
+                .entry(family.root.family_root_id().to_string())
+                .or_insert(position);
             for member in &family.members {
-                sessions_by_path.insert(
-                    crate::support::fs::path_key(member.member_path().as_ref()),
-                    family.clone(),
-                );
+                sessions_by_id.insert(member.member_id().to_string(), position);
             }
         }
 
         Self {
             families,
-            sessions_by_path,
-            sessions_by_id: None,
+            sessions_by_id,
         }
     }
 
-    /// Index with the dual-write id map: the family key resolves to the root
-    /// transcript (first claim wins), each member id to the member's own
-    /// file.
-    pub(crate) fn build_with_ids(families: Vec<Family<Row>>) -> Self {
-        let mut index = Self::build(families);
-        let mut sessions_by_id = HashMap::new();
-
-        for family in &index.families {
-            for member in &family.members {
-                sessions_by_id
-                    .entry(family.root.family_root_id().to_string())
-                    .or_insert_with(|| family.root.member_path().into_owned());
-                sessions_by_id.insert(
-                    member.member_id().to_string(),
-                    member.member_path().into_owned(),
-                );
-            }
-        }
-
-        index.sessions_by_id = Some(sessions_by_id);
-        index
-    }
-
-    pub(crate) fn path_for_id(&self, source_session_id: &str) -> Option<PathBuf> {
-        self.sessions_by_id
-            .as_ref()?
-            .get(source_session_id)
-            .cloned()
+    pub(crate) fn family_for_id(&self, source_session_id: &str) -> Option<Family<Row>> {
+        let position = *self.sessions_by_id.get(source_session_id)?;
+        Some(self.families[position].clone())
     }
 }
 
@@ -159,27 +131,15 @@ fn sort_families<Row: FamilyRow>(families: &mut [Family<Row>]) {
     });
 }
 
-#[derive(Clone)]
-pub(crate) struct FamilyIndexCacheEntry<Row> {
-    pub(crate) source_key: String,
-    pub(crate) updated_at: i64,
-    pub(crate) index: FamilyIndex<Row>,
-}
-
-impl<Row> FamilyIndexCacheEntry<Row> {
-    pub(crate) fn is_valid(&self, source_key: &str, updated_at: i64) -> bool {
-        self.source_key == source_key && self.updated_at == updated_at
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[derive(Clone, Debug)]
     struct TestRow {
+        family_key: String,
         id: String,
-        path: PathBuf,
+        path: std::path::PathBuf,
         created_at: Option<i64>,
         updated_at: Option<i64>,
     }
@@ -187,8 +147,27 @@ mod tests {
     impl TestRow {
         fn new(id: &str, path: &str, created_at: i64, updated_at: i64) -> Self {
             Self {
+                family_key: id.to_string(),
                 id: id.to_string(),
-                path: PathBuf::from(path),
+                path: std::path::PathBuf::from(path),
+                created_at: Some(created_at),
+                updated_at: Some(updated_at),
+            }
+        }
+
+        // family key 与成员 id 分离的行(claude 的 subagent 文件形态:
+        // family_root_id 是共享 sessionId,member_id 是文件名派生的 agent id)。
+        fn with_family_key(
+            family_key: &str,
+            id: &str,
+            path: &str,
+            created_at: i64,
+            updated_at: i64,
+        ) -> Self {
+            Self {
+                family_key: family_key.to_string(),
+                id: id.to_string(),
+                path: std::path::PathBuf::from(path),
                 created_at: Some(created_at),
                 updated_at: Some(updated_at),
             }
@@ -201,7 +180,7 @@ mod tests {
         }
 
         fn family_root_id(&self) -> &str {
-            &self.id
+            &self.family_key
         }
 
         fn member_id(&self) -> &str {
@@ -238,30 +217,14 @@ mod tests {
         ]
     }
 
-    #[test]
-    fn dual_write_resolves_family_key_to_root_and_member_id_to_member() {
-        let index = FamilyIndex::build_with_ids(sample_families());
+    // —— id 唯一性核验:钉住双写胜者规则,id→family 直查必须保持同一胜者 ——
 
-        assert_eq!(
-            index.path_for_id("root-a").as_deref(),
-            Some(Path::new("/tmp/a/root.jsonl"))
-        );
-        assert_eq!(
-            index.path_for_id("child-a1").as_deref(),
-            Some(Path::new("/tmp/a/child-1.jsonl"))
-        );
-        assert_eq!(
-            index.path_for_id("child-a2").as_deref(),
-            Some(Path::new("/tmp/a/child-2.jsonl"))
-        );
-        assert_eq!(index.path_for_id("missing"), None);
-    }
-
+    // 同族内两条成员共用同一 id(claude 非 agent-* 文件回退 family key 的场景)。
+    // 现状规则:成员排序(created_at, tie_breaker 升序)后逐条 insert,后插入者
+    // 覆盖先插入者——created_at 更大的成员胜出。两条成员同属一个 family,
+    // id 直查的家族归属无歧义。
     #[test]
-    fn member_id_equal_to_family_key_claims_its_own_file() {
-        // Claude's agent_session_id falls back to the family key when the
-        // transcript file is not named agent-*; the member insert then
-        // overrides the family entry with the member's own path.
+    fn duplicate_member_id_within_family_has_single_family_owner() {
         let families = vec![Family {
             root: TestRow::new("shared", "/tmp/a/root.jsonl", 100, 500),
             members: vec![
@@ -270,14 +233,123 @@ mod tests {
             ],
         }];
 
-        let index = FamilyIndex::build_with_ids(families);
+        let index = FamilyIndex::build(families);
 
-        // Sorted members put the later-created member last, so its insert
-        // wins the contested key.
+        // 胜者是排序后靠后的成员(created_at=200 的 unnamed);两条同 id
+        // 成员同族,id 直查的 family 归属无歧义。
+        let family = index.family_for_id("shared").expect("shared resolves");
+        assert_eq!(family.root.family_key, "shared");
         assert_eq!(
-            index.path_for_id("shared").as_deref(),
-            Some(Path::new("/tmp/a/unnamed.jsonl"))
+            family
+                .members
+                .iter()
+                .map(|row| row.id.as_str())
+                .collect::<Vec<_>>(),
+            ["shared", "shared"]
         );
+    }
+
+    // 跨族成员 id 碰撞:两个 family 各有一条 member_id 相同的成员。规则:
+    // family 按(updated_at desc, root path asc)排序后依序插入,member id 的
+    // insert 无条件覆盖——遍历中最后插入的 family(排序靠后、较旧者)胜出。
+    #[test]
+    fn cross_family_member_id_collision_last_inserted_family_wins() {
+        let families = vec![
+            Family {
+                root: TestRow::new("root-new", "/tmp/new/root.jsonl", 100, 900),
+                members: vec![
+                    TestRow::new("root-new", "/tmp/new/root.jsonl", 100, 900),
+                    TestRow::new("dup", "/tmp/new/dup.jsonl", 150, 950),
+                ],
+            },
+            Family {
+                root: TestRow::new("root-old", "/tmp/old/root.jsonl", 50, 500),
+                members: vec![
+                    TestRow::new("root-old", "/tmp/old/root.jsonl", 50, 500),
+                    TestRow::new("dup", "/tmp/old/dup.jsonl", 60, 550),
+                ],
+            },
+        ];
+
+        let index = FamilyIndex::build(families);
+
+        // 排序后 [root-new(updated 900), root-old(updated 500)];"dup" 的
+        // 最后一次 insert 来自 root-old 族,后插入者胜出。
+        let family = index.family_for_id("dup").expect("dup resolves");
+        assert_eq!(family.root.id, "root-old");
+        assert!(index.family_for_id("missing").is_none());
+    }
+
+    // 跨族 family key 碰撞(孤儿子会话各自成族的形态):family key 用
+    // entry/or_insert 首见占位,排序靠前(updated_at 更大)的 family 胜出;
+    // 成员 id 若与 family key 不同名,不会覆盖该占位。
+    #[test]
+    fn cross_family_key_collision_first_claimed_root_wins() {
+        let families = vec![
+            Family {
+                root: TestRow::with_family_key(
+                    "shared-key",
+                    "member-new",
+                    "/tmp/new/root.jsonl",
+                    100,
+                    900,
+                ),
+                members: vec![TestRow::with_family_key(
+                    "shared-key",
+                    "member-new",
+                    "/tmp/new/root.jsonl",
+                    100,
+                    900,
+                )],
+            },
+            Family {
+                root: TestRow::with_family_key(
+                    "shared-key",
+                    "member-old",
+                    "/tmp/old/root.jsonl",
+                    50,
+                    500,
+                ),
+                members: vec![TestRow::with_family_key(
+                    "shared-key",
+                    "member-old",
+                    "/tmp/old/root.jsonl",
+                    50,
+                    500,
+                )],
+            },
+        ];
+
+        let index = FamilyIndex::build(families);
+
+        // 首见占位:排序靠前的 root-new 族先 claim "shared-key"。
+        let family = index
+            .family_for_id("shared-key")
+            .expect("family key resolves");
+        assert_eq!(family.root.id, "member-new");
+
+        // 各自的成员 id 独立解析,不受 family key 占位影响。
+        assert_eq!(
+            index
+                .family_for_id("member-old")
+                .expect("member-old resolves")
+                .root
+                .id,
+            "member-old"
+        );
+    }
+
+    #[test]
+    fn family_key_resolves_root_and_member_id_resolves_member() {
+        let index = FamilyIndex::build(sample_families());
+
+        assert_eq!(
+            index.family_for_id("root-a").expect("root-a").root.id,
+            "root-a"
+        );
+        let child = index.family_for_id("child-a1").expect("child-a1");
+        assert_eq!(child.root.id, "root-a");
+        assert!(index.family_for_id("missing").is_none());
     }
 
     #[test]
@@ -285,8 +357,8 @@ mod tests {
         let mut families = sample_families();
         families[0].members.reverse();
 
-        let index = FamilyIndex::build_with_ids(sample_families());
-        let shuffled = FamilyIndex::build_with_ids(families);
+        let index = FamilyIndex::build(sample_families());
+        let shuffled = FamilyIndex::build(families);
 
         let to_ids = |index: &FamilyIndex<TestRow>| {
             index
@@ -301,21 +373,6 @@ mod tests {
         // Equal created_at + distinct tie-breakers must order by the tie key
         // (families themselves sort updated_at desc, so root-b comes first).
         assert_eq!(to_ids(&index)[1..], ["root-a", "child-a1", "child-a2"]);
-    }
-
-    #[test]
-    fn build_without_ids_has_no_id_map() {
-        let index = FamilyIndex::build(sample_families());
-
-        assert!(index.sessions_by_id.is_none());
-        assert_eq!(index.path_for_id("root-a"), None);
-
-        let key = crate::support::fs::path_key(Path::new("/tmp/a/child-1.jsonl"));
-        let family = index
-            .sessions_by_path
-            .get(&key)
-            .expect("path map still resolves members");
-        assert_eq!(family.root.id, "root-a");
     }
 
     #[test]
@@ -347,18 +404,5 @@ mod tests {
                 "/tmp/a/child-2.jsonl".to_string(),
             ]
         );
-    }
-
-    #[test]
-    fn cache_entry_validity_requires_key_and_timestamp_match() {
-        let entry = FamilyIndexCacheEntry::<TestRow> {
-            source_key: "/tmp/sessions".to_string(),
-            updated_at: 42,
-            index: FamilyIndex::build(Vec::new()),
-        };
-
-        assert!(entry.is_valid("/tmp/sessions", 42));
-        assert!(!entry.is_valid("/tmp/other", 42));
-        assert!(!entry.is_valid("/tmp/sessions", 43));
     }
 }

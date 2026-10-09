@@ -1,22 +1,24 @@
 use super::*;
+use crate::session::SessionReader;
+
+// engine_at 的持久缓存目录：每个测试独立目录，避免跨测试串扰。
+fn temp_store() -> PathBuf {
+    env::temp_dir().join(format!("reins-store-{}", Uuid::new_v4()))
+}
 
 #[test]
 fn opencode_root_session_aggregates_subagent_sessions() -> Result<()> {
-    let temp_home = env::temp_dir().join(format!("reins-test-{}", Uuid::new_v4()));
-    fs::create_dir_all(&temp_home)?;
-    let _guard = TestEnvGuard::set_home(&temp_home);
-
+    let root = env::temp_dir().join(format!("reins-opencode-{}", Uuid::new_v4()));
     let root_id = "ses_root_session";
     let child_id = "ses_child_session";
-    seed_opencode_family(root_id, child_id)?;
+    seed_opencode_family_at(&root, root_id, child_id)?;
 
-    let root_path = session::opencode::session_path(root_id);
-
-    let summary = session::reader(SourceApp::OpenCode).parse_summary(&root_path)?;
+    let reader = session::opencode::engine_at(root, temp_store());
+    let summary = reader.parse_summary(root_id)?;
     assert_eq!(summary.source_session_id, root_id);
     assert!(summary.title.contains("+1 subagents"));
 
-    let detail = read_detail(session::reader(SourceApp::OpenCode), &root_path)?;
+    let detail = read_detail(&reader, root_id)?;
 
     assert!(
         detail
@@ -42,41 +44,32 @@ fn opencode_root_session_aggregates_subagent_sessions() -> Result<()> {
             .any(|path| path.ends_with(&format!(":{child_id}")))
     );
 
-    fs::remove_dir_all(&temp_home).ok();
     Ok(())
 }
 
 #[test]
 fn opencode_overview_counts_match_loaded_timeline() -> Result<()> {
-    let temp_home = env::temp_dir().join(format!("reins-test-{}", Uuid::new_v4()));
-    fs::create_dir_all(&temp_home)?;
-    let _guard = TestEnvGuard::set_home(&temp_home);
-
+    let root = env::temp_dir().join(format!("reins-opencode-{}", Uuid::new_v4()));
     let root_id = "ses_root_session";
     let child_id = "ses_child_session";
-    seed_opencode_family(root_id, child_id)?;
+    seed_opencode_family_at(&root, root_id, child_id)?;
 
-    let root_path = session::opencode::session_path(root_id);
-    let reader = session::reader(SourceApp::OpenCode);
-    let overview = reader.parse_overview(&root_path)?;
-    let detail = read_detail(reader, &root_path)?;
+    let reader = session::opencode::engine_at(root, temp_store());
+    let overview = reader.parse_overview(root_id)?;
+    let detail = read_detail(&reader, root_id)?;
 
     assert_eq!(overview.message_count, Some(detail.messages.len()));
     assert_eq!(overview.event_count, Some(detail.events.len()));
 
-    fs::remove_dir_all(&temp_home).ok();
     Ok(())
 }
 
 #[test]
 fn codex_ignores_agents_banner_when_picking_title() -> Result<()> {
-    let temp_home = env::temp_dir().join(format!("reins-test-{}", Uuid::new_v4()));
-    fs::create_dir_all(&temp_home)?;
-    let _guard = TestEnvGuard::set_home(&temp_home);
-
+    let root = env::temp_dir().join(format!("reins-codex-{}", Uuid::new_v4()));
     let session_id = "33333333-3333-4333-8333-333333333333";
-    let transcript_path = temp_home
-        .join(".codex/sessions/2026/04/21")
+    let transcript_path = root
+        .join("sessions/2026/04/21")
         .join(format!("rollout-2026-04-21T12-00-00-{session_id}.jsonl"));
     if let Some(parent) = transcript_path.parent() {
         fs::create_dir_all(parent)?;
@@ -123,24 +116,20 @@ fn codex_ignores_agents_banner_when_picking_title() -> Result<()> {
 
     write_jsonl(&transcript_path, &transcript)?;
 
-    let summary = session::reader(SourceApp::Codex).parse_summary(&transcript_path)?;
+    let summary = session::codex::engine_at(root, temp_store()).parse_summary(session_id)?;
 
     assert_eq!(summary.source_session_id, session_id);
     assert_eq!(summary.title, "How do I list the current files?");
 
-    fs::remove_dir_all(&temp_home).ok();
     Ok(())
 }
 
 #[test]
 fn codex_skips_agents_instructions_block_when_picking_title() -> Result<()> {
-    let temp_home = env::temp_dir().join(format!("reins-test-{}", Uuid::new_v4()));
-    fs::create_dir_all(&temp_home)?;
-    let _guard = TestEnvGuard::set_home(&temp_home);
-
+    let root = env::temp_dir().join(format!("reins-codex-{}", Uuid::new_v4()));
     let session_id = "44444444-4444-4444-8444-444444444444";
-    let transcript_path = temp_home
-        .join(".codex/sessions/2026/04/21")
+    let transcript_path = root
+        .join("sessions/2026/04/21")
         .join(format!("rollout-2026-04-21T12-00-00-{session_id}.jsonl"));
     if let Some(parent) = transcript_path.parent() {
         fs::create_dir_all(parent)?;
@@ -191,24 +180,18 @@ fn codex_skips_agents_instructions_block_when_picking_title() -> Result<()> {
 
     write_jsonl(&transcript_path, &transcript)?;
 
-    let summary = session::reader(SourceApp::Codex).parse_summary(&transcript_path)?;
+    let summary = session::codex::engine_at(root, temp_store()).parse_summary(session_id)?;
 
     assert_eq!(summary.source_session_id, session_id);
     assert_eq!(summary.title, "帮我看一下这个报错");
 
-    fs::remove_dir_all(&temp_home).ok();
     Ok(())
 }
 
 #[test]
 fn claude_ignores_agents_banner_when_picking_title() -> Result<()> {
-    let temp_home = env::temp_dir().join(format!("reins-test-{}", Uuid::new_v4()));
-    fs::create_dir_all(&temp_home)?;
-    let _guard = TestEnvGuard::set_home(&temp_home);
-
-    let session_file = temp_home
-        .join(".claude/projects/demo-project")
-        .join("session-123.jsonl");
+    let root = env::temp_dir().join(format!("reins-claude-{}", Uuid::new_v4()));
+    let session_file = root.join("projects/demo-project").join("session-123.jsonl");
     let transcript = vec![
         json!({
             "type": "user",
@@ -226,26 +209,162 @@ fn claude_ignores_agents_banner_when_picking_title() -> Result<()> {
 
     write_jsonl(&session_file, &transcript)?;
 
-    let summary = session::reader(SourceApp::ClaudeCode).parse_summary(&session_file)?;
+    let summary =
+        session::claude_code::engine_at(root, temp_store()).parse_summary("session-123")?;
 
     assert_eq!(summary.title, "How do I list the current files?");
 
-    fs::remove_dir_all(&temp_home).ok();
+    Ok(())
+}
+
+#[test]
+fn claude_keeps_injected_context_as_readable_block() -> Result<()> {
+    let root = env::temp_dir().join(format!("reins-claude-{}", Uuid::new_v4()));
+    let session_file = root
+        .join("projects/demo-project")
+        .join("session-context.jsonl");
+    write_jsonl(
+        &session_file,
+        &[
+            // 字符串正文的注入上下文（Claude Code 的典型形态）：清洗后没有对话内容
+            json!({
+                "type": "user",
+                "message": {
+                    "content": "# AGENTS.md instructions for /tmp/reins/workspace\n<system-reminder>\nYour operational mode has changed from plan to build.\n</system-reminder>"
+                }
+            }),
+        ],
+    )?;
+
+    let reader = session::claude_code::engine_at(root, temp_store());
+    let detail = read_detail(&reader, "session-context")?;
+    let block = detail
+        .messages
+        .iter()
+        .flat_map(|message| message.blocks.iter())
+        .find(|block| block.kind == "context_injection")
+        .expect("context injection block");
+    let text = block.text.as_deref().unwrap_or_default();
+    assert!(text.contains("AGENTS.md instructions for /tmp/reins/workspace"));
+    assert!(text.contains("<system-reminder>"));
+    assert!(!detail.messages.iter().any(|message| {
+        message
+            .blocks
+            .iter()
+            .any(|block| block.kind == "empty_message")
+    }));
+
+    Ok(())
+}
+
+#[test]
+fn claude_turns_image_blocks_into_renderable_image_blocks() -> Result<()> {
+    let root = env::temp_dir().join(format!("reins-claude-{}", Uuid::new_v4()));
+    let session_file = root
+        .join("projects/demo-project")
+        .join("session-image.jsonl");
+    write_jsonl(
+        &session_file,
+        &[json!({
+            "type": "user",
+            "message": {
+                "content": [
+                    { "type": "text", "text": "看下这两张图" },
+                    {
+                        "type": "image",
+                        "source": { "type": "base64", "media_type": "image/jpeg", "data": "/9j/4AAQ" }
+                    },
+                    {
+                        "type": "image",
+                        "source": { "type": "url", "url": "https://example.invalid/a.png" }
+                    }
+                ]
+            }
+        })],
+    )?;
+
+    let reader = session::claude_code::engine_at(root, temp_store());
+    let detail = read_detail(&reader, "session-image")?;
+    let references: Vec<&str> = detail
+        .messages
+        .iter()
+        .flat_map(|message| message.blocks.iter())
+        .filter(|block| block.kind == "image")
+        .filter_map(|block| block.text.as_deref())
+        .collect();
+    assert_eq!(
+        references,
+        vec![
+            "data:image/jpeg;base64,/9j/4AAQ",
+            "https://example.invalid/a.png"
+        ]
+    );
+
+    Ok(())
+}
+
+#[test]
+fn claude_renders_local_command_records_as_readable_blocks() -> Result<()> {
+    let root = env::temp_dir().join(format!("reins-claude-{}", Uuid::new_v4()));
+    let session_file = root
+        .join("projects/demo-project")
+        .join("session-local-command.jsonl");
+    write_jsonl(
+        &session_file,
+        &[
+            json!({
+                "type": "user",
+                "message": {
+                    "role": "user",
+                    "content": "<local-command-caveat>The command below was run directly in Claude Code, not sent to you as a request, and its output goes straight to the user. It's recorded here as context for later messages.</local-command-caveat>"
+                }
+            }),
+            json!({
+                "type": "user",
+                "message": {
+                    "role": "user",
+                    "content": "<command-name>/exit</command-name>\n            <command-message>exit</command-message>\n            <command-args></command-args>"
+                }
+            }),
+            json!({
+                "type": "user",
+                "message": {
+                    "role": "user",
+                    "content": "<local-command-stdout>See ya!</local-command-stdout>"
+                }
+            }),
+        ],
+    )?;
+
+    let reader = session::claude_code::engine_at(root, temp_store());
+    let detail = read_detail(&reader, "session-local-command")?;
+    let blocks: Vec<(&str, Option<&str>)> = detail
+        .messages
+        .iter()
+        .flat_map(|message| message.blocks.iter())
+        .map(|block| (block.kind.as_str(), block.text.as_deref()))
+        .collect();
+
+    assert!(blocks.contains(&("local_command", Some("/exit"))));
+    assert!(blocks.contains(&("local_command_output", Some("See ya!"))));
+    // caveat 是记录用上下文，归到上下文块
+    assert!(
+        blocks
+            .iter()
+            .any(|(kind, text)| *kind == "context_injection"
+                && text.is_some_and(|text| text.starts_with("<local-command-caveat>")))
+    );
+    // 三条都不是对话内容，但都不再退化成原始报文兜底块
+    assert!(!blocks.iter().any(|(kind, _)| *kind == "empty_message"));
+
     Ok(())
 }
 
 #[test]
 fn claude_skips_unreadable_files_when_indexing() -> Result<()> {
-    let temp_home = env::temp_dir().join(format!("reins-test-{}", Uuid::new_v4()));
-    fs::create_dir_all(&temp_home)?;
-    let _guard = TestEnvGuard::set_home(&temp_home);
-
-    let valid_path = temp_home
-        .join(".claude/projects/demo-project")
-        .join("session-123.jsonl");
-    let invalid_path = temp_home
-        .join(".claude/projects/demo-project")
-        .join("broken.jsonl");
+    let root = env::temp_dir().join(format!("reins-claude-{}", Uuid::new_v4()));
+    let valid_path = root.join("projects/demo-project").join("session-123.jsonl");
+    let invalid_path = root.join("projects/demo-project").join("broken.jsonl");
 
     write_jsonl(
         &valid_path,
@@ -259,22 +378,19 @@ fn claude_skips_unreadable_files_when_indexing() -> Result<()> {
 
     fs::write(&invalid_path, "{ not valid json }\n")?;
 
-    let entries = session::reader(SourceApp::ClaudeCode).list_entries()?;
+    let reader = session::claude_code::engine_at(root, temp_store());
+    let entries = reader.list_entries()?;
     assert_eq!(entries.len(), 1);
     assert_eq!(entries[0].path, valid_path);
 
-    fs::remove_dir_all(&temp_home).ok();
     Ok(())
 }
 
 #[test]
 fn claude_exposes_unsupported_message_content() -> Result<()> {
-    let temp_home = env::temp_dir().join(format!("reins-test-{}", Uuid::new_v4()));
-    fs::create_dir_all(&temp_home)?;
-    let _guard = TestEnvGuard::set_home(&temp_home);
-
-    let session_file = temp_home
-        .join(".claude/projects/demo-project")
+    let root = env::temp_dir().join(format!("reins-claude-{}", Uuid::new_v4()));
+    let session_file = root
+        .join("projects/demo-project")
         .join("session-unsupported.jsonl");
     write_jsonl(
         &session_file,
@@ -290,7 +406,8 @@ fn claude_exposes_unsupported_message_content() -> Result<()> {
         })],
     )?;
 
-    let detail = read_detail(session::reader(SourceApp::ClaudeCode), &session_file)?;
+    let reader = session::claude_code::engine_at(root, temp_store());
+    let detail = read_detail(&reader, "session-unsupported")?;
 
     assert!(detail.messages.iter().any(|message| {
         message.blocks.iter().any(|block| {
@@ -302,19 +419,161 @@ fn claude_exposes_unsupported_message_content() -> Result<()> {
         })
     }));
 
-    fs::remove_dir_all(&temp_home).ok();
+    Ok(())
+}
+
+#[test]
+fn codex_turns_input_image_into_renderable_image_block() -> Result<()> {
+    let root = env::temp_dir().join(format!("reins-codex-{}", Uuid::new_v4()));
+    let session_id = "88888888-8888-4888-8888-888888888888";
+    let transcript_path = root
+        .join("sessions/2026/04/21")
+        .join(format!("rollout-2026-04-21T12-00-00-{session_id}.jsonl"));
+    write_jsonl(
+        &transcript_path,
+        &[
+            json!({
+                "timestamp": "2026-04-21T12:00:00.000Z",
+                "type": "session_meta",
+                "payload": { "id": session_id, "cwd": "/tmp/reins/workspace" }
+            }),
+            // 粘贴的图片：没有 text 字段，引用要提成正文而不是当成未支持块
+            json!({
+                "timestamp": "2026-04-21T12:00:01.000Z",
+                "type": "response_item",
+                "payload": {
+                    "type": "message",
+                    "role": "user",
+                    "content": [
+                        { "type": "input_text", "text": "看下这张图" },
+                        {
+                            "type": "input_image",
+                            "detail": "high",
+                            "image_url": "data:image/png;base64,iVBORw0KGgo="
+                        }
+                    ]
+                }
+            }),
+            json!({
+                "timestamp": "2026-04-21T12:00:02.000Z",
+                "type": "response_item",
+                "payload": {
+                    "type": "reasoning",
+                    "content": null,
+                    "encrypted_content": "SYNTHETIC_BLOB"
+                }
+            }),
+        ],
+    )?;
+
+    let detail = read_detail(&session::codex::engine_at(root, temp_store()), session_id)?;
+    let block = detail
+        .messages
+        .iter()
+        .flat_map(|message| message.blocks.iter())
+        .find(|block| block.kind == "image")
+        .expect("image block");
+    assert_eq!(
+        block.text.as_deref(),
+        Some("data:image/png;base64,iVBORw0KGgo=")
+    );
+    assert!(!detail.messages.iter().any(|message| {
+        message
+            .blocks
+            .iter()
+            .any(|block| block.kind == "unsupported_block")
+    }));
+    // raw 事件给整条记录：reasoning 的 payload 也带 timestamp/type 信封
+    let reasoning = detail
+        .events
+        .iter()
+        .find(|event| event.kind == "reasoning")
+        .expect("reasoning event");
+    let payload = reasoning.payload.as_ref().expect("raw payload");
+    assert_eq!(
+        payload.get("type").and_then(Value::as_str),
+        Some("response_item")
+    );
+    assert_eq!(
+        payload.get("timestamp").and_then(Value::as_str),
+        Some("2026-04-21T12:00:02.000Z")
+    );
+    // 加密字段是唯一例外
+    assert!(!serde_json::to_string(payload)?.contains("SYNTHETIC_BLOB"));
+
+    Ok(())
+}
+
+#[test]
+fn codex_keeps_injected_context_as_readable_block() -> Result<()> {
+    let root = env::temp_dir().join(format!("reins-codex-{}", Uuid::new_v4()));
+    let session_id = "77777777-7777-4777-8777-777777777777";
+    let transcript_path = root
+        .join("sessions/2026/04/21")
+        .join(format!("rollout-2026-04-21T12-00-00-{session_id}.jsonl"));
+    write_jsonl(
+        &transcript_path,
+        &[
+            json!({
+                "timestamp": "2026-04-21T12:00:00.000Z",
+                "type": "session_meta",
+                "payload": { "id": session_id, "cwd": "/tmp/reins/workspace" }
+            }),
+            // 宿主注入的上下文消息：清洗后没有对话内容，但整段原文要能看
+            json!({
+                "timestamp": "2026-04-21T12:00:01.000Z",
+                "type": "response_item",
+                "payload": {
+                    "type": "message",
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "input_text",
+                            "text": "# AGENTS.md instructions for /tmp/reins/workspace\n\n<INSTRUCTIONS>\n使用中文回复。\n</INSTRUCTIONS>"
+                        },
+                        {
+                            "type": "input_text",
+                            "text": "<environment_context>\n  <cwd>/tmp/reins/workspace</cwd>\n</environment_context>"
+                        }
+                    ],
+                    "internal_chat_message_metadata_passthrough": {
+                        "content_item_kinds": [
+                            "agents_md.instructions",
+                            "environments.environment_context"
+                        ]
+                    }
+                }
+            }),
+        ],
+    )?;
+
+    let detail = read_detail(&session::codex::engine_at(root, temp_store()), session_id)?;
+    let block = detail
+        .messages
+        .iter()
+        .flat_map(|message| message.blocks.iter())
+        .find(|block| block.kind == "context_injection")
+        .expect("context injection block");
+    let text = block.text.as_deref().unwrap_or_default();
+    assert!(text.contains("AGENTS.md instructions for /tmp/reins/workspace"));
+    assert!(text.contains("<environment_context>"));
+    // 不再退化成一行原始报文诊断块
+    assert!(!detail.messages.iter().any(|message| {
+        message
+            .blocks
+            .iter()
+            .any(|block| block.kind == "empty_message")
+    }));
+
     Ok(())
 }
 
 #[test]
 fn codex_exposes_unsupported_message_content_and_blocks() -> Result<()> {
-    let temp_home = env::temp_dir().join(format!("reins-test-{}", Uuid::new_v4()));
-    fs::create_dir_all(&temp_home)?;
-    let _guard = TestEnvGuard::set_home(&temp_home);
-
+    let root = env::temp_dir().join(format!("reins-codex-{}", Uuid::new_v4()));
     let session_id = "66666666-6666-4666-8666-666666666666";
-    let transcript_path = temp_home
-        .join(".codex/sessions/2026/04/21")
+    let transcript_path = root
+        .join("sessions/2026/04/21")
         .join(format!("rollout-2026-04-21T12-00-00-{session_id}.jsonl"));
     write_jsonl(
         &transcript_path,
@@ -355,7 +614,7 @@ fn codex_exposes_unsupported_message_content_and_blocks() -> Result<()> {
         ],
     )?;
 
-    let detail = read_detail(session::reader(SourceApp::Codex), &transcript_path)?;
+    let detail = read_detail(&session::codex::engine_at(root, temp_store()), session_id)?;
 
     assert!(detail.messages.iter().any(|message| {
         message.blocks.iter().any(|block| {
@@ -376,17 +635,13 @@ fn codex_exposes_unsupported_message_content_and_blocks() -> Result<()> {
         })
     }));
 
-    fs::remove_dir_all(&temp_home).ok();
     Ok(())
 }
 
 #[test]
 fn opencode_exposes_messages_without_visible_parts() -> Result<()> {
-    let temp_home = env::temp_dir().join(format!("reins-test-{}", Uuid::new_v4()));
-    fs::create_dir_all(&temp_home)?;
-    let _guard = TestEnvGuard::set_home(&temp_home);
-
-    let db_path = session::opencode::db_path()?;
+    let root = env::temp_dir().join(format!("reins-opencode-{}", Uuid::new_v4()));
+    let db_path = root.join("opencode.db");
     if let Some(parent) = db_path.parent() {
         fs::create_dir_all(parent)?;
     }
@@ -449,8 +704,10 @@ fn opencode_exposes_messages_without_visible_parts() -> Result<()> {
         ],
     )?;
 
-    let root_path = session::opencode::session_path(session_id);
-    let detail = read_detail(session::reader(SourceApp::OpenCode), &root_path)?;
+    let detail = read_detail(
+        &session::opencode::engine_at(root, temp_store()),
+        session_id,
+    )?;
 
     assert!(detail.messages.iter().any(|message| {
         message.blocks.iter().any(|block| {
@@ -462,17 +719,13 @@ fn opencode_exposes_messages_without_visible_parts() -> Result<()> {
         })
     }));
 
-    fs::remove_dir_all(&temp_home).ok();
     Ok(())
 }
 
 #[test]
 fn opencode_v2_parses_tool_content_and_non_message_events() -> Result<()> {
-    let temp_home = env::temp_dir().join(format!("reins-test-{}", Uuid::new_v4()));
-    fs::create_dir_all(&temp_home)?;
-    let _guard = TestEnvGuard::set_home(&temp_home);
-
-    let db_path = session::opencode::db_path()?;
+    let root = env::temp_dir().join(format!("reins-opencode-{}", Uuid::new_v4()));
+    let db_path = root.join("opencode.db");
     if let Some(parent) = db_path.parent() {
         fs::create_dir_all(parent)?;
     }
@@ -589,8 +842,10 @@ fn opencode_v2_parses_tool_content_and_non_message_events() -> Result<()> {
         ],
     )?;
 
-    let root_path = session::opencode::session_path(session_id);
-    let detail = read_detail(session::reader(SourceApp::OpenCode), &root_path)?;
+    let detail = read_detail(
+        &session::opencode::engine_at(root, temp_store()),
+        session_id,
+    )?;
 
     // 消息时间线只有 user/assistant 行
     assert_eq!(detail.messages.len(), 1);
@@ -624,6 +879,18 @@ fn opencode_v2_parses_tool_content_and_non_message_events() -> Result<()> {
         .find(|event| event.kind == "idle")
         .expect("idle event");
     assert_eq!(idle.summary, "idle: succeeded");
+    // raw payload 给整行：id/type/time_created + data 列原文
+    let idle_payload = idle.payload.as_ref().expect("raw payload is the row");
+    assert_eq!(
+        idle_payload.get("type").and_then(Value::as_str),
+        Some("idle")
+    );
+    assert_eq!(
+        idle_payload.get("id").and_then(Value::as_str),
+        Some("msg-idle")
+    );
+    assert!(idle_payload.get("time_created").is_some());
+    assert!(idle_payload.get("data").is_some());
     let compaction = detail
         .events
         .iter()
@@ -635,19 +902,15 @@ fn opencode_v2_parses_tool_content_and_non_message_events() -> Result<()> {
         compaction.summary
     );
 
-    fs::remove_dir_all(&temp_home).ok();
     Ok(())
 }
 
 #[test]
 fn claude_root_session_aggregates_subagent_sessions() -> Result<()> {
-    let temp_home = env::temp_dir().join(format!("reins-test-{}", Uuid::new_v4()));
-    fs::create_dir_all(&temp_home)?;
-    let _guard = TestEnvGuard::set_home(&temp_home);
-
+    let root = env::temp_dir().join(format!("reins-claude-{}", Uuid::new_v4()));
     let root_id = "root-session";
     let child_id = "child-session";
-    let project_dir = temp_home.join(".claude/projects/demo-project");
+    let project_dir = root.join("projects/demo-project");
     let root_path = project_dir.join(format!("{root_id}.jsonl"));
     let child_path = project_dir
         .join("subagents")
@@ -705,7 +968,7 @@ fn claude_root_session_aggregates_subagent_sessions() -> Result<()> {
         r#"{"agentType":"Explore","description":"Find fetch_rss scheduling code"}"#,
     )?;
 
-    let reader = session::reader(SourceApp::ClaudeCode);
+    let reader = session::claude_code::engine_at(root, temp_store());
     let entries = reader.list_entries()?;
     assert_eq!(entries.len(), 1);
     assert_eq!(entries[0].path, root_path);
@@ -716,10 +979,10 @@ fn claude_root_session_aggregates_subagent_sessions() -> Result<()> {
             .is_some_and(|summary| summary.title.contains("+1 subagents"))
     );
 
-    let summary = reader.parse_summary(&root_path)?;
+    let summary = reader.parse_summary(root_id)?;
     assert!(summary.title.contains("+1 subagents"));
 
-    let overview = reader.parse_overview(&root_path)?;
+    let overview = reader.parse_overview(root_id)?;
     assert_eq!(overview.summary.source_session_id, root_id);
     assert_eq!(overview.agents.len(), 2);
     assert_eq!(
@@ -743,7 +1006,7 @@ fn claude_root_session_aggregates_subagent_sessions() -> Result<()> {
             && agent.label == "Find fetch_rss scheduling code(子)"
     }));
 
-    let detail = read_detail(reader, &root_path)?;
+    let detail = read_detail(&reader, root_id)?;
     // Path equality treats '/' and '\' as equivalent on Windows, unlike the
     // raw string comparison against the mixed-separator test paths.
     assert_eq!(detail.source_paths.len(), 2);
@@ -773,10 +1036,11 @@ fn claude_root_session_aggregates_subagent_sessions() -> Result<()> {
             .any(|event| event.kind == "subagent_started")
     );
 
-    fs::remove_dir_all(&temp_home).ok();
     Ok(())
 }
 
+// 末段断言走 session::timeline::get_session_agent_messages_inner(命令层入口,
+// 经注册表读 env BACKEND),因此整个用例保持 env 根,不迁移 engine_at。
 #[test]
 fn codex_root_session_aggregates_subagent_sessions() -> Result<()> {
     let temp_home = env::temp_dir().join(format!("reins-test-{}", Uuid::new_v4()));
@@ -867,11 +1131,11 @@ fn codex_root_session_aggregates_subagent_sessions() -> Result<()> {
         ],
     )?;
 
-    let summary = session::reader(SourceApp::Codex).parse_summary(&root_path)?;
+    let summary = session::reader(SourceApp::Codex).parse_summary(root_id)?;
     assert_eq!(summary.source_session_id, root_id);
     assert!(summary.title.contains("+1 subagents"));
 
-    let detail = read_detail(session::reader(SourceApp::Codex), &root_path)?;
+    let detail = read_detail(session::reader(SourceApp::Codex), root_id)?;
 
     assert!(
         detail
@@ -899,12 +1163,8 @@ fn codex_root_session_aggregates_subagent_sessions() -> Result<()> {
 
     // 子代理弹窗取数：只返回该 agent 的消息(marker + 子会话消息),与分页进度无关。
     // 走命令层入口而非 reader,连 resolve_session_path 一起覆盖
-    let child_messages = session::timeline::get_session_agent_messages_inner(
-        SourceApp::Codex,
-        root_id,
-        child_id,
-        Some(root_path.to_string_lossy().as_ref()),
-    )?;
+    let child_messages =
+        session::timeline::get_session_agent_messages_inner(SourceApp::Codex, root_id, child_id)?;
     assert_eq!(child_messages.len(), 3);
     assert!(
         child_messages
@@ -930,12 +1190,9 @@ fn codex_root_session_aggregates_subagent_sessions() -> Result<()> {
 
 #[test]
 fn codex_resume_segments_keep_original_segment_as_root() -> Result<()> {
-    let temp_home = env::temp_dir().join(format!("reins-test-{}", Uuid::new_v4()));
-    fs::create_dir_all(&temp_home)?;
-    let _guard = TestEnvGuard::set_home(&temp_home);
-
+    let root = env::temp_dir().join(format!("reins-codex-{}", Uuid::new_v4()));
     let session_id = "88888888-8888-4888-8888-888888888888";
-    let sessions_dir = temp_home.join(".codex/sessions/2026/09/02");
+    let sessions_dir = root.join("sessions/2026/09/02");
     let original_path =
         sessions_dir.join(format!("rollout-2026-09-02T16-00-15-{session_id}.jsonl"));
     let resume_path = sessions_dir.join(format!(
@@ -996,7 +1253,7 @@ fn codex_resume_segments_keep_original_segment_as_root() -> Result<()> {
         ],
     )?;
 
-    let reader = session::reader(SourceApp::Codex);
+    let reader = session::codex::engine_at(root, temp_store());
     let entries = reader.list_entries()?;
     assert_eq!(entries.len(), 1);
     // root 必须是原始段：标题取自原始段首条消息，而不是续跑段的"继续"。
@@ -1006,19 +1263,15 @@ fn codex_resume_segments_keep_original_segment_as_root() -> Result<()> {
     // 续跑段与原始段共享 session id，是同一条线程而不是 subagent。
     assert!(!summary.title.contains("subagents"));
 
-    fs::remove_dir_all(&temp_home).ok();
     Ok(())
 }
 
 #[test]
 fn codex_title_strips_markdown_link_syntax() -> Result<()> {
-    let temp_home = env::temp_dir().join(format!("reins-test-{}", Uuid::new_v4()));
-    fs::create_dir_all(&temp_home)?;
-    let _guard = TestEnvGuard::set_home(&temp_home);
-
+    let root = env::temp_dir().join(format!("reins-codex-{}", Uuid::new_v4()));
     let session_id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
-    let transcript_path = temp_home
-        .join(".codex/sessions/2026/09/02")
+    let transcript_path = root
+        .join("sessions/2026/09/02")
         .join(format!("rollout-2026-09-02T16-00-15-{session_id}.jsonl"));
 
     write_jsonl(
@@ -1048,7 +1301,7 @@ fn codex_title_strips_markdown_link_syntax() -> Result<()> {
         ],
     )?;
 
-    let entries = session::reader(SourceApp::Codex).list_entries()?;
+    let entries = session::codex::engine_at(root, temp_store()).list_entries()?;
     assert_eq!(entries.len(), 1);
     // 链接语法必须剥掉只留 label，否则 72 字符截断后标题全是 [label](url)。
     assert_eq!(
@@ -1056,125 +1309,5 @@ fn codex_title_strips_markdown_link_syntax() -> Result<()> {
         "$mongo-slow-log-report 帮我看下这份skill有没有问题"
     );
 
-    fs::remove_dir_all(&temp_home).ok();
-    Ok(())
-}
-
-// opencode v2 的建表随首次会话写入才发生:db 已存在但没有 session_v2 表
-// 时按"还没有会话"处理,列表与用量统计都不报错。
-#[test]
-fn opencode_db_without_session_v2_table_lists_no_sessions() -> Result<()> {
-    let temp_home = env::temp_dir().join(format!("reins-test-{}", Uuid::new_v4()));
-    fs::create_dir_all(&temp_home)?;
-    let _guard = TestEnvGuard::set_home(&temp_home);
-
-    let db_path = session::opencode::db_path()?;
-    if let Some(parent) = db_path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    Connection::open(&db_path)?.execute_batch("CREATE TABLE other (id TEXT);")?;
-
-    let page = session::catalog::list_sessions_inner(
-        &state::session_index::SessionIndexState::default(),
-        session::catalog::SourceSelection::One(SourceApp::OpenCode),
-        0,
-        20,
-        "",
-        false,
-        true,
-    )?;
-    assert_eq!(page.total_count, 0);
-    assert!(page.sessions.is_empty());
-
-    assert!(session::opencode::usage_hours()?.is_none());
-
-    fs::remove_dir_all(&temp_home).ok();
-    Ok(())
-}
-
-// opencode 目录存在但 db 文件还不存在(v2 从未启动过写库):同样按没有
-// 会话处理,且不能凭空创建出 db 文件。
-#[test]
-fn opencode_missing_db_lists_no_sessions_without_creating_db() -> Result<()> {
-    let temp_home = env::temp_dir().join(format!("reins-test-{}", Uuid::new_v4()));
-    fs::create_dir_all(&temp_home)?;
-    let _guard = TestEnvGuard::set_home(&temp_home);
-
-    fs::create_dir_all(session::opencode::root()?)?;
-
-    let page = session::catalog::list_sessions_inner(
-        &state::session_index::SessionIndexState::default(),
-        session::catalog::SourceSelection::One(SourceApp::OpenCode),
-        0,
-        20,
-        "",
-        false,
-        true,
-    )?;
-    assert_eq!(page.total_count, 0);
-    assert!(page.sessions.is_empty());
-
-    assert!(session::opencode::usage_hours()?.is_none());
-    assert!(!session::opencode::db_path()?.exists());
-
-    fs::remove_dir_all(&temp_home).ok();
-    Ok(())
-}
-
-// codex 登录/配置阶段 ~/.codex 已存在但 sessions 子目录还没有:按还没有
-// 会话处理,列表不报错。
-#[test]
-fn codex_missing_sessions_dir_lists_no_sessions() -> Result<()> {
-    let temp_home = env::temp_dir().join(format!("reins-test-{}", Uuid::new_v4()));
-    fs::create_dir_all(&temp_home)?;
-    let _guard = TestEnvGuard::set_home(&temp_home);
-
-    fs::create_dir_all(temp_home.join(".codex"))?;
-
-    let page = session::catalog::list_sessions_inner(
-        &state::session_index::SessionIndexState::default(),
-        session::catalog::SourceSelection::One(SourceApp::Codex),
-        0,
-        20,
-        "",
-        false,
-        true,
-    )?;
-    assert_eq!(page.total_count, 0);
-    assert!(page.sessions.is_empty());
-
-    fs::remove_dir_all(&temp_home).ok();
-    Ok(())
-}
-
-// zcode 的 db 文件存在但 session/turn_usage 表还没有(全新安装、建表未发生):
-// 按还没有会话处理,列表与用量统计都不报错。
-#[test]
-fn zcode_db_without_session_table_lists_no_sessions() -> Result<()> {
-    let temp_home = env::temp_dir().join(format!("reins-test-{}", Uuid::new_v4()));
-    fs::create_dir_all(&temp_home)?;
-    let _guard = TestEnvGuard::set_home(&temp_home);
-
-    let db_path = session::zcode::db_path()?;
-    if let Some(parent) = db_path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    Connection::open(&db_path)?.execute_batch("CREATE TABLE other (id TEXT);")?;
-
-    let page = session::catalog::list_sessions_inner(
-        &state::session_index::SessionIndexState::default(),
-        session::catalog::SourceSelection::One(SourceApp::Zcode),
-        0,
-        20,
-        "",
-        false,
-        true,
-    )?;
-    assert_eq!(page.total_count, 0);
-    assert!(page.sessions.is_empty());
-
-    assert!(session::zcode::usage_hours()?.is_none());
-
-    fs::remove_dir_all(&temp_home).ok();
     Ok(())
 }

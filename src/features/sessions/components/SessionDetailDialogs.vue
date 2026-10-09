@@ -2,11 +2,11 @@
 import { computed } from "vue";
 import ConfirmDialog from "@shared/ui/ConfirmDialog.vue";
 import { formatSourceAppName } from "../source-app";
-import { deleteCommandPreview, deleteMethodCopy } from "../model";
-import type { SessionOverview } from "../types";
+import type { DeletePlan, DeletePlanAction, SessionOverview } from "../types";
 
 type SessionDetailDialogsProps = {
   overview: SessionOverview;
+  deletePlan: DeletePlan;
   deleteDialogOpen: boolean;
   deleteLoading: boolean;
 };
@@ -18,10 +18,36 @@ const emit = defineEmits<{
   confirmDelete: [];
 }>();
 
-const selectedDeleteCopy = computed(() =>
-  deleteMethodCopy(props.overview.summary.sourceApp)
+// 删除预览只渲染 plan 里的动作；命令行拼写是纯展示层行为。
+// POSIX shell 引号：用 '\'' 转义单引号。
+function shellQuote(value: string): string {
+  return `'${value.replace(/'/g, "'\\''")}'`;
+}
+
+function formatDeletePlanAction(action: DeletePlanAction): string {
+  switch (action.kind) {
+    case "remove_file":
+      return `rm ${shellQuote(action.path)}`;
+    case "remove_directory":
+      // ~/ 前缀目录(claude sidecar)渲染为 $HOME 展开;绝对路径(grokbuild
+      // 子会话目录)用单引号。
+      return action.path.startsWith("~/")
+        ? `rm -rf "$HOME/${action.path.slice(2)}"`
+        : `rm -rf ${shellQuote(action.path)}`;
+    case "run_cli":
+      return [action.program, ...action.args].join(" ");
+    case "sqlite":
+      return `sqlite3 ${homeQuoted(action.db_path)} "${action.sql}"`;
+  }
+}
+
+function homeQuoted(path: string): string {
+  return path.startsWith("~/") ? `"$HOME/${path.slice(2)}"` : `"${path}"`;
+}
+
+const deleteCommands = computed(() =>
+  props.deletePlan.actions.map(formatDeletePlanAction)
 );
-const deleteCommands = computed(() => deleteCommandPreview(props.overview));
 </script>
 
 <template>
@@ -47,10 +73,10 @@ const deleteCommands = computed(() => deleteCommandPreview(props.overview));
     </div>
     <div class="delete-dialog-method-box">
       <p class="delete-dialog-method-title">删除方式</p>
-      <p>{{ selectedDeleteCopy.description }}</p>
+      <p>{{ deletePlan.description }}</p>
       <ul class="delete-dialog-method-list">
         <li
-          v-for="(item, index) in selectedDeleteCopy.details"
+          v-for="(item, index) in deletePlan.details"
           :key="`${item}-${index}`"
         >
           {{ item }}
@@ -71,7 +97,7 @@ const deleteCommands = computed(() => deleteCommandPreview(props.overview));
     </div>
     <div class="delete-dialog-command-block">
       <p class="delete-dialog-command-title">
-        {{ selectedDeleteCopy.commandLabel }}
+        {{ deletePlan.commandLabel }}
       </p>
       <div class="path-list">
         <code

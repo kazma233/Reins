@@ -1,7 +1,6 @@
 import { ref, watch, type Ref } from "vue";
 import { deleteSession } from "../api";
-import { canDeleteSession } from "../model";
-import type { SessionOverview } from "../types";
+import type { DeletePlan, SessionOverview } from "../types";
 import { extractErrorMessage } from "@shared/lib/errors";
 import { createKeyGuard } from "@shared/lib/request-guard";
 
@@ -24,6 +23,7 @@ export type SessionDetailActions = SessionDetailActionsState & {
 export function useSessionDetailActions(
   overview: Ref<SessionOverview | null>,
   detailKey: Ref<string | null>,
+  deletePlan: Ref<DeletePlan | null>,
   onDeleted: () => void
 ): SessionDetailActions {
   const deleteError = ref<string | null>(null);
@@ -43,9 +43,14 @@ export function useSessionDetailActions(
     resetState();
   });
 
+  // 删除是否支持由后端 plan 判定；无 plan（尚未取到或获取失败）时隐藏入口。
+  function deleteSupported(): boolean {
+    return deletePlan.value?.supported === true;
+  }
+
   function openDeleteDialog() {
     const detail = overview.value;
-    if (!detail || !canDeleteSession(detail.summary.sourceApp) || deleteLoading.value) {
+    if (!detail || !deleteSupported() || deleteLoading.value) {
       return;
     }
     deleteError.value = null;
@@ -64,7 +69,7 @@ export function useSessionDetailActions(
     if (
       !detail ||
       !detailKey.value ||
-      !canDeleteSession(detail.summary.sourceApp) ||
+      !deleteSupported() ||
       deleteLoading.value
     ) {
       return;
@@ -75,11 +80,7 @@ export function useSessionDetailActions(
     deleteError.value = null;
 
     try {
-      await deleteSession(
-        detail.summary.sourceApp,
-        detail.summary.sourceSessionId,
-        detail.summary.transcriptPath
-      );
+      await deleteSession(detail.summary.sourceApp, detail.summary.sourceSessionId);
 
       if (!requestGuard.isCurrent(requestKey)) {
         return;

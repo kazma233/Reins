@@ -6,6 +6,7 @@ import SkillImportDialog from "../dialogs/SkillImportDialog.vue";
 import SkillSourceEditDialog from "../dialogs/SkillSourceEditDialog.vue";
 import SourceSyncDialog from "../dialogs/SourceSyncDialog.vue";
 import ConfirmDialog from "@shared/ui/ConfirmDialog.vue";
+import AppLoadError from "@shared/ui/AppLoadError.vue";
 import { formatTargetLabel } from "../../model";
 import { buildSkillLinkSourceLabels } from "../../syncAssociations";
 import { useWorkspaceState } from "../../composables/useWorkspaceState";
@@ -15,7 +16,7 @@ import { useSourceSync } from "../../composables/useSourceSync";
 
 // --- workspace state (store-backed, safe to call anywhere) ---
 
-const { configDocument, runningAction } = useWorkspaceState();
+const { configDocument, runningAction, loadError, retryWorkspaceState } = useWorkspaceState();
 
 const configSkillSources = computed(
   () => configDocument.value?.config?.skillSources ?? [],
@@ -49,6 +50,7 @@ const {
   sourceSyncDialog,
   sourceSyncOverwriteDialog,
   handleOpenSourceSync,
+  sourceSyncDialogRef,
   handleConfirmSourceSync,
   closeSourceSyncDialog,
   closeSourceSyncOverwriteDialog,
@@ -99,6 +101,12 @@ const remoteSources = computed(() =>
 
   <section class="manager-stack manager-stack--stretch">
     <article class="manager-panel manager-panel--fill">
+      <AppLoadError
+        v-if="loadError"
+        :message="loadError"
+        :retrying="runningAction"
+        @retry="retryWorkspaceState"
+      />
       <div class="manager-panel-section manager-panel-section--fill">
         <div class="manager-scroll-region">
           <template v-if="visibleSources.length">
@@ -132,6 +140,7 @@ const remoteSources = computed(() =>
 
     <SkillImportDialog
       :dialog-state="skillImportDialog"
+      :error="skillImportDialog.preview.previewError"
       :loading="runningAction"
       @close="closeImportDialog"
       @confirm="handleImportSkills"
@@ -142,8 +151,9 @@ const remoteSources = computed(() =>
     <!-- --- skill source edit / delete --- -->
 
     <SkillSourceEditDialog
-      :state="skillSourceEditDialog"
+      :error="skillSourceEditDialog.preview.previewError"
       :loading="runningAction"
+      :state="skillSourceEditDialog"
       @close="closeSkillSourceEditDialog"
       @confirm="handleConfirmSkillSourceEdit"
       @refresh-preview="handleRefreshSkillSourceEditPreview"
@@ -158,6 +168,7 @@ const remoteSources = computed(() =>
       confirm-button-class-name="danger-button"
       :confirm-label="runningAction ? '删除中...' : '确认删除'"
       :loading="runningAction"
+      :error="skillSourceDeleteDialog.error"
       @close="closeSkillSourceDeleteDialog"
       @confirm="handleConfirmDeleteSkillSource"
     >
@@ -169,10 +180,11 @@ const remoteSources = computed(() =>
     <!-- --- source sync --- -->
 
     <SourceSyncDialog
+      ref="sourceSyncDialogRef"
+      :loading="sourceSyncDialog.loading"
       :open="sourceSyncDialog.open"
       :source="sourceSyncDialog.source"
       :source-labels="sourceLabels"
-      :loading="sourceSyncDialog.loading"
       @close="closeSourceSyncDialog"
       @confirm="handleConfirmSourceSync"
     />
@@ -187,6 +199,7 @@ const remoteSources = computed(() =>
       confirm-button-class-name="danger-button"
       :confirm-label="sourceSyncOverwriteDialog.loading ? '覆盖中...' : '覆盖并同步'"
       :loading="sourceSyncOverwriteDialog.loading"
+      :error="sourceSyncOverwriteDialog.error"
       @close="closeSourceSyncOverwriteDialog"
       @confirm="confirmSourceSyncOverwrite"
     >

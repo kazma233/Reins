@@ -35,7 +35,7 @@ const buttonStateClass = computed(() => {
 });
 const label = computed(() => formatTargetLabel(props.targetId));
 const detail = computed(() => {
-  if (sseUnsupported.value) return "pi 不支持 SSE transport 的 MCP。";
+  if (sseUnsupported.value) return `${label.value} 不支持 SSE transport 的 MCP。`;
   return props.targetItem?.detail ?? `${props.serverName} 在 ${label.value} 的状态未知`;
 });
 </script>

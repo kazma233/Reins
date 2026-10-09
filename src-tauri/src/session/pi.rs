@@ -9,10 +9,11 @@ use anyhow::{Context, Result, anyhow, bail};
 use serde_json::{Value, json};
 use uuid::Uuid;
 
+use super::reader_engine::{self, MemberTimeline, event_page, message_page};
 use super::{
-    ContentBlock, SessionAgent, SessionEvent, SessionEventPage, SessionFileEntry, SessionMessage,
-    SessionMessagePage, SessionOverview, SessionReader, SessionSummary, SessionTokenUsage,
-    SourceApp, SummaryAccumulator, TimelineCacheEntry, UsageHourBuckets,
+    ContentBlock, DeletePlanAction, SessionAgent, SessionEvent, SessionEventPage, SessionFileEntry,
+    SessionMessage, SessionMessagePage, SessionOverview, SessionReader, SessionSummary,
+    SessionTokenUsage, SourceApp, SummaryAccumulator, UsageHourBuckets,
 };
 
 pub(crate) struct PiBackend;
@@ -50,19 +51,12 @@ struct PiEntry {
     value: Value,
 }
 
-static PI_TIMELINE_CACHE: LazyLock<Mutex<HashMap<String, TimelineCacheEntry>>> =
-    LazyLock::new(|| Mutex::new(HashMap::new()));
+static PI_TIMELINE_CACHE: LazyLock<reader_engine::DualHalfCache> =
+    LazyLock::new(|| reader_engine::DualHalfCache::new("Pi timeline".to_string()));
 static PI_INDEX_CACHE: LazyLock<Mutex<Option<PiIndexCacheEntry>>> =
     LazyLock::new(|| Mutex::new(None));
 static PI_SUMMARY_CACHE: LazyLock<Mutex<HashMap<String, PiSummaryCacheEntry>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
-
-fn lock_timeline_cache()
--> Result<std::sync::MutexGuard<'static, HashMap<String, TimelineCacheEntry>>> {
-    PI_TIMELINE_CACHE
-        .lock()
-        .map_err(|_| anyhow!("Pi timeline cache lock was poisoned"))
-}
 
 fn lock_index_cache() -> Result<std::sync::MutexGuard<'static, Option<PiIndexCacheEntry>>> {
     PI_INDEX_CACHE
@@ -83,43 +77,27 @@ impl SessionReader for PiBackend {
     }
 
     fn clear_cache(&self) -> Result<()> {
-        lock_timeline_cache()?.clear();
+        PI_TIMELINE_CACHE.clear()?;
         lock_summary_cache()?.clear();
         *lock_index_cache()? = None;
         Ok(())
     }
 
-    fn resolve_path(&self, source_session_id: &str) -> Result<PathBuf> {
-        if let Some(path) = index()?
-            .entries
-            .into_iter()
-            .find(|entry| {
-                read_header(&entry.path)
-                    .ok()
-                    .is_some_and(|header| header.id == source_session_id)
-            })
-            .map(|entry| entry.path)
-        {
-            return Ok(path);
-        }
-
-        find_session_file(source_session_id)
+    fn parse_summary(&self, source_session_id: &str) -> Result<SessionSummary> {
+        cached_summary(&resolve_session_path(source_session_id)?)
     }
 
-    fn parse_summary(&self, path: &Path) -> Result<SessionSummary> {
-        cached_summary(path)
-    }
-
-    fn parse_overview(&self, path: &Path) -> Result<SessionOverview> {
-        let summary = cached_summary(path)?;
-        let (messages, events) = cached_timeline(path)?;
-        let header = read_header(path)?;
+    fn parse_overview(&self, source_session_id: &str) -> Result<SessionOverview> {
+        let path = resolve_session_path(source_session_id)?;
+        let summary = cached_summary(&path)?;
+        let timeline = cached_timeline(&path)?;
+        let header = read_header(&path)?;
 
         Ok(SessionOverview {
             summary,
             source_paths: vec![path.display().to_string()],
-            message_count: Some(messages.len()),
-            event_count: Some(events.len()),
+            message_count: Some(timeline.messages.len()),
+            event_count: Some(timeline.events.len()),
             agents: vec![SessionAgent {
                 session_id: header.id,
                 label: "主 Agent".to_string(),
@@ -130,47 +108,38 @@ impl SessionReader for PiBackend {
 
     fn parse_messages_page(
         &self,
-        path: &Path,
+        source_session_id: &str,
         offset: usize,
         limit: usize,
     ) -> Result<SessionMessagePage> {
-        self::parse_messages_page(path, offset, limit)
+        let timeline = cached_timeline(&resolve_session_path(source_session_id)?)?;
+        Ok(message_page(&timeline.messages, offset, limit))
     }
 
     fn parse_events_page(
         &self,
-        path: &Path,
+        source_session_id: &str,
         offset: usize,
         limit: usize,
     ) -> Result<SessionEventPage> {
-        let (_, events) = cached_timeline(path)?;
-        let (events, start, next_offset, total_count) =
-            crate::support::paging::slice_page(&events, offset, limit);
-
-        Ok(SessionEventPage {
-            events,
-            offset: start,
-            limit,
-            next_offset,
-            total_count,
-            has_more: next_offset.is_some(),
-        })
+        let timeline = cached_timeline(&resolve_session_path(source_session_id)?)?;
+        Ok(event_page(&timeline.events, offset, limit))
     }
 }
 
-fn parse_messages_page(path: &Path, offset: usize, limit: usize) -> Result<SessionMessagePage> {
-    let (messages, _) = cached_timeline(path)?;
-    let (messages, start, next_offset, total_count) =
-        crate::support::paging::slice_page(&messages, offset, limit);
+// id → transcript 路径的内部解析:索引反查(header id)未命中再线性扫
+// sessions 目录。trait 不再暴露路径,这是 pi 自己的实现细节。
+fn resolve_session_path(source_session_id: &str) -> Result<PathBuf> {
+    if let Some(path) = index()?
+        .entries
+        .into_iter()
+        .find(|entry| entry.source_session_id == source_session_id)
+        .map(|entry| entry.path)
+    {
+        return Ok(path);
+    }
 
-    Ok(SessionMessagePage {
-        messages,
-        offset: start,
-        limit,
-        next_offset,
-        total_count,
-        has_more: next_offset.is_some(),
-    })
+    find_session_file(source_session_id)
 }
 
 pub(crate) fn root() -> Result<PathBuf> {
@@ -226,11 +195,12 @@ fn expand_configured_path(value: &str) -> Result<PathBuf> {
     Ok(resolve_configured_path(value, &cwd, &home))
 }
 
-pub(crate) fn delete_session(path: &Path) -> Result<()> {
+pub(crate) fn delete_session(source_session_id: &str) -> Result<()> {
+    let path = resolve_session_path(source_session_id)?;
     let sessions_root_path = sessions_root()?;
     let canonical_sessions_root =
         crate::support::fs::canonicalize(&sessions_root_path).unwrap_or(sessions_root_path);
-    let target = crate::support::fs::canonicalize(path)
+    let target = crate::support::fs::canonicalize(&path)
         .with_context(|| format!("Failed to resolve Pi session {}", path.display()))?;
     if !target.starts_with(&canonical_sessions_root)
         || target.extension().and_then(|ext| ext.to_str()) != Some("jsonl")
@@ -241,9 +211,18 @@ pub(crate) fn delete_session(path: &Path) -> Result<()> {
         );
     }
 
-    fs::remove_file(path).with_context(|| format!("Failed to delete {}", path.display()))?;
+    fs::remove_file(&path).with_context(|| format!("Failed to delete {}", path.display()))?;
     prune_empty_parents(sessions_root()?, path.parent());
     BACKEND.clear_cache()
+}
+
+// Pi 的删除单位就是单个 transcript 文件,预演与执行一致。
+pub(crate) fn delete_plan(overview: &SessionOverview) -> Result<Vec<DeletePlanAction>> {
+    Ok(overview
+        .source_paths
+        .iter()
+        .map(|path| DeletePlanAction::RemoveFile { path: path.clone() })
+        .collect())
 }
 
 fn index() -> Result<PiIndexCacheEntry> {
@@ -263,9 +242,10 @@ fn index() -> Result<PiIndexCacheEntry> {
     let mut entries = files
         .into_iter()
         .filter_map(|path| {
-            read_header(&path).ok()?;
+            let header = read_header(&path).ok()?;
             let sort_timestamp = file_mtime(&path).ok()?;
             Some(SessionFileEntry {
+                source_session_id: header.id,
                 path,
                 sort_timestamp,
                 summary: None,
@@ -473,7 +453,11 @@ pub(crate) fn usage_hours(path: &Path) -> Result<UsageHourBuckets> {
 
     for entry in &document.entries {
         for usage in pi_entry_usages(&entry.value) {
-            super::merge_usage_bucket(&mut buckets, entry.timestamp.and_then(super::hour_key), usage);
+            super::merge_usage_bucket(
+                &mut buckets,
+                entry.timestamp.and_then(super::hour_key),
+                usage,
+            );
         }
     }
 
@@ -765,6 +749,10 @@ fn parse_message_entry(entry: &PiEntry, session_id: &str) -> SessionMessage {
     };
     let role = super::json_string(message, &["role"]).unwrap_or_else(|| "unknown".to_string());
     let mut blocks = match role.as_str() {
+        // 系统提示：正文为空，提示词按 sections 分块存
+        "system" => system_prompt_block(message)
+            .map(|block| vec![block])
+            .unwrap_or_else(|| vec![super::unsupported_content_block("Pi", Some(message))]),
         "bashExecution" => vec![ContentBlock {
             kind: "bash_execution".to_string(),
             text: Some(
@@ -823,11 +811,23 @@ fn parse_message_entry(entry: &PiEntry, session_id: &str) -> SessionMessage {
     }
 
     if blocks.is_empty() {
-        blocks.push(super::empty_message_block(
-            "Pi",
-            "content was empty after sanitization",
-            Some(message.clone()),
-        ));
+        // 无可见内容的消息按语义分流：助手侧错误显示错误文案，整条都是宿主注入的
+        // 上下文则保留原文，其余才退化成一行原始报文诊断块。
+        let error_message =
+            super::json_string(message, &["errorMessage"]).filter(|text| !text.trim().is_empty());
+        blocks.push(
+            error_message
+                .as_deref()
+                .map(|error| super::message_error_block(error, Some(message.clone())))
+                .or_else(|| super::injected_context_block(message.get("content"), message))
+                .unwrap_or_else(|| {
+                    super::empty_message_block(
+                        "Pi",
+                        "content was empty after sanitization",
+                        Some(message.clone()),
+                    )
+                }),
+        );
     }
 
     SessionMessage {
@@ -954,6 +954,84 @@ fn parse_message_content(role: &str, content: Option<&Value>) -> Vec<ContentBloc
     }
 }
 
+// 系统提示消息：正文为空，提示词按 sections 分块存，另带本次新增/移除的工具。
+// 拼回一段可读文本（段名 + 正文 + 工具名与说明）；工具的 parameters 是机械的
+// JSON schema，不进正文，完整报文仍留在 payload 里。
+fn system_prompt_block(message: &Value) -> Option<ContentBlock> {
+    let sections = message.get("sections").and_then(Value::as_object);
+    let added = tool_entries(message.get("toolsAdded"));
+    let removed = tool_names(message.get("toolsRemoved"));
+
+    if sections.is_none() && added.is_empty() && removed.is_empty() {
+        return None;
+    }
+
+    let mut parts = Vec::new();
+
+    if let Some(sections) = sections {
+        // 首行当折叠行的摘要：这段提示词包含哪些段
+        let names = sections
+            .keys()
+            .map(String::as_str)
+            .collect::<Vec<_>>()
+            .join("、");
+        parts.push(format!("{} 段：{}", sections.len(), names));
+        parts.extend(
+            sections
+                .iter()
+                .map(|(name, value)| format!("## {name}\n{}", value.as_str().unwrap_or_default())),
+        );
+    }
+
+    if !added.is_empty() {
+        parts.push(format!("## 本次加入的工具\n{}", added.join("\n")));
+    }
+
+    if !removed.is_empty() {
+        let lines = removed
+            .iter()
+            .map(|name| format!("- {name}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        parts.push(format!("## 本次移除的工具\n{lines}"));
+    }
+
+    Some(super::diagnostic_block(
+        "system_prompt",
+        parts.join("\n\n"),
+        Some(message.clone()),
+    ))
+}
+
+fn tool_entries(tools: Option<&Value>) -> Vec<String> {
+    tools
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| {
+                    let name = super::json_string(item, &["name"])?;
+                    let description =
+                        super::json_string(item, &["description"]).unwrap_or_default();
+                    Some(format!("- {name}: {description}"))
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn tool_names(tools: Option<&Value>) -> Vec<String> {
+    tools
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| super::json_string(item, &["name"]))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 fn parse_content_block(role: &str, value: &Value) -> Option<ContentBlock> {
     let raw_kind = super::json_string(value, &["type"]).unwrap_or_else(|| "unknown".to_string());
     let kind = match (role, raw_kind.as_str()) {
@@ -985,6 +1063,16 @@ fn parse_content_block(role: &str, value: &Value) -> Option<ContentBlock> {
     } else {
         "unsupported_block".to_string()
     };
+
+    // 图片项没有 text 字段：把 data + mimeType 还原成 data URL 当正文，
+    // 前端才能直接渲染，而不是退成一行 JSON
+    let text = text.or_else(|| {
+        if kind == "image" {
+            super::image_reference(value)
+        } else {
+            None
+        }
+    });
 
     Some(ContentBlock {
         kind,
@@ -1025,39 +1113,15 @@ fn sanitize_pi_user_blocks(blocks: Vec<ContentBlock>) -> Vec<ContentBlock> {
         .collect()
 }
 
-fn cached_timeline(path: &Path) -> Result<(Vec<SessionMessage>, Vec<SessionEvent>)> {
-    let key = crate::support::fs::path_key(path);
-    let updated_at = file_mtime(path)?;
-
-    {
-        let cache = lock_timeline_cache()?;
-        let cached = cache
-            .get(&key)
-            .filter(|entry| entry.updated_at == updated_at)
-            .and_then(|entry| {
-                let (Some(messages), Some(events)) = (&entry.messages, &entry.events) else {
-                    return None;
-                };
-                Some((messages.clone(), events.clone()))
-            });
-        if let Some((messages, events)) = cached {
-            return Ok((messages, events));
-        }
-    }
-
-    let document = read_document(path)?;
-    let (messages, events) = build_timeline(&document.header, &document.entries);
-    super::family_timeline::store_timeline_items(
-        &PI_TIMELINE_CACHE,
-        "Pi timeline",
-        key,
-        updated_at,
-        |entry| {
-            entry.messages = Some(messages.clone());
-            entry.events = Some(events.clone());
+fn cached_timeline(path: &Path) -> Result<MemberTimeline> {
+    PI_TIMELINE_CACHE.load(
+        crate::support::fs::path_key(path),
+        file_mtime(path)?,
+        || {
+            let document = read_document(path)?;
+            Ok(build_timeline(&document.header, &document.entries))
         },
-    )?;
-    Ok((messages, events))
+    )
 }
 
 fn resolve_configured_path(value: &str, cwd: &Path, home: &Path) -> PathBuf {

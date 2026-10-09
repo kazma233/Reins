@@ -7,7 +7,7 @@ use crate::logger;
 use crate::state::skill_discovery::SkillDiscoveryState;
 
 use super::{
-    BatchGitSkillImportInput, BatchGitSkillImportResult, McpConfigType, McpTargetMutationResult,
+    BatchGitSkillImportInput, BatchGitSkillImportResult, McpTargetMutationResult,
     McpTargetPreviewResult, McpTransport, ProjectMutationInput, RawMcpConfig, RawTargetInput,
     SkillDiscoveryResultView, SkillSourceMutationInput, SkillSyncItem, SourceSyncConflict,
     SourceSyncInput, SourceSyncResult, SyncSkillOptionsResult, SyncTargetOption,
@@ -27,10 +27,8 @@ use super::{
 };
 
 #[tauri::command]
-pub(crate) async fn get_builtin_target_preset(
-    target_id: String,
-) -> std::result::Result<super::TargetConfigView, String> {
-    run_blocking(move || super::targets::builtin_target_preset_inner(&target_id)).await
+pub(crate) async fn get_target_presets() -> std::result::Result<Vec<super::TargetPreset>, String> {
+    run_blocking(|| Ok(super::targets::target_presets_inner())).await
 }
 
 #[tauri::command]
@@ -178,8 +176,6 @@ pub(crate) async fn create_workspace_target(
     enabled: bool,
     skill_dir: String,
     config_path: Option<String>,
-    mcp_config_prefix: String,
-    mcp_config_type: McpConfigType,
 ) -> std::result::Result<WorkspaceTargetMutationResult, String> {
     logger::log_info(format!("create_workspace_target target_id={target_id}"));
     let store = store.inner().clone();
@@ -191,8 +187,6 @@ pub(crate) async fn create_workspace_target(
                 enabled,
                 skill_dir,
                 config_path,
-                mcp_config_prefix,
-                mcp_config_type,
             },
         )
     })
@@ -207,8 +201,6 @@ pub(crate) async fn update_workspace_target(
     enabled: bool,
     skill_dir: String,
     config_path: Option<String>,
-    mcp_config_prefix: String,
-    mcp_config_type: McpConfigType,
 ) -> std::result::Result<WorkspaceTargetMutationResult, String> {
     logger::log_info(format!(
         "update_workspace_target current_target_id={current_target_id} target_id={target_id}"
@@ -223,8 +215,6 @@ pub(crate) async fn update_workspace_target(
                 enabled,
                 skill_dir,
                 config_path,
-                mcp_config_prefix,
-                mcp_config_type,
             },
         )
     })

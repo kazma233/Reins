@@ -30,7 +30,8 @@ describe("buildTimelineItems", () => {
 
     const tools = findItems(items, "tool") as Extract<TimelineItem, { kind: "tool" }>[];
     expect(tools).toHaveLength(1);
-    expect(tools[0].summary).toBe("运行命令 · ls -la");
+    expect(tools[0].label).toBe("运行命令");
+    expect(tools[0].summary).toBe("ls -la");
     expect(tools[0].status).toBe("ok");
     expect(tools[0].detailText).toContain("ls -la");
     expect(tools[0].detailText).toContain("total 0");
@@ -53,7 +54,8 @@ describe("buildTimelineItems", () => {
 
     const tools = findItems(items, "tool") as Extract<TimelineItem, { kind: "tool" }>[];
     expect(tools).toHaveLength(1);
-    expect(tools[0].summary).toBe("已读取 · /tmp/a.py");
+    expect(tools[0].label).toBe("已读取");
+    expect(tools[0].summary).toBe("/tmp/a.py");
     expect(tools[0].status).toBe("error");
     // user 角色消息里的 tool_result 不应生成用户气泡
     expect(findItems(items, "text")).toHaveLength(0);
@@ -93,7 +95,8 @@ describe("buildTimelineItems", () => {
     const rows = findItems(unmatched, "tool") as Extract<TimelineItem, { kind: "tool" }>[];
     expect(rows).toHaveLength(1);
     expect(rows[0].status).toBe("no-result");
-    expect(rows[0].summary).toBe("运行命令 · rm -rf /");
+    expect(rows[0].label).toBe("运行命令");
+    expect(rows[0].summary).toBe("rm -rf /");
   });
 
   it("renders pi subagent results as entries and suppresses their tool rows", () => {
@@ -300,7 +303,8 @@ describe("buildTimelineItems", () => {
 
     const tools = findItems(items, "tool") as Extract<TimelineItem, { kind: "tool" }>[];
     // 第二个 toolCall 以前完全不可见，且参数与结果都要能展开
-    expect(tools[1].summary).toBe("运行命令 · wc -l src/*");
+    expect(tools[1].label).toBe("运行命令");
+    expect(tools[1].summary).toBe("wc -l src/*");
     expect(tools[1].detailText).toContain("120 total");
   });
 
@@ -352,5 +356,115 @@ describe("buildTimelineItems", () => {
     ]);
     const tool = findItems(items, "tool")[0] as Extract<TimelineItem, { kind: "tool" }>;
     expect(itemSearchText(tool)).toContain("all tests passed");
+  });
+
+  it("turns image blocks into image items keyed by their reference", () => {
+    // 图片块正文是引用（data: URL 或外链），分组阶段不做 payload 序列化
+    const items = buildTimelineItems([
+      message("i1", "user", [
+        {
+          kind: "image",
+          text: "data:image/png;base64,iVBORw0KGgo=",
+          toolName: null,
+          toolCallId: null,
+          payload: { type: "input_image", image_url: "data:image/png;base64,iVBORw0KGgo=" }
+        },
+        { kind: "image", text: null, toolName: null, toolCallId: null, payload: { weird: true } }
+      ])
+    ]);
+
+    const images = findItems(items, "image") as Extract<TimelineItem, { kind: "image" }>[];
+    expect(images).toHaveLength(1);
+    expect(images[0].reference).toBe("data:image/png;base64,iVBORw0KGgo=");
+    // 拿不到引用的图片块仍走原文折叠行，便于排查
+    const collapsed = findItems(items, "collapsed-block") as Extract<
+      TimelineItem,
+      { kind: "collapsed-block" }
+    >[];
+    expect(collapsed).toHaveLength(1);
+    expect(collapsed[0].text).toContain("weird");
+  });
+
+  it("labels injected context blocks in Chinese instead of the block name", () => {
+    // Codex 注入的 AGENTS.md 指令 + environment_context：清洗后没有对话内容，
+    // 但后端保留成 context_injection 块，行首不能直接显示协议块名
+    const items = buildTimelineItems([
+      message("c1", "user", [
+        {
+          kind: "context_injection",
+          text: "# AGENTS.md instructions for /tmp/workspace\n\n<environment_context>…",
+          toolName: null,
+          toolCallId: null,
+          payload: null
+        }
+      ])
+    ]);
+
+    const collapsed = findItems(items, "collapsed-block")[0] as Extract<
+      TimelineItem,
+      { kind: "collapsed-block" }
+    >;
+    expect(collapsed.label).toBe("上下文");
+    expect(itemSearchText(collapsed)).toContain("agents.md instructions");
+  });
+
+  it("labels pi system prompt blocks in Chinese", () => {
+    const items = buildTimelineItems([
+      message("s1", "system", [
+        {
+          kind: "system_prompt",
+          text: "3 段：cwd、preamble、rules\n\n## preamble\nYou are an expert coding assistant.",
+          toolName: null,
+          toolCallId: null,
+          payload: null
+        }
+      ])
+    ]);
+
+    const collapsed = findItems(items, "collapsed-block")[0] as Extract<
+      TimelineItem,
+      { kind: "collapsed-block" }
+    >;
+    expect(collapsed.label).toBe("系统提示");
+    expect(itemSearchText(collapsed)).toContain("expert coding assistant");
+  });
+
+  it("labels claude local command blocks in Chinese", () => {
+    const items = buildTimelineItems([
+      message("lc1", "user", [
+        { kind: "local_command", text: "/exit", toolName: null, toolCallId: null, payload: null },
+        { kind: "local_command_output", text: "See ya!", toolName: null, toolCallId: null, payload: null }
+      ])
+    ]);
+
+    const collapsed = findItems(items, "collapsed-block") as Extract<
+      TimelineItem,
+      { kind: "collapsed-block" }
+    >[];
+    expect(collapsed.map((item) => item.label)).toEqual(["命令", "命令输出"]);
+    expect(collapsed.map((item) => item.text)).toEqual(["/exit", "See ya!"]);
+  });
+
+  it("renders a content-less message that carries an error as an error row", () => {
+    // Pi 的 stopReason=error 消息：正文为空、只有 errorMessage，
+    // 不能再退化成一行 label 为 empty_message 的原始 JSON 折叠行
+    const items = buildTimelineItems([
+      message("e1", "assistant", [
+        {
+          kind: "message_error",
+          text: "This operation was aborted",
+          toolName: null,
+          toolCallId: null,
+          isError: true,
+          payload: { role: "assistant", model: "deepseek-flash" }
+        }
+      ])
+    ]);
+
+    const error = items[0] as Extract<TimelineItem, { kind: "message-error" }>;
+    expect(items.map((item) => item.kind)).toEqual(["message-error"]);
+    expect(error.text).toBe("This operation was aborted");
+    expect(error.detailText).toContain("deepseek-flash");
+    expect(itemSearchText(error)).toContain("operation was aborted");
   });
 });

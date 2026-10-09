@@ -1,18 +1,16 @@
 .app-tooltip {
-  position: relative;
-  z-index: 1;
   display: inline-flex;
   align-items: center;
 }
 
-/* 悬停即显：原生 title 的提示延迟由浏览器控制（约一秒），无法满足即时提示。
-   z-index 让气泡盖住后续的兄弟元素。 */
+/* 气泡挂在 body 上、fixed 定位（位置由 computeTooltipOffset 算好写进 style）：
+   卡片与弹窗都有 overflow: hidden，就地渲染的气泡会被裁掉。
+   悬停即显：原生 title 的提示延迟由浏览器控制（约一秒），无法满足即时提示。 */
 .app-tooltip__bubble {
-  position: absolute;
-  top: calc(100% + 6px);
-  left: 0;
+  position: fixed;
+  z-index: var(--z-tooltip);
   width: max-content;
-  max-width: 320px;
+  max-width: min(320px, calc(100vw - 16px));
   padding: 6px 8px;
   border-radius: var(--radius-sm);
   background: var(--color-surface-dark);
@@ -30,8 +28,7 @@
     visibility 0.08s ease;
 }
 
-.app-tooltip:hover .app-tooltip__bubble,
-.app-tooltip:focus-within .app-tooltip__bubble {
+.app-tooltip__bubble--visible {
   opacity: 1;
   visibility: visible;
 }

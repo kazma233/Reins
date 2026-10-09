@@ -122,7 +122,9 @@ src-tauri/src/providers/
     codex.rs / claude.rs / opencode.rs / pi.rs / grokbuild.rs
 ```
 
-命令：`get_providers_state`、Provider CRUD（含明文 Key 字段）、`fetch_provider_models`、`fetch_modelsdev_catalog`、`apply_provider_to_app`、`remove_provider_from_app`。
+命令：`get_providers_state`、Provider CRUD（含明文 Key 字段）、`fetch_provider_models_direct`、`fetch_modelsdev_catalog`、`apply_provider_to_app`、`remove_provider_from_app`。
+
+> 注：原计划里的 `fetch_provider_models`（按已保存平台 ID 拉取）已删除。拉取统一走 `fetch_provider_models_direct`，用表单当前值（含未保存的改动），不再读 `providers.yaml`。
 
 新增依赖：`reqwest`（模型/目录拉取，blocking + rustls）。
 

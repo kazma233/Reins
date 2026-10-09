@@ -31,6 +31,11 @@
   font-size: var(--font-size-md);
 }
 
+/* 字段错误跟在 label 同一行：出现时不会把下方内容顶下去 */
+.manager-field__error {
+  margin-left: 6px;
+}
+
 .manager-field span {
   color: var(--color-body);
   font-size: var(--font-size-md);
@@ -60,6 +65,12 @@
 
 .manager-field input {
   min-height: var(--control-height);
+}
+
+.manager-field input.is-readonly {
+  background: var(--color-surface-soft);
+  color: var(--color-text-muted);
+  cursor: default;
 }
 
 .manager-textarea {
@@ -358,6 +369,46 @@
   color: var(--color-body);
   font-size: var(--font-size-md);
   line-height: 1.5;
+}
+
+/* 操作行两分布局：提示文案占左侧，两个按钮整体贴右。
+   用 margin-right: auto 把文案钉在左端（而不是靠 margin-left 挤到按钮旁边），
+   两个 auto margin 一起用会让剩余空间平分、把文案推到中间。
+   操作行 nowrap：结果再长也只在自己区域内换行/滚动，不会把按钮挤到下一行。 */
+.manager-sync-dialog .dialog-actions {
+  align-items: center;
+  flex-wrap: nowrap;
+}
+
+/* 破坏性入口与主按钮成组，不再靠左，也不在两者之间留额外空隙 */
+.manager-sync-dialog .dialog-actions .manager-sync-dialog__remove {
+  margin-right: 0;
+}
+
+.manager-sync-result {
+  flex: 0 1 auto;
+  min-width: 0;
+  margin-right: auto;
+  max-width: min(680px, 100%);
+  max-height: 3.6em;
+  overflow: auto;
+  color: var(--color-body);
+  font-size: var(--font-size-md);
+  line-height: 1.45;
+  white-space: pre-line;
+  overflow-wrap: anywhere;
+  text-align: left;
+}
+
+.manager-sync-result--failed {
+  color: var(--color-danger);
+}
+
+/* 窄窗口下弹窗宽度收缩，结果先收窄自己，避免两个按钮被挤出操作行 */
+@media (max-width: 1000px) {
+  .manager-sync-result {
+    max-width: min(420px, 100%);
+  }
 }
 
 .manager-skill-path-label {
@@ -867,6 +918,67 @@
 /* 破坏性操作靠左，与右下角的“取消/开始同步”拉开距离，避免误点 */
 .manager-sync-dialog__remove {
   margin-right: auto;
+}
+
+/* 同步确认里的目标清单：全局 / 项目 两段，标签与内容紧靠 */
+.manager-sync-dialog__target-groups {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.manager-sync-dialog__target-section {
+  display: grid;
+  grid-template-columns: 44px minmax(0, 1fr);
+  gap: 8px;
+  align-items: baseline;
+}
+
+.manager-sync-dialog__target-section-label {
+  color: var(--color-muted);
+  font-size: var(--font-size-xs);
+  font-weight: 600;
+}
+
+.manager-sync-dialog__target-section-body {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.manager-sync-dialog__target-row {
+  display: flex;
+  align-items: baseline;
+  gap: 0;
+  min-width: 0;
+}
+
+.manager-sync-dialog__target-row-label {
+  flex: 0 0 auto;
+  color: var(--color-ink);
+  font-size: var(--font-size-md);
+  font-weight: 600;
+}
+
+.manager-sync-dialog__target-row-list {
+  min-width: 0;
+  color: var(--color-ink);
+  font-size: var(--font-size-md);
+}
+
+.manager-sync-dialog__target-list {
+  margin: 0;
+  color: var(--color-ink);
+  font-size: var(--font-size-md);
+  line-height: 1.5;
+}
+
+.manager-sync-dialog__target-empty {
+  margin: 0;
+  color: var(--color-muted);
+  font-size: var(--font-size-md);
+  line-height: 1.5;
 }
 
 .manager-sync-dialog .manager-import-skill-list {

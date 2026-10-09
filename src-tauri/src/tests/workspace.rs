@@ -1,7 +1,7 @@
 use super::*;
 use crate::support::fs::pi_agent_dir_path;
 use crate::test_support::{TestDir, TestEnvGuard};
-use crate::workspace::targets::builtin_target_preset_inner;
+use crate::workspace::targets::target_presets_inner;
 use std::time::{Duration, UNIX_EPOCH};
 
 #[path = "workspace_grokbuild.rs"]
@@ -576,6 +576,8 @@ fn partition_excluded_returns_skills_not_kept() {
 
 #[test]
 fn default_config_template_parses_with_builtin_targets() -> Result<()> {
+    // 读 ambient PI env 断言默认值,必须持全局锁防并行 pi 测试翻转 env。
+    let _guard = TestEnvGuard::lock();
     let config_path = PathBuf::from("/tmp/reins-default-template-test.yaml");
     let config = parse_manager_config(&default_config_template(), &config_path)?;
 
@@ -659,6 +661,8 @@ fn default_config_template_parses_with_builtin_targets() -> Result<()> {
 
 #[test]
 fn global_pi_target_without_mcp_section_falls_back_to_preset() -> Result<()> {
+    // 同上:两次读 PI env 的断言要防并行翻转。
+    let _guard = TestEnvGuard::lock();
     let config_path = PathBuf::from("/tmp/reins-pi-target-parse-test.yaml");
     let raw = r#"targets:
   pi:
@@ -685,12 +689,382 @@ fn global_pi_target_without_mcp_section_falls_back_to_preset() -> Result<()> {
 }
 
 #[test]
+fn target_presets_cover_builtin_agents_with_env_resolved_paths() -> Result<()> {
+    // 预设路径在派生时读取 GROK_HOME / PI_CODING_AGENT_DIR，断言需持锁防并行翻转。
+    let _guard = TestEnvGuard::lock();
+    let grok_root = TestDir::new("presets-grok-home")?;
+    let pi_root = TestDir::new("presets-pi-agent-dir")?;
+    unsafe { std::env::set_var("GROK_HOME", grok_root.path()) };
+    unsafe { std::env::set_var("PI_CODING_AGENT_DIR", pi_root.path()) };
+
+    let presets = target_presets_inner();
+    assert_eq!(presets.len(), 7, "七个内置工具各一条预设");
+    let by_id = |id: &str| {
+        presets
+            .iter()
+            .find(|preset| preset.target_id.as_str() == id)
+            .unwrap_or_else(|| panic!("缺少 {id} 预设"))
+    };
+
+    let home = home_dir().ok_or_else(|| anyhow!("测试环境缺少 HOME"))?;
+
+    let codex = by_id("codex");
+    assert_eq!(codex.label, "Codex");
+    assert!(codex.enabled);
+    assert_eq!(
+        codex.skill_dir,
+        home.join(".agents/skills").display().to_string()
+    );
+    assert_eq!(
+        codex.config_path.as_deref(),
+        Some(
+            home.join(".codex/config.toml")
+                .display()
+                .to_string()
+                .as_str()
+        )
+    );
+    assert_eq!(codex.mcp_config_prefix, "mcp_servers");
+
+    let claude = by_id("claude");
+    assert_eq!(claude.label, "Claude Code");
+    assert_eq!(
+        claude.skill_dir,
+        home.join(".claude/skills").display().to_string()
+    );
+    assert_eq!(
+        claude.config_path.as_deref(),
+        Some(home.join(".claude.json").display().to_string().as_str())
+    );
+    assert_eq!(claude.mcp_config_prefix, "mcpServers");
+
+    let opencode = by_id("opencode");
+    assert_eq!(opencode.label, "OpenCode");
+    assert_eq!(
+        opencode.skill_dir,
+        home.join(".config/opencode/skills").display().to_string()
+    );
+    assert_eq!(
+        opencode.config_path.as_deref(),
+        Some(
+            home.join(".config/opencode/opencode.json")
+                .display()
+                .to_string()
+                .as_str()
+        )
+    );
+    assert_eq!(opencode.mcp_config_prefix, "mcp.servers");
+
+    let zcode = by_id("zcode");
+    assert_eq!(zcode.label, "ZCode");
+    assert_eq!(
+        zcode.skill_dir,
+        home.join(".zcode/skills").display().to_string()
+    );
+    assert_eq!(
+        zcode.config_path.as_deref(),
+        Some(
+            home.join(".zcode/cli/config.json")
+                .display()
+                .to_string()
+                .as_str()
+        )
+    );
+    assert_eq!(zcode.mcp_config_prefix, "mcp.servers");
+
+    // grokbuild / pi 的路径跟随 env 重定向：这正是前端静态预设无法预填、
+    // 需要后端下发的原因。
+    let grokbuild = by_id("grokbuild");
+    assert_eq!(grokbuild.label, "Grok Build");
+    assert_eq!(
+        grokbuild.skill_dir,
+        grok_root.path().join("skills").display().to_string()
+    );
+    assert_eq!(
+        grokbuild.config_path.as_deref(),
+        Some(
+            grok_root
+                .path()
+                .join("config.toml")
+                .display()
+                .to_string()
+                .as_str()
+        )
+    );
+    assert_eq!(grokbuild.mcp_config_prefix, "mcp_servers");
+
+    let pi = by_id("pi");
+    assert_eq!(pi.label, "Pi");
+    assert_eq!(
+        pi.skill_dir,
+        pi_root.path().join("skills").display().to_string()
+    );
+    assert_eq!(
+        pi.config_path.as_deref(),
+        Some(
+            pi_root
+                .path()
+                .join("mcp.json")
+                .display()
+                .to_string()
+                .as_str()
+        )
+    );
+    assert_eq!(pi.mcp_config_prefix, "mcpServers");
+
+    // dsh 按现状 defaults：cordis patch 路径 + 空 prefix。
+    let dsh = by_id("dsh");
+    assert_eq!(dsh.label, "DeepSeek Harness");
+    assert_eq!(
+        dsh.skill_dir,
+        home.join(".dsh/skills").display().to_string()
+    );
+    assert_eq!(
+        dsh.config_path.as_deref(),
+        Some(
+            home.join(".dsh/cordis.patch.yml")
+                .display()
+                .to_string()
+                .as_str()
+        )
+    );
+    assert_eq!(dsh.mcp_config_prefix, "");
+
+    Ok(())
+}
+
+// 编辑页展示的格式说明是面向用户的契约文案，逐字锁定，改动须有意为之。
+#[test]
+fn target_view_carries_mcp_format_description_per_config_type() {
+    let mut target = resolved_target("codex", PathBuf::from("/tmp/reins-skills"));
+    assert_eq!(
+        target_to_view(&target).mcp_format_description,
+        "通用 MCP 条目（标准 command/args/env），按配置文件扩展名写入 JSON 或 TOML 的 mcp 节点下。"
+    );
+
+    target.mcp_config_type = McpConfigType::OpenCode;
+    assert_eq!(
+        target_to_view(&target).mcp_format_description,
+        "OpenCode 专属格式（JSON，带 $schema 头，command 为数组、environment 键），写入 mcp.servers 根。"
+    );
+
+    target.mcp_config_type = McpConfigType::GrokBuild;
+    assert_eq!(
+        target_to_view(&target).mcp_format_description,
+        "Grok Build TOML 格式（远端类型用 headers 携带自定义头），写入 config.toml。"
+    );
+
+    target.mcp_config_type = McpConfigType::Dsh;
+    assert_eq!(
+        target_to_view(&target).mcp_format_description,
+        "DeepSeek Harness 的 Cordis patch YAML（insert/remove 操作列表，按 serverName 定位，无 configPrefix）。"
+    );
+}
+
+// 编辑页展示的格式示例与 desired 条目构造函数的产物形状逐字锁定，
+// 键名或结构调整时必须同步改示例并有意为之。
+#[test]
+fn target_view_carries_mcp_format_example_per_config_type() {
+    // 示例由 writer 的 desired 构造 + serde 序列化生成(dsh 条目的 cwd 读
+    // home),需与并行 env 测试互斥。
+    let _guard = TestEnvGuard::lock();
+    let home = home_dir().expect("测试环境缺少 HOME");
+
+    let labels = |view: &super::TargetConfigView| {
+        view.mcp_format_examples
+            .iter()
+            .map(|example| example.label.clone())
+            .collect::<Vec<_>>()
+    };
+    let body =
+        |view: &super::TargetConfigView, index: usize| view.mcp_format_examples[index].body.clone();
+
+    // codex:common 形态,本地与远端各一段。
+    let mut target = resolved_target("codex", PathBuf::from("/tmp/reins-skills"));
+    target.mcp_config_prefix = "mcpServers".to_string();
+    let view = target_to_view(&target);
+    assert_eq!(
+        labels(&view),
+        ["本地命令（stdio）", "远端地址（http / sse）"]
+    );
+    assert_eq!(
+        body(&view, 0),
+        r#"{
+  "mcpServers": {
+    "my-server": {
+      "args": [
+        "server.js"
+      ],
+      "command": "node",
+      "env": {
+        "KEY": "value"
+      },
+      "type": "stdio"
+    }
+  }
+}"#
+    );
+    assert_eq!(
+        body(&view, 1),
+        r#"{
+  "mcpServers": {
+    "my-server": {
+      "headers": {
+        "X-Key": "value"
+      },
+      "type": "http",
+      "url": "https://example.com/mcp"
+    }
+  }
+}"#
+    );
+
+    // zcode 的点分 prefix 结构化嵌套为 JSON 层级。
+    target.mcp_config_prefix = "mcp.servers".to_string();
+    assert_eq!(
+        body(&target_to_view(&target), 0),
+        r#"{
+  "mcp": {
+    "servers": {
+      "my-server": {
+        "args": [
+          "server.js"
+        ],
+        "command": "node",
+        "env": {
+          "KEY": "value"
+        },
+        "type": "stdio"
+      }
+    }
+  }
+}"#
+    );
+
+    // OpenCode:专属形态(local/remote,command 数组与 environment 键)。
+    target.mcp_config_type = McpConfigType::OpenCode;
+    let view = target_to_view(&target);
+    assert_eq!(
+        labels(&view),
+        ["本地命令（stdio）", "远端地址（http / sse）"]
+    );
+    assert_eq!(
+        body(&view, 0),
+        r#"{
+  "mcp": {
+    "servers": {
+      "my-server": {
+        "command": [
+          "node",
+          "server.js"
+        ],
+        "enabled": true,
+        "environment": {
+          "KEY": "value"
+        },
+        "type": "local"
+      }
+    }
+  }
+}"#
+    );
+    assert_eq!(
+        body(&view, 1),
+        r#"{
+  "mcp": {
+    "servers": {
+      "my-server": {
+        "enabled": true,
+        "headers": {
+          "X-Key": "value"
+        },
+        "type": "remote",
+        "url": "https://example.com/mcp"
+      }
+    }
+  }
+}"#
+    );
+
+    // GrokBuild:TOML 表头,本地与远端各一段。
+    target.mcp_config_type = McpConfigType::GrokBuild;
+    target.mcp_config_prefix = "mcp_servers".to_string();
+    let view = target_to_view(&target);
+    assert_eq!(
+        body(&view, 0),
+        r#"[mcp_servers.my-server]
+args = ["server.js"]
+command = "node"
+enabled = true
+
+[mcp_servers.my-server.env]
+KEY = "value"
+"#
+    );
+    assert_eq!(
+        body(&view, 1),
+        r#"[mcp_servers.my-server]
+enabled = true
+url = "https://example.com/mcp"
+
+[mcp_servers.my-server.headers]
+X-Key = "value"
+"#
+    );
+
+    // DSH:patch YAML,无 prefix 概念，stdio 与 streamable-http 各一段。
+    target.mcp_config_type = McpConfigType::Dsh;
+    let view = target_to_view(&target);
+    assert_eq!(
+        labels(&view),
+        ["本地命令（stdio）", "远端地址（http / sse）"]
+    );
+    assert_eq!(
+        body(&view, 1),
+        r#"- insert:
+  - id: reins-mcp-my-server
+    name: '@deepseek-ai/dsh-mcp-client'
+    config:
+      transport: streamable-http
+      serverName: my-server
+      url: https://example.com/mcp
+      headers:
+        X-Key: value
+"#
+    );
+    assert_eq!(
+        body(&view, 0),
+        format!(
+            r#"- insert:
+  - id: reins-mcp-my-server
+    name: '@deepseek-ai/dsh-mcp-client'
+    config:
+      serverName: my-server
+      transport: stdio
+      command: node
+      args:
+      - server.js
+      env:
+        KEY: value
+      cwd: {}
+      toolCallTimeoutMs: 60000
+      failOnStartupError: false
+"#,
+            home.display()
+        )
+    );
+}
+
+#[test]
 fn pi_preset_and_template_follow_pi_coding_agent_dir() -> Result<()> {
     let _guard = TestEnvGuard::lock();
     let redirected = PathBuf::from("/tmp/reins-pi-agent-dir-redirect");
     unsafe { std::env::set_var("PI_CODING_AGENT_DIR", &redirected) };
 
-    let preset = builtin_target_preset_inner("pi")?;
+    let preset = target_presets_inner()
+        .into_iter()
+        .find(|preset| preset.target_id.as_str() == "pi")
+        .ok_or_else(|| anyhow!("缺少 pi 预设"))?;
     assert_eq!(
         preset.config_path.as_deref(),
         Some(redirected.join("mcp.json").display().to_string().as_str())
@@ -731,12 +1105,14 @@ fn pi_mcp_apply_read_remove_roundtrip() -> Result<()> {
     let entry: serde_json::Value = serde_json::from_str(&preview.content)?;
     assert_eq!(entry["type"], "stdio");
     assert_eq!(entry["command"], "npx");
-    assert_eq!(entry["args"], serde_json::json!(["-y", "server-filesystem"]));
+    assert_eq!(
+        entry["args"],
+        serde_json::json!(["-y", "server-filesystem"])
+    );
 
     apply_mcp_to_target_inner(&store, "fs-server", "pi")?;
     apply_mcp_to_target_inner(&store, "fs-server", "pi")?;
-    let written: serde_json::Value =
-        serde_json::from_str(&fs::read_to_string(&pi_mcp)?)?;
+    let written: serde_json::Value = serde_json::from_str(&fs::read_to_string(&pi_mcp)?)?;
     assert_eq!(written["mcpServers"]["fs-server"]["command"], "npx");
 
     remove_mcp_from_target_inner(&store, "fs-server", "pi")?;

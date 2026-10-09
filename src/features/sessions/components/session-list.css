@@ -193,6 +193,24 @@
   color: var(--color-muted);
 }
 
+/* 加载更多失败：错误文案常驻列表底部，重试入口就地给出。 */
+.session-list-error {
+  color: var(--color-danger);
+}
+
+.session-list-error-retry {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--color-primary);
+  font-size: var(--font-size-sm);
+  cursor: pointer;
+}
+
+.session-list-error-retry:hover {
+  color: var(--color-primary-active);
+}
+
 .session-list-empty {
   width: 100%;
   margin-right: -6px;

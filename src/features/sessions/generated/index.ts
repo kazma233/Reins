@@ -2,6 +2,8 @@
 // the generated contract types for `export *` consumers. Extend it when a new
 // #[ts(export)] type is added in src-tauri/src/session/model.rs.
 export * from "./ContentBlock";
+export * from "./DeletePlan";
+export * from "./DeletePlanAction";
 export * from "./DeleteSessionResult";
 export * from "./SessionAgent";
 export * from "./SessionEvent";

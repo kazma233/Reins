@@ -23,14 +23,23 @@ defineEmits<{
   click: [serverName: string, projectId: string];
 }>();
 
+// dsh 的项目 target 按设计没有 MCP 配置文件路径(分发走全局 Cordis patch)。
+// 它不参与项目的 MCP 安装状态统计,否则项目按钮会永远处于黄色警告态。
+const MCP_LESS_AGENT_IDS = new Set<string>(["dsh"]);
+
 const projectTargetItems = computed(() => {
   const prefix = `${props.projectEntry.id}:`;
-  return (props.inspection?.targets ?? []).filter((target) =>
-    target.targetId.startsWith(prefix),
-  );
+  return (props.inspection?.targets ?? []).filter((target) => {
+    if (!target.targetId.startsWith(prefix)) return false;
+    return !MCP_LESS_AGENT_IDS.has(target.targetId.slice(prefix.length));
+  });
 });
 
-const enabledAgentCount = computed(() => props.projectEntry.agents.length);
+const enabledAgentCount = computed(
+  () =>
+    props.projectEntry.agents.filter((agent) => !MCP_LESS_AGENT_IDS.has(agent.id))
+      .length,
+);
 const installedCount = computed(
   () => projectTargetItems.value.filter((item) => item.state === "present").length,
 );
@@ -58,6 +67,7 @@ const detail = computed(() =>
 
 <template>
   <button
+    v-if="enabledAgentCount > 0"
     :class="joinClasses('secondary-button', 'manager-target-button', buttonStateClass)"
     :disabled="loading"
     :title="detail || `点击选择 ${projectEntry.id} 项目内的 agent`"

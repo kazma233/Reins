@@ -6,30 +6,27 @@ import {
   type SkillSourceEditDialogState,
 } from "../model";
 import type { SkillSourceConfigView } from "../types";
-import { extractErrorMessage } from "@shared/lib/errors";
 import { useSkillPreview } from "./useSkillPreview";
-import { useWorkspaceNotice } from "./useWorkspaceNotice";
 import { useWorkspaceAction } from "./useWorkspaceAction";
 
 export function useSkillSourceEdit() {
-  const { showNotice, clearNotice } = useWorkspaceNotice();
   const { runWorkspaceAction } = useWorkspaceAction();
 
   const skillSourceEditDialog = reactive<SkillSourceEditDialogState>(createSkillSourceEditDialogState());
   const skillSourceDeleteDialog = reactive<{
     open: boolean;
     loading: boolean;
+    error: string | null;
     source: SkillSourceConfigView | null;
   }>({
     open: false,
     loading: false,
+    error: null,
     source: null,
   });
 
-  const { discoverAndFilterSkills, invalidatePreviewRequests, setPreviewLoading } = useSkillPreview(
-    skillSourceEditDialog,
-    "刷新导入来源预览失败。",
-  );
+  const { discoverAndFilterSkills, invalidatePreviewRequests, setPreviewLoading, failPreview } =
+    useSkillPreview(skillSourceEditDialog);
 
   function openSkillSourceEditDialog(source: SkillSourceConfigView) {
     const baseDraft: Pick<SkillSourceEditDialogState, "sourceType" | "repo" | "rootPath" | "ref"> =
@@ -59,6 +56,7 @@ export function useSkillSourceEdit() {
     skillSourceEditDialog.preview.includeNamePatternsText = source.includeNamePatterns.join(", ");
     skillSourceEditDialog.preview.includePathPatternsText = source.includePathPatterns.join(", ");
     skillSourceEditDialog.preview.previewLoading = false;
+    skillSourceEditDialog.preview.previewError = null;
 
     // Auto-refresh so the user immediately sees what the current include
     // filters resolve to (including the excluded list), without having to
@@ -73,8 +71,9 @@ export function useSkillSourceEdit() {
 
   async function handleRefreshSkillSourceEditPreview() {
     const { preview, sourceType, repo, rootPath, ref } = skillSourceEditDialog;
+    const refreshErrorText = "刷新导入来源预览失败。";
     setPreviewLoading(true);
-    clearNotice();
+    preview.previewError = null;
 
     try {
       await discoverAndFilterSkills(
@@ -83,7 +82,7 @@ export function useSkillSourceEdit() {
         preview.includePathPatternsText,
       );
     } catch (error) {
-      showNotice(extractErrorMessage(error, "刷新导入来源预览失败。"), "error");
+      failPreview(error, refreshErrorText);
     }
   }
 
@@ -100,9 +99,12 @@ export function useSkillSourceEdit() {
           includeNamePatterns: parseCommaSeparatedList(skillSourceEditDialog.preview.includeNamePatternsText),
           includePathPatterns: parseCommaSeparatedList(skillSourceEditDialog.preview.includePathPatternsText),
         }),
-      success: "已更新导入来源。",
+      reload: true,
       error: "更新导入来源失败。",
-      after: () => closeSkillSourceEditDialog(),
+      onSuccess: () => closeSkillSourceEditDialog(),
+      onError: (message) => {
+        skillSourceEditDialog.preview.previewError = message;
+      },
     });
     skillSourceEditDialog.loading = false;
   }
@@ -110,12 +112,14 @@ export function useSkillSourceEdit() {
   function openSkillSourceDeleteDialog(source: SkillSourceConfigView) {
     skillSourceDeleteDialog.open = true;
     skillSourceDeleteDialog.loading = false;
+    skillSourceDeleteDialog.error = null;
     skillSourceDeleteDialog.source = source;
   }
 
   function closeSkillSourceDeleteDialog() {
     skillSourceDeleteDialog.open = false;
     skillSourceDeleteDialog.loading = false;
+    skillSourceDeleteDialog.error = null;
     skillSourceDeleteDialog.source = null;
   }
 
@@ -129,9 +133,12 @@ export function useSkillSourceEdit() {
     skillSourceDeleteDialog.loading = true;
     await runWorkspaceAction({
       action: () => deleteSkillSource(source.id),
-      success: "已删除来源。",
+      reload: true,
       error: `删除来源 ${source.label} 失败。`,
-      after: () => closeSkillSourceDeleteDialog(),
+      onSuccess: () => closeSkillSourceDeleteDialog(),
+      onError: (message) => {
+        skillSourceDeleteDialog.error = message;
+      },
     });
     skillSourceDeleteDialog.loading = false;
   }

@@ -1,9 +1,12 @@
 use super::*;
-use crate::workspace::targets::builtin_target_preset_inner;
+use crate::test_support::TestEnvGuard;
+use crate::workspace::targets::target_presets_inner;
 use serde_json::json;
 
 #[test]
 fn grokbuild_defaults_template_and_preset_agree() -> Result<()> {
+    // 读 ambient GROK_HOME/HOME 断言默认值,必须持全局锁防并行测试翻转 env。
+    let _guard = TestEnvGuard::lock();
     let path = PathBuf::from("/tmp/reins-grok-defaults.yaml");
     let config = parse_manager_config(&default_config_template(), &path)?;
     let target = resolve_target_from_id(&config, "grokbuild").unwrap();
@@ -14,12 +17,16 @@ fn grokbuild_defaults_template_and_preset_agree() -> Result<()> {
     assert_eq!(target.config_path, Some(root.join("config.toml")));
     assert_eq!(target.mcp_config_prefix, "mcp_servers");
     assert_eq!(target.mcp_config_type, McpConfigType::GrokBuild);
-    let preset = builtin_target_preset_inner("grokbuild")?;
+    // 预设列表是封闭集合（七个内置工具），不存在“未知内置 target”分支。
+    let preset = target_presets_inner()
+        .into_iter()
+        .find(|preset| preset.target_id.as_str() == "grokbuild")
+        .ok_or_else(|| anyhow!("缺少 grokbuild 预设"))?;
+    assert_eq!(preset.skill_dir, root.join("skills").display().to_string());
     assert_eq!(
-        serde_json::to_value(preset)?,
-        serde_json::to_value(target_to_view(target))?
+        preset.config_path.as_deref(),
+        Some(root.join("config.toml").display().to_string().as_str())
     );
-    assert!(builtin_target_preset_inner("unknown").is_err());
     assert_eq!(
         serde_json::to_string(&McpConfigType::GrokBuild)?,
         "\"grokbuild\""

@@ -284,9 +284,9 @@ fn pi_active_branch_and_events_follow_the_last_entry_chain() -> Result<()> {
     write_jsonl(&path, &lines)?;
 
     let reader = session::reader(SourceApp::Pi);
-    let summary = reader.parse_summary(&path)?;
+    let summary = reader.parse_summary("pi-tree")?;
     assert_eq!(summary.title, "Named Pi session");
-    let detail = read_detail(reader, &path)?;
+    let detail = read_detail(reader, "pi-tree")?;
     let texts = detail
         .messages
         .iter()
@@ -320,17 +320,17 @@ fn pi_active_branch_and_events_follow_the_last_entry_chain() -> Result<()> {
             .iter()
             .any(|event| event.kind == "parent_session")
     );
-    let overview = reader.parse_overview(&path)?;
+    let overview = reader.parse_overview("pi-tree")?;
     assert_eq!(overview.message_count, Some(detail.messages.len()));
     assert_eq!(overview.event_count, Some(detail.events.len()));
     assert_eq!(overview.agents.len(), 1);
-    let message_page = reader.parse_messages_page(&path, 1, 2)?;
+    let message_page = reader.parse_messages_page("pi-tree", 1, 2)?;
     assert_eq!(message_page.total_count, detail.messages.len());
     assert_eq!(message_page.offset, 1);
     assert_eq!(message_page.messages.len(), 2);
     // compaction 展开后链上有 4 条消息(含 compactionSummary 与 retainedTail),还有第 3 页
     assert_eq!(message_page.next_offset, Some(3));
-    let event_page = reader.parse_events_page(&path, 1, 3)?;
+    let event_page = reader.parse_events_page("pi-tree", 1, 3)?;
     assert_eq!(event_page.total_count, detail.events.len());
     assert_eq!(event_page.offset, 1);
     assert_eq!(event_page.events.len(), 3);
@@ -423,7 +423,7 @@ fn pi_parses_subagent_tool_result_into_structured_run_block() -> Result<()> {
     write_jsonl(&path, &lines)?;
 
     let reader = session::reader(SourceApp::Pi);
-    let detail = read_detail(reader, &path)?;
+    let detail = read_detail(reader, "pi-subagent")?;
     assert_eq!(detail.messages.len(), 3);
 
     // subagent toolResult 解析为单个结构化块,报告文本保留。
@@ -484,12 +484,16 @@ fn pi_parses_subagent_tool_result_into_structured_run_block() -> Result<()> {
         }),
     ));
     write_jsonl(&normal_path, &normal_lines)?;
-    let normal_detail = read_detail(reader, &normal_path)?;
+    let normal_detail = read_detail(reader, "pi-normal-tool")?;
     assert_eq!(normal_detail.messages[0].blocks[0].kind, "tool_result");
 
     // Pi 的 subagent 内嵌在 toolResult.details 里,没有子会话可查:
     // 必须报错而不是返回空,否则调用方无法区分"不支持"与"空子会话"
-    assert!(reader.parse_agent_messages(&path, "any-agent-id").is_err());
+    assert!(
+        reader
+            .parse_agent_messages("pi-subagent", "any-agent-id")
+            .is_err()
+    );
     Ok(())
 }
 
@@ -577,7 +581,7 @@ fn pi_preserves_tool_custom_unknown_and_broken_chain_content() -> Result<()> {
     ];
     write_jsonl(&path, &entries)?;
 
-    let detail = read_detail(session::reader(SourceApp::Pi), &path)?;
+    let detail = read_detail(session::reader(SourceApp::Pi), "pi-roles")?;
     assert!(detail.messages.iter().any(|message| {
         message.id == "a"
             && message
@@ -668,7 +672,7 @@ fn pi_skips_zero_width_text_placeholders_without_losing_tool_context() -> Result
         ],
     )?;
 
-    let detail = read_detail(session::reader(SourceApp::Pi), &path)?;
+    let detail = read_detail(session::reader(SourceApp::Pi), "pi-zero-width-placeholder")?;
     let message = detail
         .messages
         .iter()
@@ -723,7 +727,7 @@ fn pi_preserves_message_entries_without_message_payloads() -> Result<()> {
         ],
     )?;
 
-    let detail = read_detail(session::reader(SourceApp::Pi), &path)?;
+    let detail = read_detail(session::reader(SourceApp::Pi), "pi-missing-message")?;
     assert_eq!(detail.messages.len(), 1);
     assert_eq!(detail.messages[0].role, "unknown");
     assert_eq!(detail.messages[0].blocks[0].kind, "unsupported_content");
@@ -768,7 +772,7 @@ fn pi_cycle_at_leaf_stops_without_looping() -> Result<()> {
         ],
     )?;
 
-    let detail = read_detail(session::reader(SourceApp::Pi), &path)?;
+    let detail = read_detail(session::reader(SourceApp::Pi), "pi-cycle")?;
     assert_eq!(detail.messages.len(), 2);
     assert_eq!(detail.messages[0].id, "cycle-a");
     assert_eq!(detail.messages[1].id, "cycle-b");
@@ -859,7 +863,6 @@ fn pi_delete_in_configured_dir_keeps_the_session_root() -> Result<()> {
         &state::session_index::SessionIndexState::default(),
         SourceApp::Pi,
         "pi-delete-custom",
-        Some(path.to_string_lossy().as_ref()),
     )?;
     assert!(!path.exists());
     // 用户显式配置的目录即使被清空也不能被顺手删除
@@ -903,7 +906,7 @@ fn pi_parses_v1_linear_session_with_full_history() -> Result<()> {
     )?;
 
     let reader = session::reader(SourceApp::Pi);
-    let detail = read_detail(reader, &path)?;
+    let detail = read_detail(reader, "pi-v1")?;
     let texts = detail
         .messages
         .iter()
@@ -938,7 +941,7 @@ fn pi_parses_v1_linear_session_with_full_history() -> Result<()> {
     assert!(!kept_id.is_empty());
 
     // 标题取自第一条用户消息,而不是退化成 session id
-    let summary = reader.parse_summary(&path)?;
+    let summary = reader.parse_summary("pi-v1")?;
     assert_eq!(summary.title, "v1 first question");
     Ok(())
 }
@@ -992,7 +995,7 @@ fn pi_restores_compaction_retained_tail_as_messages() -> Result<()> {
         ],
     )?;
 
-    let detail = read_detail(session::reader(SourceApp::Pi), &path)?;
+    let detail = read_detail(session::reader(SourceApp::Pi), "pi-compaction")?;
     let texts = detail
         .messages
         .iter()
@@ -1082,7 +1085,7 @@ fn pi_parses_tool_failure_state() -> Result<()> {
         ],
     )?;
 
-    let detail = read_detail(session::reader(SourceApp::Pi), &path)?;
+    let detail = read_detail(session::reader(SourceApp::Pi), "pi-failure")?;
     let tool_result = detail
         .messages
         .iter()
@@ -1094,5 +1097,291 @@ fn pi_parses_tool_failure_state() -> Result<()> {
             .iter()
             .any(|block| block.is_error == Some(true))
     );
+    Ok(())
+}
+
+#[test]
+fn pi_shows_message_error_text_instead_of_raw_empty_message_row() -> Result<()> {
+    let temp_home = env::temp_dir().join(format!("reins-test-{}", Uuid::new_v4()));
+    fs::create_dir_all(&temp_home)?;
+    let _guard = TestEnvGuard::set_home(&temp_home);
+    let path = pi_path(
+        &temp_home,
+        "/tmp/pi-project",
+        "2026-09-04T11-00-00-000Z",
+        "pi-aborted",
+    );
+    write_jsonl(
+        &path,
+        &[
+            pi_header("pi-aborted", "/tmp/pi-project", "2026-09-04T11:00:00.000Z"),
+            pi_entry(
+                "message",
+                "assistant-aborted",
+                None,
+                "2026-09-04T11:00:01.000Z",
+                json!({
+                    "message": {
+                        "role": "assistant",
+                        "content": [],
+                        "api": "openai-responses",
+                        "model": "deepseek-flash",
+                        "provider": "reins-fanggeek",
+                        "stopReason": "error",
+                        "errorMessage": "This operation was aborted",
+                        "timestamp": 1_744_366_401_000_i64
+                    }
+                }),
+            ),
+        ],
+    )?;
+
+    let detail = read_detail(session::reader(SourceApp::Pi), "pi-aborted")?;
+    let block = detail
+        .messages
+        .iter()
+        .flat_map(|message| message.blocks.iter())
+        .find(|block| block.kind == "message_error")
+        .expect("error block");
+    assert_eq!(block.text.as_deref(), Some("This operation was aborted"));
+    assert_eq!(block.is_error, Some(true));
+    // 原始报文保留在 payload 里，界面仍可展开查看
+    assert!(
+        block
+            .payload
+            .as_ref()
+            .is_some_and(|payload| payload.to_string().contains("deepseek-flash"))
+    );
+
+    fs::remove_dir_all(&temp_home).ok();
+    Ok(())
+}
+
+#[test]
+fn pi_keeps_injected_context_as_readable_block() -> Result<()> {
+    let temp_home = env::temp_dir().join(format!("reins-test-{}", Uuid::new_v4()));
+    fs::create_dir_all(&temp_home)?;
+    let _guard = TestEnvGuard::set_home(&temp_home);
+    let path = pi_path(
+        &temp_home,
+        "/tmp/pi-project",
+        "2026-09-04T12-00-00-000Z",
+        "pi-context",
+    );
+    write_jsonl(
+        &path,
+        &[
+            pi_header("pi-context", "/tmp/pi-project", "2026-09-04T12:00:00.000Z"),
+            pi_entry(
+                "message",
+                "user-context",
+                None,
+                "2026-09-04T12:00:01.000Z",
+                json!({
+                    "message": {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": "<environment_context>\n  <cwd>/tmp/pi-project</cwd>\n</environment_context>"
+                            },
+                            {
+                                "type": "text",
+                                "text": "<system-reminder>\n读代码前先看 AGENTS.md\n</system-reminder>"
+                            }
+                        ],
+                        "timestamp": 1_744_366_401_000_i64
+                    }
+                }),
+            ),
+        ],
+    )?;
+
+    let detail = read_detail(session::reader(SourceApp::Pi), "pi-context")?;
+    let block = detail
+        .messages
+        .iter()
+        .flat_map(|message| message.blocks.iter())
+        .find(|block| block.kind == "context_injection")
+        .expect("context injection block");
+    let text = block.text.as_deref().unwrap_or_default();
+    assert!(text.contains("<environment_context>"));
+    assert!(text.contains("<system-reminder>"));
+    assert!(!detail.messages.iter().any(|message| {
+        message
+            .blocks
+            .iter()
+            .any(|block| block.kind == "empty_message")
+    }));
+
+    fs::remove_dir_all(&temp_home).ok();
+    Ok(())
+}
+
+#[test]
+fn pi_keeps_raw_diagnostic_block_when_empty_message_has_no_semantics() -> Result<()> {
+    let temp_home = env::temp_dir().join(format!("reins-test-{}", Uuid::new_v4()));
+    fs::create_dir_all(&temp_home)?;
+    let _guard = TestEnvGuard::set_home(&temp_home);
+    let path = pi_path(
+        &temp_home,
+        "/tmp/pi-project",
+        "2026-09-04T13-00-00-000Z",
+        "pi-blank",
+    );
+    write_jsonl(
+        &path,
+        &[
+            pi_header("pi-blank", "/tmp/pi-project", "2026-09-04T13:00:00.000Z"),
+            pi_entry(
+                "message",
+                "assistant-blank",
+                None,
+                "2026-09-04T13:00:01.000Z",
+                json!({
+                    "message": {
+                        "role": "assistant",
+                        "content": [],
+                        "stopReason": "stop",
+                        "timestamp": 1_744_366_401_000_i64
+                    }
+                }),
+            ),
+        ],
+    )?;
+
+    let detail = read_detail(session::reader(SourceApp::Pi), "pi-blank")?;
+    // 既没有错误也没有注入上下文：保持原始报文兜底，便于排查来源侧异常
+    assert!(detail.messages.iter().any(|message| {
+        message
+            .blocks
+            .iter()
+            .any(|block| block.kind == "empty_message")
+    }));
+    assert!(
+        !detail
+            .messages
+            .iter()
+            .flat_map(|message| message.blocks.iter())
+            .any(|block| block.kind == "context_injection")
+    );
+
+    fs::remove_dir_all(&temp_home).ok();
+    Ok(())
+}
+
+#[test]
+fn pi_turns_image_item_into_renderable_image_block() -> Result<()> {
+    let temp_home = env::temp_dir().join(format!("reins-test-{}", Uuid::new_v4()));
+    fs::create_dir_all(&temp_home)?;
+    let _guard = TestEnvGuard::set_home(&temp_home);
+    let path = pi_path(
+        &temp_home,
+        "/tmp/pi-project",
+        "2026-09-04T14-00-00-000Z",
+        "pi-image",
+    );
+    write_jsonl(
+        &path,
+        &[
+            pi_header("pi-image", "/tmp/pi-project", "2026-09-04T14:00:00.000Z"),
+            pi_entry(
+                "message",
+                "user-image",
+                None,
+                "2026-09-04T14:00:01.000Z",
+                json!({
+                    "message": {
+                        "role": "user",
+                        "content": [
+                            { "type": "text", "text": "这张图是什么" },
+                            { "type": "image", "data": "iVBORw0KGgo=", "mimeType": "image/png" }
+                        ],
+                        "timestamp": 1_744_366_401_000_i64
+                    }
+                }),
+            ),
+        ],
+    )?;
+
+    let detail = read_detail(session::reader(SourceApp::Pi), "pi-image")?;
+    let block = detail
+        .messages
+        .iter()
+        .flat_map(|message| message.blocks.iter())
+        .find(|block| block.kind == "image")
+        .expect("image block");
+    // data + mimeType 还原成 data URL，前端才能直接渲染
+    assert_eq!(
+        block.text.as_deref(),
+        Some("data:image/png;base64,iVBORw0KGgo=")
+    );
+
+    fs::remove_dir_all(&temp_home).ok();
+    Ok(())
+}
+
+#[test]
+fn pi_renders_system_prompt_sections_as_readable_block() -> Result<()> {
+    let temp_home = env::temp_dir().join(format!("reins-test-{}", Uuid::new_v4()));
+    fs::create_dir_all(&temp_home)?;
+    let _guard = TestEnvGuard::set_home(&temp_home);
+    let path = pi_path(
+        &temp_home,
+        "/tmp/pi-project",
+        "2026-09-04T15-00-00-000Z",
+        "pi-system",
+    );
+    write_jsonl(
+        &path,
+        &[
+            pi_header("pi-system", "/tmp/pi-project", "2026-09-04T15:00:00.000Z"),
+            pi_entry(
+                "message",
+                "system-1",
+                None,
+                "2026-09-04T15:00:01.000Z",
+                json!({
+                    "message": {
+                        "role": "system",
+                        "content": "",
+                        "sections": {
+                            "cwd": "<cwd>\n/tmp/pi-project\n</cwd>",
+                            "preamble": "You are an expert coding assistant.",
+                            "rules": "<rules>\n- be concise\n</rules>"
+                        },
+                        "toolsAdded": [
+                            {
+                                "name": "read",
+                                "description": "Read the contents of a file.",
+                                "parameters": { "type": "object" },
+                                "constrainedSampling": { "type": "json_schema" }
+                            }
+                        ],
+                        "toolsRemoved": [{ "name": "bash" }],
+                        "timestamp": 1_744_366_401_000_i64
+                    }
+                }),
+            ),
+        ],
+    )?;
+
+    let detail = read_detail(session::reader(SourceApp::Pi), "pi-system")?;
+    let block = detail
+        .messages
+        .iter()
+        .flat_map(|message| message.blocks.iter())
+        .find(|block| block.kind == "system_prompt")
+        .expect("system prompt block");
+    let text = block.text.as_deref().unwrap_or_default();
+    assert!(text.contains("3 段：cwd、preamble、rules"));
+    assert!(text.contains("## preamble\nYou are an expert coding assistant."));
+    assert!(text.contains("## rules\n<rules>\n- be concise\n</rules>"));
+    assert!(text.contains("- read: Read the contents of a file."));
+    assert!(text.contains("## 本次移除的工具\n- bash"));
+    // 工具的 parameters schema 不进正文
+    assert!(!text.contains("json_schema"));
+
+    fs::remove_dir_all(&temp_home).ok();
     Ok(())
 }

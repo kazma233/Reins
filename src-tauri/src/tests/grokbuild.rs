@@ -11,15 +11,14 @@ fn grokbuild_local_store_readonly_acceptance() -> Result<()> {
     let mut agents = 0;
     let mut subagent_messages = 0;
     for entry in &entries {
-        let overview = reader.parse_overview(&entry.path)?;
+        let id = &entry.source_session_id;
+        let overview = reader.parse_overview(id)?;
         assert_eq!(overview.summary.source_app, SourceApp::GrokBuild);
-        messages += reader.parse_messages_page(&entry.path, 0, 1)?.total_count;
-        events += reader.parse_events_page(&entry.path, 0, 1)?.total_count;
+        messages += reader.parse_messages_page(id, 0, 1)?.total_count;
+        events += reader.parse_events_page(id, 0, 1)?.total_count;
         agents += overview.agents.len();
         for agent in overview.agents.iter().filter(|agent| !agent.is_root) {
-            subagent_messages += reader
-                .parse_agent_messages(&entry.path, &agent.session_id)?
-                .len();
+            subagent_messages += reader.parse_agent_messages(id, &agent.session_id)?.len();
         }
     }
     println!(
@@ -33,7 +32,12 @@ fn bounded_home() -> PathBuf {
     env::temp_dir().join(format!("reins-test-{}", Uuid::new_v4()))
 }
 
-pub(super) fn child_session_fixture(home: &Path, child: &str, attempt: &str, answer: &str) -> Result<PathBuf> {
+pub(super) fn child_session_fixture(
+    home: &Path,
+    child: &str,
+    attempt: &str,
+    answer: &str,
+) -> Result<PathBuf> {
     let dir = home.join(".grok/sessions/not-a-cwd").join(child);
     fs::create_dir_all(&dir)?;
     let path = dir.join("summary.json");
@@ -135,8 +139,7 @@ fn grokbuild_folds_confirmed_subagents_into_parent_family() -> Result<()> {
         crate::support::fs::canonicalize(&parent_path)?
     );
 
-    let family_path = &entries[0].path;
-    let overview = reader.parse_overview(family_path)?;
+    let overview = reader.parse_overview("parent")?;
     assert_eq!(overview.agents.len(), 3);
     assert!(overview.agents[0].is_root);
     assert_eq!(overview.agents[0].label, "主 Agent");
@@ -150,7 +153,7 @@ fn grokbuild_folds_confirmed_subagents_into_parent_family() -> Result<()> {
     assert!(labels.contains(&"task child-b(子)".to_string()));
 
     // 主时间线只有父会话消息 + 子代理入口，不扫描子会话正文。
-    let page = reader.parse_messages_page(family_path, 0, 200)?;
+    let page = reader.parse_messages_page("parent", 0, 200)?;
     assert_eq!(page.total_count, 6 + 2);
     assert_eq!(
         page.messages
@@ -159,14 +162,14 @@ fn grokbuild_folds_confirmed_subagents_into_parent_family() -> Result<()> {
             .collect::<Vec<_>>(),
         vec!["child-a".to_string(), "child-b".to_string()]
     );
-    let first = reader.parse_messages_page(family_path, 0, 4)?;
+    let first = reader.parse_messages_page("parent", 0, 4)?;
     assert!(
         first
             .messages
             .iter()
             .all(|message| marker_session_id(message).is_none())
     );
-    let last = reader.parse_messages_page(family_path, first.next_offset.unwrap(), 8)?;
+    let last = reader.parse_messages_page("parent", first.next_offset.unwrap(), 8)?;
     assert_eq!(
         last.messages
             .iter()
@@ -176,7 +179,7 @@ fn grokbuild_folds_confirmed_subagents_into_parent_family() -> Result<()> {
     );
 
     // 子代理弹窗数据：marker + 子会话正文，消息按子会话命名空间隔离。
-    let child = reader.parse_agent_messages(family_path, "child-a")?;
+    let child = reader.parse_agent_messages("parent", "child-a")?;
     assert_eq!(child.len(), 3);
     assert_eq!(marker_session_id(&child[0]).as_deref(), Some("child-a"));
     assert!(
@@ -187,23 +190,12 @@ fn grokbuild_folds_confirmed_subagents_into_parent_family() -> Result<()> {
     assert_eq!(child[2].blocks[0].text.as_deref(), Some("Child A answer"));
     assert!(
         reader
-            .parse_agent_messages(family_path, "not-a-child")
+            .parse_agent_messages("parent", "not-a-child")
             .is_err()
     );
 
-    // 折叠后的子会话仍可按 id 解析到路径，并归到同一个 family。
-    assert_eq!(
-        reader.resolve_path("child-a")?,
-        crate::support::fs::canonicalize(
-            &home.join(".grok/sessions/not-a-cwd/child-a/summary.json")
-        )?
-    );
-    assert_eq!(
-        reader
-            .parse_summary(&reader.resolve_path("child-a")?)?
-            .source_session_id,
-        "parent"
-    );
+    // 折叠后的子会话按自身 id 直查仍归属同一个 family(root 摘要)。
+    assert_eq!(reader.parse_summary("child-a")?.source_session_id, "parent");
 
     // 新的 meta 与子会话在刷新后立即可见。
     subagent_fixture(&home, "parent", "child-c", "at1.c", "Child C answer")?;
@@ -240,19 +232,19 @@ fn grokbuild_missing_child_keeps_parent_readable() -> Result<()> {
             .title
             .ends_with("(+1 subagents)")
     );
-    let overview = reader.parse_overview(&entries[0].path)?;
+    let overview = reader.parse_overview("parent")?;
     assert_eq!(overview.agents.len(), 2);
     assert_eq!(overview.agents[1].session_id, "missing");
 
     // 父会话照常可读，缺失子会话保留入口但打开时明确报错。
-    let page = reader.parse_messages_page(&entries[0].path, 0, 200)?;
+    let page = reader.parse_messages_page("parent", 0, 200)?;
     assert!(
         page.messages
             .iter()
             .any(|message| marker_session_id(message).as_deref() == Some("missing"))
     );
     let error = reader
-        .parse_agent_messages(&entries[0].path, "missing")
+        .parse_agent_messages("parent", "missing")
         .unwrap_err()
         .to_string();
     assert!(error.contains("not readable"), "{error}");
@@ -301,20 +293,12 @@ fn grokbuild_orphan_and_nested_children_stay_standalone() -> Result<()> {
         assert!(!entry.summary.as_ref().unwrap().title.contains("subagents"));
     }
 
-    let overview = reader.parse_overview(&root.path)?;
+    let overview = reader.parse_overview("root")?;
     assert_eq!(overview.agents.len(), 2);
-    assert!(
-        reader
-            .parse_agent_messages(&root.path, "nested-child")
-            .is_ok()
-    );
+    assert!(reader.parse_agent_messages("root", "nested-child").is_ok());
     // 未折叠的嵌套/孤立子会话不属于父会话的成员。
-    assert!(
-        reader
-            .parse_agent_messages(&root.path, "grand-child")
-            .is_err()
-    );
-    assert!(reader.parse_agent_messages(&root.path, "orphan").is_err());
+    assert!(reader.parse_agent_messages("root", "grand-child").is_err());
+    assert!(reader.parse_agent_messages("root", "orphan").is_err());
     Ok(())
 }
 
@@ -423,9 +407,9 @@ fn grokbuild_transcript_path_has_no_verbatim_prefix() -> Result<()> {
     let home = env::temp_dir().join(format!("reins-test-{}", Uuid::new_v4()));
     fs::create_dir_all(&home)?;
     let _guard = TestEnvGuard::set_home(home.as_path());
-    let path = fixture(home.as_path(), "empty")?;
+    fixture(home.as_path(), "empty")?;
     let reader = session::reader(SourceApp::GrokBuild);
-    let summary = reader.parse_summary(&path)?;
+    let summary = reader.parse_summary("empty")?;
     // 转录文件路径直接展示给用户,Windows 上不能暴露 std canonicalize
     // 返回的 \\?\ verbatim 前缀。
     assert!(
@@ -443,7 +427,7 @@ fn grokbuild_summary_only_and_format_validation() -> Result<()> {
     let _guard = TestEnvGuard::set_home(home.as_path());
     let path = fixture(home.as_path(), "empty")?;
     let reader = session::reader(SourceApp::GrokBuild);
-    let detail = read_detail(reader, &path)?;
+    let detail = read_detail(reader, "empty")?;
     assert!(detail.messages.is_empty() && detail.events.is_empty());
     assert_eq!(detail.summary.title, "Synthetic title");
     assert_eq!(
@@ -451,22 +435,24 @@ fn grokbuild_summary_only_and_format_validation() -> Result<()> {
         Some("/synthetic/project's folder")
     );
     assert_eq!(
-        reader.resolve_path("empty")?,
+        reader.parse_summary("empty")?.transcript_path,
         crate::support::fs::canonicalize(&path)?
+            .display()
+            .to_string()
     );
-    assert!(reader.resolve_path("../../etc/passwd").is_err());
+    assert!(reader.parse_summary("../../etc/passwd").is_err());
     let mut value: Value = serde_json::from_slice(&fs::read(&path)?)?;
     value["generated_title"] = json!("");
     fs::write(&path, serde_json::to_vec(&value)?)?;
-    assert_eq!(reader.parse_summary(&path)?.title, "Synthetic summary");
+    assert_eq!(reader.parse_summary("empty")?.title, "Synthetic summary");
     value["session_summary"] = json!("");
     fs::write(&path, serde_json::to_vec(&value)?)?;
-    assert_eq!(reader.parse_summary(&path)?.title, "empty");
+    assert_eq!(reader.parse_summary("empty")?.title, "empty");
     value["chat_format_version"] = json!(2);
     fs::write(&path, serde_json::to_vec(&value)?)?;
     assert!(
         reader
-            .parse_events_page(&path, 0, 1)
+            .parse_events_page("empty", 0, 1)
             .unwrap_err()
             .to_string()
             .contains("chat_format_version")
@@ -482,9 +468,14 @@ fn grokbuild_normalizes_messages_without_stream_duplicates_or_encrypted_content(
     let path = fixture(home.as_path(), "messages")?;
     history(&path)?;
     let reader = session::reader(SourceApp::GrokBuild);
-    let detail = read_detail(reader, &path)?;
+    let detail = read_detail(reader, "messages")?;
     assert_eq!(detail.messages.len(), 6);
     assert_eq!(detail.messages[1].blocks[1].kind, "image");
+    // 图片块正文是引用：前端据此渲染，而不是回退成一行 JSON
+    assert_eq!(
+        detail.messages[1].blocks[1].text.as_deref(),
+        Some("https://example.invalid/image.png")
+    );
     assert_eq!(
         detail.messages[2].blocks[0].text.as_deref(),
         Some("Synthetic thought")
@@ -502,17 +493,17 @@ fn grokbuild_normalizes_messages_without_stream_duplicates_or_encrypted_content(
             && !serialized.contains("Do not display")
     );
     assert_eq!(serialized.matches("Synthetic answer").count(), 1);
-    let first = reader.parse_messages_page(&path, 0, 2)?;
-    let second = reader.parse_messages_page(&path, first.next_offset.unwrap(), 4)?;
+    let first = reader.parse_messages_page("messages", 0, 2)?;
+    let second = reader.parse_messages_page("messages", first.next_offset.unwrap(), 4)?;
     assert_eq!(first.total_count, 6);
     assert!(!second.has_more);
     assert_ne!(first.messages[1].id, second.messages[0].id);
-    let first = reader.parse_events_page(&path, 0, 2)?;
-    let second = reader.parse_events_page(&path, first.next_offset.unwrap(), 2)?;
+    let first = reader.parse_events_page("messages", 0, 2)?;
+    let second = reader.parse_events_page("messages", first.next_offset.unwrap(), 2)?;
     assert_eq!(first.total_count, 3);
     assert_eq!(second.events.len(), 1);
     assert!(!second.has_more);
-    assert_eq!(reader.parse_events_page(&path, 99, 2)?.offset, 3);
+    assert_eq!(reader.parse_events_page("messages", 99, 2)?.offset, 3);
     write_jsonl(
         &path.with_file_name("updates.jsonl"),
         &[
@@ -520,14 +511,14 @@ fn grokbuild_normalizes_messages_without_stream_duplicates_or_encrypted_content(
         ],
     )?;
     assert_eq!(
-        read_detail(reader, &path)?.messages[5].blocks[0].is_error,
+        read_detail(reader, "messages")?.messages[5].blocks[0].is_error,
         Some(false)
     );
     write_jsonl(
         &path.with_file_name("chat_history.jsonl"),
         &[json!({"type":"future_record","content":"not a message"})],
     )?;
-    assert!(reader.parse_messages_page(&path, 0, 2).is_err());
+    assert!(reader.parse_messages_page("messages", 0, 2).is_err());
     Ok(())
 }
 
@@ -546,7 +537,7 @@ fn grokbuild_truncated_tool_arguments_stay_readable() -> Result<()> {
             json!({"type":"tool_result","tool_call_id":"trunc","content":"Failed to parse arguments for tool `use_tool`"}),
         ],
     )?;
-    let detail = read_detail(session::reader(SourceApp::GrokBuild), &path)?;
+    let detail = read_detail(session::reader(SourceApp::GrokBuild), "truncated")?;
     let tool = &detail.messages[1].blocks[0];
     assert_eq!(tool.kind, "tool_use");
     assert_eq!(tool.tool_name.as_deref(), Some("use_tool"));
@@ -602,35 +593,29 @@ fn grokbuild_listing_reads_only_summary_and_refreshes_index() -> Result<()> {
 }
 
 #[test]
-fn grokbuild_rejects_external_paths_and_mismatched_ids() -> Result<()> {
+fn grokbuild_rejects_unknown_ids_and_symlinked_aux_files() -> Result<()> {
     let home = env::temp_dir().join(format!("reins-test-{}", Uuid::new_v4()));
     fs::create_dir_all(&home)?;
     let _guard = TestEnvGuard::set_home(home.as_path());
     let path = fixture(home.as_path(), "safe")?;
     let outside = home.as_path().join("summary.json");
     fs::copy(&path, &outside)?;
+    // 会话根目录之外的伪造入口不进索引,id 直查无法触达。
     assert!(
         session::reader(SourceApp::GrokBuild)
-            .parse_messages_page(&outside, 0, 10)
+            .parse_messages_page("unknown", 0, 10)
             .is_err()
     );
-    // 直接传入 transcript_path 也必须校验会话 id 归属。
     assert!(
-        session::timeline::get_session_messages_inner(
-            SourceApp::GrokBuild,
-            "other",
-            path.to_str(),
-            0,
-            10
-        )
-        .is_err()
+        session::timeline::get_session_messages_inner(SourceApp::GrokBuild, "other", 0, 10)
+            .is_err()
     );
     #[cfg(unix)]
     {
         std::os::unix::fs::symlink(&outside, path.with_file_name("chat_history.jsonl"))?;
         assert!(
             session::reader(SourceApp::GrokBuild)
-                .parse_messages_page(&path, 0, 10)
+                .parse_messages_page("safe", 0, 10)
                 .is_err()
         );
     }
@@ -649,10 +634,10 @@ fn grokbuild_custom_home_is_used_for_listing_and_resolution() -> Result<()> {
     let reader = session::reader(SourceApp::GrokBuild);
     assert_eq!(reader.list_entries()?.len(), 1);
     assert_eq!(
-        reader.resolve_path("custom")?,
-        crate::support::fs::canonicalize(
-            &custom.join("sessions/not-a-cwd/custom/summary.json")
-        )?
+        reader.parse_summary("custom")?.transcript_path,
+        crate::support::fs::canonicalize(&custom.join("sessions/not-a-cwd/custom/summary.json"))?
+            .display()
+            .to_string()
     );
     Ok(())
 }
@@ -672,7 +657,7 @@ fn grokbuild_large_events_page_and_auxiliary_changes_are_fresh() -> Result<()> {
         )?;
     }
     file.flush()?;
-    let page = reader.parse_events_page(&path, 184_998, 40)?;
+    let page = reader.parse_events_page("large", 184_998, 40)?;
     assert_eq!(page.total_count, 185_000);
     assert_eq!(page.events.len(), 2);
     assert!(!page.has_more);
@@ -683,21 +668,31 @@ fn grokbuild_large_events_page_and_auxiliary_changes_are_fresh() -> Result<()> {
             json!({"type":"future_event", "outcome":"completed", "encrypted_content":"NEVER_EXPOSE_SYNTHETIC"}),
         ],
     )?;
-    let page = reader.parse_events_page(&path, 0, 40)?;
+    let page = reader.parse_events_page("large", 0, 40)?;
     assert_eq!(page.total_count, 1);
     assert_eq!(page.events[0].kind, "future_event");
+    // raw 页给整条记录：白名单外的字段也要在
+    let payload = page.events[0]
+        .payload
+        .as_ref()
+        .expect("raw payload is the whole record");
+    assert_eq!(
+        payload.get("outcome").and_then(Value::as_str),
+        Some("completed")
+    );
+    // 加密字段是唯一例外，不下发
     assert!(!serde_json::to_string(&page)?.contains("encrypted_content"));
     write_jsonl(
         &path.with_file_name("chat_history.jsonl"),
         &[json!({"type":"assistant", "content":"First"})],
     )?;
-    assert_eq!(reader.parse_messages_page(&path, 0, 40)?.total_count, 1);
+    assert_eq!(reader.parse_messages_page("large", 0, 40)?.total_count, 1);
     write_jsonl(
         &path.with_file_name("chat_history.jsonl"),
         &[json!({"type":"assistant", "content":"Second"})],
     )?;
     assert_eq!(
-        reader.parse_messages_page(&path, 0, 40)?.messages[0].blocks[0]
+        reader.parse_messages_page("large", 0, 40)?.messages[0].blocks[0]
             .text
             .as_deref(),
         Some("Second")
@@ -719,7 +714,6 @@ fn grokbuild_delete_boundary() -> Result<()> {
             &state::session_index::SessionIndexState::default(),
             SourceApp::GrokBuild,
             "export",
-            path.to_str()
         )
         .is_err()
     );

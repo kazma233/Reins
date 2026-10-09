@@ -1,18 +1,27 @@
 import { describe, expect, it } from "vitest";
-import type { ProviderAppState, ProviderView } from "./generated";
+import { AGENT_LABELS } from "@shared/lib/agent-labels";
+import type { ProviderAppEntry, ProviderAppState, ProviderView, ProvidersState } from "./generated";
 import {
+  APP_LABELS,
   applyBlockers,
   applyCandidates,
+  emptyModelForm,
+  emptyProviderForm,
+  formToInput,
   entriesForProvider,
+  hasModelId,
   initialApplySelection,
+  mergeFetchedModels,
   normalizeProviderIdInput,
   protocolCompatible,
+  providerSyncPlan,
   reasoningEffortMappingText,
   reasoningEffortWrite,
   reasoningLevelChoices,
   reasoningLevelOptions,
   reapplyProvider,
   unwrittenModelFieldsText,
+  validateProviderForm,
 } from "./model";
 
 function appState(overrides: Partial<ProviderAppState> = {}): ProviderAppState {
@@ -351,5 +360,241 @@ describe("applyCandidates", () => {
   it("keeps every provider when the app has no entries", () => {
     const candidates = applyCandidates(appState(), [provider()]);
     expect(candidates).toHaveLength(1);
+  });
+});
+
+describe("hasModelId", () => {
+  it("matches ids after trimming both sides", () => {
+    expect(hasModelId(["glm-4.5", "deepseek-chat"], " glm-4.5 ")).toBe(true);
+    expect(hasModelId(["glm-4.5"], "glm-4.6")).toBe(false);
+  });
+
+  it("stays case sensitive like the backend", () => {
+    expect(hasModelId(["glm-4.5"], "GLM-4.5")).toBe(false);
+  });
+});
+
+describe("mergeFetchedModels", () => {
+  it("adds new models and skips ids already in the catalog", () => {
+    const existing = [{ ...emptyModelForm("glm-4.5"), id: "glm-4.5", label: "GLM 4.5" }];
+    const { added, skipped } = mergeFetchedModels(existing, [
+      { id: "glm-4.5", name: "GLM 4.5" },
+      { id: "glm-4.6", name: "GLM 4.6" },
+    ]);
+    expect(skipped.map((model) => model.id)).toEqual(["glm-4.5"]);
+    expect(added).toHaveLength(1);
+    expect(added[0]).toMatchObject({ id: "glm-4.6", label: "GLM 4.6" });
+  });
+
+  it("falls back to the id when the fetched model has no name", () => {
+    const { added } = mergeFetchedModels([], [{ id: "glm-4.6" }]);
+    expect(added[0].label).toBe("glm-4.6");
+  });
+
+  it("skips repeated ids inside the fetched list", () => {
+    const { added, skipped } = mergeFetchedModels([], [
+      { id: "glm-4.6" },
+      { id: "glm-4.6" },
+    ]);
+    expect(added).toHaveLength(1);
+    expect(skipped.map((model) => model.id)).toEqual(["glm-4.6"]);
+  });
+
+  it("compares ids with the same trimming as the backend", () => {
+    const existing = [{ ...emptyModelForm("glm-4.5 "), id: "glm-4.5 " }];
+    const { added, skipped } = mergeFetchedModels(existing, [{ id: "glm-4.5" }]);
+    expect(added).toHaveLength(0);
+    expect(skipped).toHaveLength(1);
+  });
+});
+
+describe("providerSyncPlan", () => {
+  function entry(providerId: string, overrides: Partial<ProviderAppEntry> = {}): ProviderAppEntry {
+    return {
+      key: `reins-${providerId}`,
+      status: "applied",
+      providerId,
+      label: null,
+      baseUrl: null,
+      modelIds: [],
+      defaultModelId: null,
+      notes: [],
+      protocol: null,
+      ...overrides,
+    };
+  }
+
+  function stateOf(apps: ProviderAppState[], providers: ProviderView[]): ProvidersState {
+    return { configPath: "providers.yaml", providers, apps };
+  }
+
+  function model(id: string): ProviderView["models"][number] {
+    return { id, label: id };
+  }
+
+  it("plans applied and drifted entries and ignores external ones", () => {
+    const target = provider({ id: "glm", models: [model("glm-4.5")] });
+    const plan = providerSyncPlan(
+      stateOf(
+        [
+          appState({ app: "codex", entries: [entry("glm")] }),
+          appState({ app: "claude", entries: [entry("glm", { status: "drifted" })] }),
+          appState({
+            app: "opencode",
+            entries: [
+              {
+                key: "someone-else",
+                status: "external",
+                providerId: null,
+                label: null,
+                baseUrl: null,
+                modelIds: [],
+                defaultModelId: null,
+                notes: [],
+              },
+            ],
+          }),
+        ],
+        [target]
+      ),
+      target
+    );
+    expect(plan.map((item) => item.app)).toEqual(["codex", "claude"]);
+    expect(plan.some((item) => item.skip)).toBe(false);
+  });
+
+  it("keeps each agent's applied models, default model and reasoning level", () => {
+    const target = provider({ id: "glm", models: [model("glm-4.5"), model("glm-4.6")] });
+    const apps = [
+      appState({
+        supportedReasoningLevels: ["low", "high"],
+        defaultReasoningLevel: "high",
+        entries: [entry("glm", { modelIds: ["glm-4.5"], defaultModelId: "glm-4.5" })],
+      }),
+    ];
+    const plan = providerSyncPlan(stateOf(apps, [target]), target);
+    expect(plan).toHaveLength(1);
+    const item = plan[0];
+    if (item.skip) {
+      throw new Error("expected a syncable item");
+    }
+    expect(item.input).toEqual({
+      providerId: "glm",
+      app: "codex",
+      modelIds: ["glm-4.5"],
+      defaultModelId: "glm-4.5",
+      defaultReasoningLevel: "high",
+    });
+  });
+
+  it("skips agents whose applied models all left the catalog", () => {
+    const target = provider({ id: "glm", models: [model("glm-4.6")] });
+    const apps = [appState({ entries: [entry("glm", { modelIds: ["glm-4.5"] })] })];
+    const plan = providerSyncPlan(stateOf(apps, [target]), target);
+    const item = plan[0];
+    if (!item.skip) {
+      throw new Error("expected a skipped item");
+    }
+    expect(item.reason).toContain("均不在当前目录中");
+  });
+
+  it("skips agents that cannot apply yet and reports the blockers", () => {
+    const target = provider({ id: "glm", apiKey: "", models: [model("glm-4.5")] });
+    const apps = [appState({ entries: [entry("glm")] })];
+    const plan = providerSyncPlan(stateOf(apps, [target]), target);
+    const item = plan[0];
+    if (!item.skip) {
+      throw new Error("expected a skipped item");
+    }
+    expect(item.reason).toContain("API Key");
+  });
+
+  it("skips agents whose tool cannot speak the provider protocol", () => {
+    const target = provider({ id: "glm", models: [model("glm-4.5")] });
+    const apps = [appState({ supportedProtocols: ["anthropic_messages"], entries: [entry("glm")] })];
+    const plan = providerSyncPlan(stateOf(apps, [target]), target);
+    const item = plan[0];
+    if (!item.skip) {
+      throw new Error("expected a skipped item");
+    }
+    expect(item.reason).toContain("不支持协议");
+  });
+
+  it("plans nothing for a provider that is not applied anywhere", () => {
+    const target = provider({ id: "glm", models: [model("glm-4.5")] });
+    const plan = providerSyncPlan(stateOf([appState()], [target]), target);
+    expect(plan).toEqual([]);
+  });
+});
+
+describe("APP_LABELS", () => {
+  it("uses the same product names as targets and session sources", () => {
+    for (const [appId, label] of Object.entries(APP_LABELS)) {
+      expect(label).toBe(AGENT_LABELS[appId]);
+    }
+  });
+});
+
+describe("validateProviderForm", () => {
+  function form(overrides: Partial<ReturnType<typeof emptyProviderForm>> = {}) {
+    return {
+      ...emptyProviderForm(),
+      label: "Label",
+      baseUrl: "https://a.test/v1",
+      ...overrides,
+    };
+  }
+
+  it("rejects a new provider that reuses an existing id", () => {
+    const errors = validateProviderForm(form({ providerId: "fanggeek" }), {
+      allowEmptyModels: true,
+      existingProviderIds: ["fanggeek"],
+    });
+
+    expect(errors.providerId).toBe("该提供商 ID 已存在，请换一个。");
+  });
+
+  it("compares the normalized id, not the raw input", () => {
+    // 输入侧会归一化，这里兜住绕过输入归一化的调用（大小写、下划线）
+    const errors = validateProviderForm(form({ providerId: "FangGeek" }), {
+      allowEmptyModels: true,
+      existingProviderIds: ["fanggeek"],
+    });
+
+    expect(errors.providerId).toBeDefined();
+  });
+
+  it("lets an edit keep its own id", () => {
+    const errors = validateProviderForm(
+      form({ originalProviderId: "fanggeek", providerId: "fanggeek" }),
+      { allowEmptyModels: false, existingProviderIds: ["fanggeek"] },
+    );
+
+    expect(errors.providerId).toBeUndefined();
+  });
+
+  it("skips the model requirement only while creating the first step", () => {
+    expect(
+      validateProviderForm(form({ providerId: "new-one" }), {
+        allowEmptyModels: true,
+        existingProviderIds: [],
+      }).models,
+    ).toBeUndefined();
+
+    expect(
+      validateProviderForm(form({ providerId: "new-one" }), {
+        allowEmptyModels: false,
+        existingProviderIds: [],
+      }).models,
+    ).toBe("至少添加一个模型。");
+  });
+});
+
+describe("formToInput", () => {
+  it("carries the caller's write intent", () => {
+    const state = { ...emptyProviderForm(), providerId: "p1", label: "L", baseUrl: "https://a.test/v1" };
+
+    expect(formToInput(state, "create").mode).toBe("create");
+    expect(formToInput(state, "update").mode).toBe("update");
   });
 });

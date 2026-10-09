@@ -2,10 +2,12 @@
 import type { TimelineItem } from "../timeline-group";
 import MessageBlockContent from "./MessageBlockContent.vue";
 import CollapsedBlockRow from "./CollapsedBlockRow.vue";
+import ImageRow from "./ImageRow.vue";
+import MessageErrorRow from "./MessageErrorRow.vue";
 import ToolRow from "./ToolRow.vue";
 
 // 两种子代理过程弹窗（Pi 的 details 形态、family 聚合形态）共用的只读时间线。
-// 弹窗内不会再出现子代理入口，故只分发这三种渲染单元。
+// 弹窗内不会再出现子代理入口，故不分发 subagent 单元；其余单元与主时间线保持一致。
 type SubagentFlowProps = {
   items: TimelineItem[];
 };
@@ -29,6 +31,8 @@ defineProps<SubagentFlowProps>();
       </div>
       <ToolRow v-else-if="item.kind === 'tool'" :item="item" />
       <CollapsedBlockRow v-else-if="item.kind === 'collapsed-block'" :item="item" />
+      <MessageErrorRow v-else-if="item.kind === 'message-error'" :item="item" />
+      <ImageRow v-else-if="item.kind === 'image'" :item="item" />
     </template>
   </div>
 </template>

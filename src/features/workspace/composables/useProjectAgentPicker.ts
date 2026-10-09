@@ -6,7 +6,7 @@ import {
   type ProjectAgentPickerDialogState,
 } from "../model";
 import type { AgentTargetId, TargetConfigView } from "../types";
-import { useWorkspaceNotice } from "./useWorkspaceNotice";
+import { useWorkspaceStore } from "../stores/workspace";
 import { useWorkspaceState } from "./useWorkspaceState";
 
 export type ProjectTargetEntry = {
@@ -20,7 +20,7 @@ export type ProjectAgentPickerDiff = {
 };
 
 export function useProjectAgentPicker() {
-  const { showNotice } = useWorkspaceNotice();
+  const store = useWorkspaceStore();
   const { reloadWorkspaceState, inspection, configDocument } = useWorkspaceState();
 
   const projectAgentPickerDialog = reactive<ProjectAgentPickerDialogState>(
@@ -131,8 +131,10 @@ export function useProjectAgentPicker() {
     state.loading = true;
 
     // 单目标命令没有批量契约，逐个写入；单个失败不中断其余目标，
-    // 结束后以 reload 回来的实际状态为准，失败目标在 notice 中点名。
+    // 结束后以 reload 回来的实际状态为准，失败目标留在卡片上点名。
+    // 失败目标提示归 mcp 卡片所有：弹窗在 finally 里关掉后它仍要在界面上。
     const failed: AgentTargetId[] = [];
+    const contextName = state.contextName;
     try {
       for (const targetId of toRemove) {
         try {
@@ -155,19 +157,14 @@ export function useProjectAgentPicker() {
       state.desiredAgentIds = [];
     }
 
-    await reloadWorkspaceState({ preserveNotice: true });
+    await reloadWorkspaceState({ background: true });
 
-    if (failed.length > 0) {
-      showNotice(
-        `部分目标同步失败：${failed.map((id) => formatTargetLabel(id)).join("、")}`,
-        "error",
-      );
-    } else {
-      showNotice(
-        `已同步 MCP ${state.contextName}：新增 ${toAdd.length} 个、移除 ${toRemove.length} 个。`,
-        "success",
-      );
-    }
+    store.setProjectPickerWarning(
+      contextName,
+      failed.length > 0
+        ? `部分目标同步失败：${failed.map((id) => formatTargetLabel(id)).join("、")}。`
+        : null,
+    );
   }
 
   return {

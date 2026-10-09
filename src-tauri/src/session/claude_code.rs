@@ -2,27 +2,25 @@ use std::collections::HashMap;
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
-use std::sync::{LazyLock, Mutex};
+use std::sync::Arc;
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Context, Result};
 
 use serde::Deserialize;
 use serde_json::{Value, json};
 
+use super::family_index::{Family, FamilyRow};
+use super::family_timeline::FamilyAgentLabel;
+use super::reader_engine::{
+    FamilyReader, FamilySpec, Freshness, MarkerShape, MemberTimeline, RowErrorPolicy, scan_files,
+};
 use super::{
-    ContentBlock, SessionAgent, SessionEvent, SessionEventPage, SessionFileEntry, SessionMessage,
-    SessionMessagePage, SessionOverview, SessionReader, SessionSummary, SessionTokenUsage,
-    SourceApp, SummaryAccumulator, TimelineCacheEntry, TimelineRecord, UsageHourBuckets,
-    family_index::{Family, FamilyIndexCacheEntry, FamilyRow},
-    family_timeline::{FamilyAgentLabel, cached_family_events, cached_family_messages},
+    ContentBlock, DeletePlanAction, SessionEvent, SessionMessage, SessionOverview, SessionSummary,
+    SessionTokenUsage, SourceApp, SummaryAccumulator, TimelineRecord, UsageHourBuckets,
 };
 
-pub(crate) struct ClaudeCodeBackend;
-
-pub(crate) static BACKEND: ClaudeCodeBackend = ClaudeCodeBackend;
-
 #[derive(Clone, Debug)]
-struct ClaudeSessionRow {
+pub(crate) struct ClaudeSessionRow {
     path: PathBuf,
     summary: SessionSummary,
     agent_session_id: String,
@@ -31,7 +29,6 @@ struct ClaudeSessionRow {
 }
 
 type ClaudeSessionFamily = Family<ClaudeSessionRow>;
-type ClaudeFamilyIndexCacheEntry = FamilyIndexCacheEntry<ClaudeSessionRow>;
 
 impl FamilyRow for ClaudeSessionRow {
     fn member_path(&self) -> std::borrow::Cow<'_, Path> {
@@ -61,12 +58,6 @@ impl FamilyRow for ClaudeSessionRow {
     }
 }
 
-#[derive(Clone)]
-struct ClaudeSummaryCacheEntry {
-    updated_at: i64,
-    summary: SessionSummary,
-}
-
 #[derive(Deserialize)]
 struct ClaudeAgentMeta {
     #[serde(rename = "agentType")]
@@ -75,101 +66,138 @@ struct ClaudeAgentMeta {
     name: Option<String>,
 }
 
-static CLAUDE_TIMELINE_CACHE: LazyLock<Mutex<HashMap<String, TimelineCacheEntry>>> =
-    LazyLock::new(|| Mutex::new(HashMap::new()));
-static CLAUDE_FAMILY_INDEX_CACHE: LazyLock<Mutex<Option<ClaudeFamilyIndexCacheEntry>>> =
-    LazyLock::new(|| Mutex::new(None));
-static CLAUDE_SUMMARY_CACHE: LazyLock<Mutex<HashMap<String, ClaudeSummaryCacheEntry>>> =
-    LazyLock::new(|| Mutex::new(HashMap::new()));
+#[derive(Clone)]
+pub(crate) struct ClaudeSpec;
 
-fn lock_timeline_cache()
--> Result<std::sync::MutexGuard<'static, HashMap<String, TimelineCacheEntry>>> {
-    CLAUDE_TIMELINE_CACHE
-        .lock()
-        .map_err(|_| anyhow!("Claude timeline cache lock was poisoned"))
-}
+impl FamilySpec for ClaudeSpec {
+    type Row = ClaudeSessionRow;
 
-fn lock_family_index_cache()
--> Result<std::sync::MutexGuard<'static, Option<ClaudeFamilyIndexCacheEntry>>> {
-    CLAUDE_FAMILY_INDEX_CACHE
-        .lock()
-        .map_err(|_| anyhow!("Claude family index cache lock was poisoned"))
-}
+    fn app(&self) -> SourceApp {
+        SourceApp::ClaudeCode
+    }
 
-fn lock_summary_cache()
--> Result<std::sync::MutexGuard<'static, HashMap<String, ClaudeSummaryCacheEntry>>> {
-    CLAUDE_SUMMARY_CACHE
-        .lock()
-        .map_err(|_| anyhow!("Claude summary cache lock was poisoned"))
-}
+    fn label(&self) -> &'static str {
+        "Claude"
+    }
 
-impl SessionReader for ClaudeCodeBackend {
-    fn list_entries(&self) -> Result<Vec<SessionFileEntry>> {
-        let mut entries = list_session_families()?
-            .into_iter()
-            .map(|family| -> Result<SessionFileEntry> {
-                let sort_timestamp = family.updated_at();
-                Ok(SessionFileEntry {
-                    path: family.root.path.clone(),
-                    sort_timestamp: sort_timestamp.unwrap_or_default(),
-                    summary: Some(cached_family_summary(&family)?),
+    // 错误文案主语经 agents 清单派生，与界面产品名保持同一份拼写
+    // （label() 的 "Claude" 是锁前缀等引擎契约文本，两者刻意不同）。
+    fn display_label(&self) -> &'static str {
+        crate::agents::spec_by_source_app(SourceApp::ClaudeCode)
+            .expect("claude registered in AGENTS")
+            .label
+    }
+
+    fn scan_root(&self, root: &Path) -> PathBuf {
+        root.join("projects")
+    }
+
+    // 坏文件静默跳过:一个损坏转录不能让整个列表失败,也不记日志。
+    fn list_rows(&self, scan_root: &Path) -> Result<Vec<ClaudeSessionRow>> {
+        let files = crate::support::fs::enumerate_jsonl_files(scan_root)?;
+        scan_files(
+            files,
+            parse_session_index_row,
+            RowErrorPolicy::SkipSilently,
+            "Claude",
+        )
+    }
+
+    // 按 transcript 内共享 sessionId 分组;root 选取靠 is_root 行标志(非
+    // agent-* 命名的子代理文件会回退 family key,id 比较无法区分)。
+    fn group_families(&self, rows: Vec<ClaudeSessionRow>) -> Result<Vec<ClaudeSessionFamily>> {
+        Ok(build_session_families(rows))
+    }
+
+    // 宽失效面:全部转录 mtime + 各自父目录 mtime + 非 root 的 meta.json
+    // mtime;不含 projects 根目录本身(子代理改 label 只写 meta.json)。
+    fn index_freshness(&self, scan_root: &Path) -> Result<Freshness> {
+        claude_projects_timestamp(scan_root).map(Freshness::Stamp)
+    }
+
+    // 同上:family 失效把非 root 成员的父目录 mtime 计入。
+    fn family_freshness(&self, _scan_root: &Path, family: &ClaudeSessionFamily) -> Result<i64> {
+        family_timestamp(family)
+    }
+
+    fn parse_full_summary(&self, path: &Path) -> Result<SessionSummary> {
+        parse_full_session_summary(path)
+    }
+
+    // 路径级缓存只含 root 文件;子代理文件的消耗在各自索引行里,行级直取。
+    fn row_usage(&self, row: &ClaudeSessionRow) -> Option<SessionTokenUsage> {
+        row.summary.token_usage
+    }
+
+    // 单次扫描产出双半;记录解析自带 agent_session_id,引擎兜底不生效。
+    fn load_members(
+        &self,
+        _scan_root: &Path,
+        members: &[ClaudeSessionRow],
+    ) -> Result<Vec<MemberTimeline>> {
+        members
+            .iter()
+            .map(|row| {
+                let mut messages = Vec::new();
+                let mut events = Vec::new();
+
+                for (index, line) in BufReader::new(File::open(&row.path)?).lines().enumerate() {
+                    let value = super::parse_json_line(&line?)?;
+                    match parse_timeline_record(index, &value, &row.agent_session_id) {
+                        Some(TimelineRecord::Message(message)) => messages.push(message),
+                        Some(TimelineRecord::Event(event)) => events.push(event),
+                        None => {}
+                    }
+                }
+
+                Ok(MemberTimeline {
+                    messages: Arc::new(messages),
+                    events: Arc::new(events),
                 })
             })
-            .collect::<Result<Vec<_>>>()?;
-
-        super::sort_entries(&mut entries);
-        Ok(entries)
+            .collect()
     }
 
-    fn clear_cache(&self) -> Result<()> {
-        lock_timeline_cache()?.clear();
-        lock_summary_cache()?.clear();
-        *lock_family_index_cache()? = None;
-        Ok(())
+    // marker 与名册的 root 判定都用行标志,与 (+N) 计数是两条独立口径。
+    fn is_subagent_member(&self, _family: &ClaudeSessionFamily, row: &ClaudeSessionRow) -> bool {
+        !row.is_root
     }
 
-    fn resolve_path(&self, source_session_id: &str) -> Result<PathBuf> {
-        session_path_for_id(source_session_id)
+    fn agent_name(&self, row: &ClaudeSessionRow) -> String {
+        family_member_display_name(row)
     }
 
-    fn parse_summary(&self, path: &Path) -> Result<SessionSummary> {
-        self::parse_summary(path)
+    fn marker(&self, member_id: &str, row: &ClaudeSessionRow) -> MarkerShape {
+        let extras = json!({
+            "transcript_path": row.path.display().to_string(),
+            "is_sidechain": true,
+        });
+
+        MarkerShape::labeled("Claude", member_id).extras(extras.clone(), extras)
     }
 
-    fn parse_overview(&self, path: &Path) -> Result<SessionOverview> {
-        self::parse_overview(path)
-    }
-
-    fn parse_messages_page(
+    fn agent_label(
         &self,
-        path: &Path,
-        offset: usize,
-        limit: usize,
-    ) -> Result<SessionMessagePage> {
-        self::parse_messages_page(path, offset, limit)
+        _family: &ClaudeSessionFamily,
+        row: &ClaudeSessionRow,
+    ) -> FamilyAgentLabel {
+        if row.is_root {
+            FamilyAgentLabel::Root
+        } else {
+            FamilyAgentLabel::Child(family_member_display_name(row))
+        }
     }
+}
 
-    fn parse_events_page(
-        &self,
-        path: &Path,
-        offset: usize,
-        limit: usize,
-    ) -> Result<SessionEventPage> {
-        self::parse_events_page(path, offset, limit)
-    }
+pub(crate) static BACKEND: FamilyReader<ClaudeSpec> = FamilyReader::new(ClaudeSpec, root);
 
-    fn parse_agent_messages(
-        &self,
-        path: &Path,
-        agent_session_id: &str,
-    ) -> Result<Vec<SessionMessage>> {
-        let family = session_family_for_path(path)?;
-        let messages = cached_messages_for_family(&family)?;
-        Ok(super::family_timeline::agent_messages(
-            messages,
-            agent_session_id,
-        ))
-    }
+// 测试直接按根构造引擎实例:完全脱离进程 env 与全局锁,可并行。
+#[cfg(test)]
+pub(crate) fn engine_at(
+    root: PathBuf,
+    store_dir: PathBuf,
+) -> super::reader_engine::ReaderEngine<ClaudeSpec> {
+    super::reader_engine::ReaderEngine::new(ClaudeSpec, root, store_dir)
 }
 
 pub(crate) fn root() -> Result<PathBuf> {
@@ -178,12 +206,8 @@ pub(crate) fn root() -> Result<PathBuf> {
         .join(".claude"))
 }
 
-pub(crate) fn find_session_file(source_session_id: &str) -> Result<PathBuf> {
-    crate::support::fs::find_session_file(&root()?.join("projects"), source_session_id)
-}
-
-pub(crate) fn delete_session(path: &Path) -> Result<()> {
-    let family = session_family_for_path(path)?;
+pub(crate) fn delete_session(source_session_id: &str) -> Result<()> {
+    let family = BACKEND.engine()?.family_for_id(source_session_id)?;
     let root_session_id = family.root.summary.source_session_id.clone();
 
     for member in &family.members {
@@ -202,53 +226,38 @@ pub(crate) fn delete_session(path: &Path) -> Result<()> {
     remove_dir_if_exists(&root()?.join("projects").join(&root_session_id))?;
     remove_dir_if_exists(&root()?.join("session-env").join(&root_session_id))?;
     remove_dir_if_exists(&root()?.join("file-history").join(&root_session_id))?;
-    prune_empty_parents(root()?.join("projects"), path.parent());
-    lock_timeline_cache()?.clear();
-    lock_summary_cache()?.clear();
-    *lock_family_index_cache()? = None;
+    prune_empty_parents(root()?.join("projects"), family.root.member_path().parent());
+    BACKEND.engine()?.clear()?;
     Ok(())
 }
 
-fn list_session_rows() -> Result<Vec<ClaudeSessionRow>> {
-    let mut rows = Vec::new();
+// delete_session 的预演,动作与顺序对齐删除实现:成员文件 → subagent 元数据
+// → 三个 sidecar 目录。sidecar 保持 ~ 前缀拼写,由前端渲染为 $HOME 形式。
+pub(crate) fn delete_plan(overview: &SessionOverview) -> Result<Vec<DeletePlanAction>> {
+    let session_id = &overview.summary.source_session_id;
+    let mut actions = overview
+        .source_paths
+        .iter()
+        .map(|path| DeletePlanAction::RemoveFile { path: path.clone() })
+        .collect::<Vec<_>>();
 
-    for path in crate::support::fs::enumerate_jsonl_files(&root()?.join("projects"))? {
-        if let Ok(row) = parse_session_index_row(&path) {
-            rows.push(row);
+    // subagent 转录的同名 .meta.json 元数据只在路径形态上可推导,与执行侧
+    // "存在才删"的差别由用户在确认框看到的是完整意图保证。
+    for path in &overview.source_paths {
+        if path.contains("/subagents/") && path.ends_with(".jsonl") {
+            actions.push(DeletePlanAction::RemoveFile {
+                path: format!("{}.meta.json", path.strip_suffix(".jsonl").unwrap_or(path)),
+            });
         }
     }
 
-    Ok(rows)
-}
-
-fn list_session_families() -> Result<Vec<ClaudeSessionFamily>> {
-    Ok(family_index()?.index.families)
-}
-
-fn family_index() -> Result<ClaudeFamilyIndexCacheEntry> {
-    let projects_root = root()?.join("projects");
-    let source_key = projects_root.display().to_string();
-    let updated_at = claude_projects_timestamp()?;
-
-    if let Some(entry) = lock_family_index_cache()?
-        .as_ref()
-        .filter(|entry| entry.is_valid(&source_key, updated_at))
-        .cloned()
-    {
-        return Ok(entry);
+    for dir in ["projects", "session-env", "file-history"] {
+        actions.push(DeletePlanAction::RemoveDirectory {
+            path: format!("~/.claude/{dir}/{session_id}"),
+        });
     }
 
-    let entry = ClaudeFamilyIndexCacheEntry {
-        source_key,
-        updated_at,
-        index: super::family_index::FamilyIndex::build_with_ids(build_session_families(
-            list_session_rows()?,
-        )),
-    };
-
-    *lock_family_index_cache()? = Some(entry.clone());
-
-    Ok(entry)
+    Ok(actions)
 }
 
 // Member/family ordering and the id/path maps live in the shared engine; this
@@ -286,24 +295,6 @@ fn build_session_families(rows: Vec<ClaudeSessionRow>) -> Vec<ClaudeSessionFamil
             Some(ClaudeSessionFamily { root, members })
         })
         .collect()
-}
-
-fn session_family_for_path(path: &Path) -> Result<ClaudeSessionFamily> {
-    let key = crate::support::fs::path_key(path);
-    family_index()?
-        .index
-        .sessions_by_path
-        .get(&key)
-        .cloned()
-        .ok_or_else(|| anyhow!("Could not find Claude Code session for {}", path.display()))
-}
-
-fn session_path_for_id(source_session_id: &str) -> Result<PathBuf> {
-    if let Some(path) = family_index()?.index.path_for_id(source_session_id) {
-        return Ok(path);
-    }
-
-    find_session_file(source_session_id)
 }
 
 fn parse_session_index_row(path: &Path) -> Result<ClaudeSessionRow> {
@@ -461,19 +452,6 @@ fn family_member_display_name(row: &ClaudeSessionRow) -> String {
         .unwrap_or_else(|| row.summary.title.clone())
 }
 
-// is_root is a row flag, not an id comparison: non agent-* subagent files
-// fall back to the family key as their member id, which an id comparison
-// could not tell apart from the root.
-fn family_agents(family: &ClaudeSessionFamily) -> Vec<SessionAgent> {
-    super::family_timeline::family_agents(family, |row| {
-        if row.is_root {
-            FamilyAgentLabel::Root
-        } else {
-            FamilyAgentLabel::Child(family_member_display_name(row))
-        }
-    })
-}
-
 fn claude_path_timestamp(path: &Path) -> Result<i64> {
     let mut latest = crate::support::time::file_modified_timestamp_millis(path)?;
 
@@ -486,10 +464,10 @@ fn claude_path_timestamp(path: &Path) -> Result<i64> {
     Ok(latest)
 }
 
-fn claude_projects_timestamp() -> Result<i64> {
+fn claude_projects_timestamp(projects_root: &Path) -> Result<i64> {
     let mut latest = 0;
 
-    for path in crate::support::fs::enumerate_jsonl_files(&root()?.join("projects"))? {
+    for path in crate::support::fs::enumerate_jsonl_files(projects_root)? {
         latest = latest.max(claude_path_timestamp(&path)?);
 
         if !is_root_transcript(&path) {
@@ -519,169 +497,6 @@ fn family_timestamp(family: &ClaudeSessionFamily) -> Result<i64> {
     })
 }
 
-fn cached_messages_for_family(family: &ClaudeSessionFamily) -> Result<Vec<SessionMessage>> {
-    cached_family_messages(
-        &CLAUDE_TIMELINE_CACHE,
-        "Claude timeline",
-        family.root.summary.source_session_id.clone(),
-        family_timestamp(family)?,
-        || load_messages_for_family(family),
-    )
-}
-
-fn cached_events_for_family(family: &ClaudeSessionFamily) -> Result<Vec<SessionEvent>> {
-    cached_family_events(
-        &CLAUDE_TIMELINE_CACHE,
-        "Claude timeline",
-        family.root.summary.source_session_id.clone(),
-        family_timestamp(family)?,
-        || load_events_for_family(family),
-    )
-}
-
-fn subagent_marker_message(row: &ClaudeSessionRow) -> SessionMessage {
-    SessionMessage {
-        id: format!("claude-subagent-start-{}", row.agent_session_id),
-        role: "assistant".to_string(),
-        timestamp: row.summary.created_at,
-        blocks: vec![ContentBlock {
-            kind: "output_text".to_string(),
-            text: Some(format!(
-                "Sub-agent session: {}\n{}",
-                family_member_display_name(row),
-                row.agent_session_id
-            )),
-            tool_name: None,
-            tool_call_id: None,
-            is_error: None,
-            payload: Some(json!({
-                "type": "subagent_started",
-                "session_id": row.agent_session_id,
-                "title": family_member_display_name(row),
-                "transcript_path": row.path.display().to_string(),
-                "is_sidechain": true,
-            })),
-        }],
-        session_id: Some(row.agent_session_id.clone()),
-    }
-}
-
-fn subagent_marker_event(row: &ClaudeSessionRow) -> SessionEvent {
-    SessionEvent {
-        id: format!("claude-subagent-event-{}", row.agent_session_id),
-        kind: "subagent_started".to_string(),
-        timestamp: row.summary.created_at,
-        summary: format!(
-            "Sub-agent session started: {}",
-            family_member_display_name(row)
-        ),
-        payload: Some(json!({
-            "session_id": row.agent_session_id,
-            "title": family_member_display_name(row),
-            "transcript_path": row.path.display().to_string(),
-            "is_sidechain": true,
-        })),
-        session_id: Some(row.agent_session_id.clone()),
-    }
-}
-
-fn parse_summary(path: &Path) -> Result<SessionSummary> {
-    let family = session_family_for_path(path)?;
-    cached_family_summary(&family)
-}
-
-fn parse_overview(path: &Path) -> Result<SessionOverview> {
-    let family = session_family_for_path(path)?;
-    let summary = cached_family_summary(&family)?;
-    let messages = cached_messages_for_family(&family)?;
-    let events = cached_events_for_family(&family)?;
-
-    Ok(SessionOverview {
-        summary,
-        source_paths: family.source_paths(),
-        message_count: Some(messages.len()),
-        event_count: Some(events.len()),
-        agents: family_agents(&family),
-    })
-}
-
-fn parse_messages_page(path: &Path, offset: usize, limit: usize) -> Result<SessionMessagePage> {
-    let family = session_family_for_path(path)?;
-    let all_messages = cached_messages_for_family(&family)?;
-    let (messages, start, next_offset, total_count) =
-        crate::support::paging::slice_page(&all_messages, offset, limit);
-
-    Ok(SessionMessagePage {
-        messages,
-        offset: start,
-        limit,
-        next_offset,
-        total_count,
-        has_more: next_offset.is_some(),
-    })
-}
-
-fn parse_events_page(path: &Path, offset: usize, limit: usize) -> Result<SessionEventPage> {
-    let family = session_family_for_path(path)?;
-    let all_events = cached_events_for_family(&family)?;
-    let (events, start, next_offset, total_count) =
-        crate::support::paging::slice_page(&all_events, offset, limit);
-
-    Ok(SessionEventPage {
-        events,
-        offset: start,
-        limit,
-        next_offset,
-        total_count,
-        has_more: next_offset.is_some(),
-    })
-}
-
-fn cached_path_summary(path: &Path) -> Result<SessionSummary> {
-    let cache_key = path.display().to_string();
-    let updated_at = crate::support::time::file_modified_timestamp_millis(path)?;
-
-    if let Some(summary) = lock_summary_cache()?
-        .get(&cache_key)
-        .filter(|entry| entry.updated_at == updated_at)
-        .map(|entry| entry.summary.clone())
-    {
-        return Ok(summary);
-    }
-
-    // 跨进程的持久缓存：冷启动时未变更的文件跳过整文件解析。
-    if let Some(summary) = super::summary_cache::load(SourceApp::ClaudeCode, path, updated_at) {
-        lock_summary_cache()?.insert(
-            cache_key,
-            ClaudeSummaryCacheEntry {
-                updated_at,
-                summary: summary.clone(),
-            },
-        );
-        return Ok(summary);
-    }
-
-    let summary = parse_full_session_summary(path)?;
-    lock_summary_cache()?.insert(
-        cache_key,
-        ClaudeSummaryCacheEntry {
-            updated_at,
-            summary: summary.clone(),
-        },
-    );
-    super::summary_cache::store(SourceApp::ClaudeCode, path, updated_at, &summary);
-    Ok(summary)
-}
-
-fn cached_family_summary(family: &ClaudeSessionFamily) -> Result<SessionSummary> {
-    let mut summary = cached_path_summary(&family.root.path)?;
-    family.apply_summary_aggregates(&mut summary);
-    // 覆盖为 family 全体成员之和:路径级缓存只含 root 文件,子代理文件的
-    // 消耗在各自索引行里。
-    summary.token_usage = family.sum_token_usage(|row| row.summary.token_usage);
-    Ok(summary)
-}
-
 fn parse_timeline_record(index: usize, value: &Value, session_id: &str) -> Option<TimelineRecord> {
     let timestamp = value
         .get("timestamp")
@@ -701,11 +516,18 @@ fn parse_timeline_record(index: usize, value: &Value, session_id: &str) -> Optio
             }
 
             if blocks.is_empty() {
-                blocks.push(super::empty_message_block(
-                    "Claude Code",
-                    "content was empty after sanitization",
-                    Some(message.clone()),
-                ));
+                // 整条都是宿主注入的上下文时保留原文，其余空消息仍退化成原始报文诊断块
+                blocks.push(
+                    super::injected_context_block(message.get("content"), message).unwrap_or_else(
+                        || {
+                            super::empty_message_block(
+                                "Claude Code",
+                                "content was empty after sanitization",
+                                Some(message.clone()),
+                            )
+                        },
+                    ),
+                );
             }
 
             return Some(TimelineRecord::Message(SessionMessage {
@@ -731,82 +553,53 @@ fn parse_timeline_record(index: usize, value: &Value, session_id: &str) -> Optio
     }
 }
 
-fn load_messages(path: &Path, session_id: &str) -> Result<Vec<SessionMessage>> {
-    let mut messages = Vec::new();
+// Claude Code 的本地命令记录：斜杠命令自身与它的输出分别成块，
+// 提取可读文本给前端渲染（原始报文在会话文件里，界面不需要再看 JSON）。
+fn local_command_block(text: &str) -> Option<ContentBlock> {
+    if let Some(name) = tag_text(text, "command-name") {
+        let args = tag_text(text, "command-args").unwrap_or_default();
+        let summary = if args.is_empty() {
+            name
+        } else {
+            format!("{name} {args}")
+        };
+        return Some(super::diagnostic_block("local_command", summary, None));
+    }
 
-    for (index, line) in BufReader::new(File::open(path)?).lines().enumerate() {
-        let value = super::parse_json_line(&line?)?;
-
-        if let Some(TimelineRecord::Message(message)) =
-            parse_timeline_record(index, &value, session_id)
-        {
-            messages.push(message);
+    for tag in ["local-command-stdout", "local-command-stderr"] {
+        if let Some(output) = tag_text(text, tag).filter(|output| !output.trim().is_empty()) {
+            return Some(super::diagnostic_block(
+                "local_command_output",
+                output,
+                None,
+            ));
         }
     }
 
-    Ok(messages)
+    None
 }
 
-fn load_events(path: &Path, session_id: &str) -> Result<Vec<SessionEvent>> {
-    let mut events = Vec::new();
-
-    for (index, line) in BufReader::new(File::open(path)?).lines().enumerate() {
-        let value = super::parse_json_line(&line?)?;
-
-        if let Some(TimelineRecord::Event(event)) = parse_timeline_record(index, &value, session_id)
-        {
-            events.push(event);
-        }
-    }
-
-    Ok(events)
-}
-
-fn load_messages_for_family(family: &ClaudeSessionFamily) -> Result<Vec<SessionMessage>> {
-    let mut messages = Vec::new();
-
-    for row in &family.members {
-        if !row.is_root {
-            messages.push(subagent_marker_message(row));
-        }
-
-        messages.extend(load_messages(&row.path, &row.agent_session_id)?);
-    }
-
-    messages.sort_by(|left, right| {
-        left.timestamp
-            .cmp(&right.timestamp)
-            .then_with(|| left.id.cmp(&right.id))
-    });
-
-    Ok(messages)
-}
-
-fn load_events_for_family(family: &ClaudeSessionFamily) -> Result<Vec<SessionEvent>> {
-    let mut events = Vec::new();
-
-    for row in &family.members {
-        if !row.is_root {
-            events.push(subagent_marker_event(row));
-        }
-
-        events.extend(load_events(&row.path, &row.agent_session_id)?);
-    }
-
-    events.sort_by(|left, right| {
-        left.timestamp
-            .cmp(&right.timestamp)
-            .then_with(|| left.id.cmp(&right.id))
-    });
-
-    Ok(events)
+// 取 <tag>…</tag> 之间的文本；标签不成对时返回 None，不猜。
+fn tag_text(text: &str, tag: &str) -> Option<String> {
+    let open = format!("<{tag}>");
+    let close = format!("</{tag}>");
+    let start = text.find(&open)? + open.len();
+    let end = start + text[start..].find(&close)?;
+    Some(text[start..end].trim().to_string())
 }
 
 fn parse_message_blocks(content: Option<&Value>, role: &str) -> Vec<ContentBlock> {
     match content {
         Some(Value::String(text)) => {
-            if role == "user" && super::is_transport_message(text) {
-                return Vec::new();
+            if role == "user" {
+                // 本地命令记录（/exit 这类斜杠命令与其输出）既不是对话，也不该当噪音丢掉
+                if let Some(block) = local_command_block(text) {
+                    return vec![block];
+                }
+
+                if super::is_transport_message(text) {
+                    return Vec::new();
+                }
             }
 
             vec![ContentBlock {
@@ -823,9 +616,18 @@ fn parse_message_blocks(content: Option<&Value>, role: &str) -> Vec<ContentBlock
             .filter_map(|item| {
                 let kind =
                     super::json_string(item, &["type"]).unwrap_or_else(|| "unknown".to_string());
+                // 图片块没有文本：把 source.data / media_type 还原成 data URL 当正文，
+                // 前端才能直接渲染
                 let text = super::json_string(item, &["text"])
                     .or_else(|| super::json_string(item, &["thinking"]))
-                    .or_else(|| super::json_string(item, &["content"]));
+                    .or_else(|| super::json_string(item, &["content"]))
+                    .or_else(|| {
+                        if matches!(kind.as_str(), "image" | "input_image") {
+                            super::image_reference(item)
+                        } else {
+                            None
+                        }
+                    });
 
                 Some(ContentBlock {
                     kind,

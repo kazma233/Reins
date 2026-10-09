@@ -164,6 +164,19 @@
   font-family: var(--font-mono);
 }
 
+/* 同步结果常驻在提供商卡片内，直到该提供商下一次同步。 */
+/* 动作失败的回执放在操作行左端，与卡片提示同一口径。
+   flex-basis 0：长文案只在自己这一格换行，不把按钮挤到下一行 */
+.providers-apply-hint {
+  flex: 1 1 0;
+  min-width: 0;
+  margin: 0;
+  color: var(--color-danger);
+  font-size: var(--font-size-sm);
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
 .providers-card__actions {
   display: flex;
   flex-wrap: wrap;
@@ -183,6 +196,18 @@
   margin: 0;
   color: var(--color-muted);
   font-size: var(--font-size-sm);
+}
+
+.providers-entry__note--error {
+  color: var(--color-danger);
+}
+
+/* 卡片刷新失败：错误说明与重试同排常驻。 */
+.providers-app__refresh-error {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
 }
 
 .providers-badge {
@@ -243,6 +268,16 @@
 .providers-field span {
   color: var(--color-body);
   font-size: var(--font-size-md);
+}
+
+/* 字段错误跟在 label 同一行：出现时不会把下方内容顶下去 */
+.providers-field__error {
+  margin-left: 6px;
+}
+
+/* 列表级错误（模型目录）跟在标题右侧，不参与 space-between 的分布 */
+.providers-section-header .providers-field__error {
+  margin-right: auto;
 }
 
 .providers-field__hint {
@@ -344,6 +379,10 @@
   gap: 8px;
   color: var(--color-body);
   font-size: var(--font-size-md);
+}
+
+.providers-fetched-item--existing {
+  color: var(--color-muted);
 }
 
 .providers-diff {

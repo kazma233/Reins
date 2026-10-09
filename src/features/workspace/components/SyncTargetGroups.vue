@@ -6,6 +6,7 @@ import {
   pendingSkillLinkCleanupCount,
   hasCurrentSourceSkillLinks,
   hasUnmanagedSkillLinks,
+  isSelectableSyncTarget,
   skillLinkSourceLabel,
   skillLinkSourcePath,
   skillLinkStateInfo,
@@ -35,7 +36,7 @@ defineEmits<{
 }>();
 
 function getSelectableTargetIds(targets: SyncTargetOption[]): string[] {
-  return targets.filter((t) => t.enabled && !t.linkedTargetId).map((t) => t.id);
+  return targets.filter(isSelectableSyncTarget).map((t) => t.id);
 }
 
 function isCurrentSourceLink(link: SkillLinkAssociation): boolean {

@@ -10,14 +10,16 @@ defineProps<ToolRowProps>();
 
 const expanded = ref(false);
 
-function statusText(status: ToolRowItem["status"]): string | null {
+// tag 文案是"这次调用做了什么"（运行命令 / 已读取…），状态由 tag 颜色表达
+// （绿=成功、红=失败、黄=无结果）。
+function statusTagClass(status: ToolRowItem["status"]): string {
   if (status === "error") {
-    return "失败";
+    return "flow-row-tag--danger";
   }
   if (status === "no-result") {
-    return "无结果";
+    return "flow-row-tag--warning";
   }
-  return null;
+  return "flow-row-tag--success";
 }
 </script>
 
@@ -28,11 +30,8 @@ function statusText(status: ToolRowItem["status"]): string | null {
       type="button"
       @click="expanded = !expanded"
     >
-      <span :class="['flow-tool-dot', item.status]" />
+      <span :class="['flow-row-tag', statusTagClass(item.status)]">{{ item.label }}</span>
       <span class="flow-tool-summary">{{ item.summary }}</span>
-      <span v-if="statusText(item.status)" :class="['flow-tool-status', item.status]">
-        {{ statusText(item.status) }}
-      </span>
       <span class="flow-tool-chevron">{{ expanded ? "▾" : "▸" }}</span>
     </button>
     <pre v-if="expanded && item.detailText" class="flow-tool-detail">{{ item.detailText }}</pre>

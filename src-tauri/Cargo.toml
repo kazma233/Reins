@@ -1,9 +1,10 @@
 [package]
 name = "reins"
-version = "0.2.2"
+version = "0.2.3"
 description = "Read and inspect local coding-agent sessions."
 authors = ["kazma"]
 edition = "2024"
+default-run = "reins"
 
 [lib]
 name = "reins_core"
@@ -19,7 +20,7 @@ dirs = "7.0.0"
 json5 = "1.3.1"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
-serde_yaml = "0.9.34"
+serde_yaml = { package = "yaml_serde", version = "0.10" }
 rfd = "0.17.2"
 tauri = { version = "2.11.5", features = [] }
 toml = "1.1.5"
@@ -27,11 +28,9 @@ rusqlite = { version = "0.40.2", features = ["bundled"] }
 ts-rs = "12"
 uuid = { version = "1.26.0", features = ["v4", "serde"] }
 walkdir = "2.5.0"
-# providers 域：模型目录拉取；rustls 避免 Windows 上引入 openssl；
-# system-proxy 跟随系统代理，但不读 macOS 例外列表，局域网地址也会经代理
+ruzstd = "0.9.0"
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls", "system-proxy"] }
 
 [target.'cfg(windows)'.dependencies]
 junction = "2.0.0"
-# Windows 上 std canonicalize 返回 \\?\ verbatim 路径;统一走 dunce 取普通拼写。
 dunce = "1.0.5"

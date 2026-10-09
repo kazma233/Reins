@@ -1,6 +1,4 @@
-use std::path::{Path, PathBuf};
-
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 
 pub(crate) mod catalog;
 pub(crate) mod commands;
@@ -12,46 +10,50 @@ pub(crate) mod timeline;
 
 pub(crate) mod claude_code;
 pub(crate) mod codex;
+pub(crate) mod dsh;
 pub(crate) mod family_index;
 pub(crate) mod family_timeline;
 pub(crate) mod grokbuild;
 pub(crate) mod opencode;
 pub(crate) mod pi;
+pub(crate) mod reader_engine;
+pub(crate) mod sources;
 pub(crate) mod summary_cache;
 pub(crate) mod usage_day_cache;
 pub(crate) mod usage_stats;
 pub(crate) mod zcode;
 
 use self::catalog::*;
-use self::family_timeline::*;
 use self::jsonl::*;
 use self::model::*;
 use self::text::*;
 use self::usage_stats::{hour_key, merge_usage_bucket};
 
-pub(crate) trait SessionReader {
+// Sync:来源注册表的 spec 会跨线程共享(按来源并行探测/统计),读取器自身
+// 必须无内部可变性,并发安全靠各实现内部的 static Mutex 保证。
+// 会话身份是(来源, source_session_id)二元组:transcript_path 只是展示字段,
+// 读取器接口不认路径。
+pub(crate) trait SessionReader: Sync {
     fn list_entries(&self) -> Result<Vec<SessionFileEntry>>;
 
     fn clear_cache(&self) -> Result<()> {
         Ok(())
     }
 
-    fn resolve_path(&self, source_session_id: &str) -> Result<PathBuf>;
+    fn parse_summary(&self, source_session_id: &str) -> Result<SessionSummary>;
 
-    fn parse_summary(&self, path: &Path) -> Result<SessionSummary>;
-
-    fn parse_overview(&self, path: &Path) -> Result<SessionOverview>;
+    fn parse_overview(&self, source_session_id: &str) -> Result<SessionOverview>;
 
     fn parse_messages_page(
         &self,
-        path: &Path,
+        source_session_id: &str,
         offset: usize,
         limit: usize,
     ) -> Result<SessionMessagePage>;
 
     fn parse_events_page(
         &self,
-        path: &Path,
+        source_session_id: &str,
         offset: usize,
         limit: usize,
     ) -> Result<SessionEventPage>;
@@ -63,7 +65,7 @@ pub(crate) trait SessionReader {
     // 与“子会话确实没消息”保持可区分。
     fn parse_agent_messages(
         &self,
-        _path: &Path,
+        _source_session_id: &str,
         _agent_session_id: &str,
     ) -> Result<Vec<SessionMessage>> {
         bail!("该来源的子代理不以独立会话存储，无法按 agent session id 取消息")
@@ -71,39 +73,41 @@ pub(crate) trait SessionReader {
 }
 
 pub(crate) fn reader(source_app: SourceApp) -> &'static dyn SessionReader {
-    match source_app {
-        SourceApp::Codex => &codex::BACKEND,
-        SourceApp::ClaudeCode => &claude_code::BACKEND,
-        SourceApp::OpenCode => &opencode::BACKEND,
-        SourceApp::Pi => &pi::BACKEND,
-        SourceApp::GrokBuild => &grokbuild::BACKEND,
-        SourceApp::Zcode => &zcode::BACKEND,
-    }
+    sources::spec(source_app).reader
+}
+
+// SQLite 来源的 db 文件与数据表都随该来源首次写入才落地,表缺失只说明它还没
+// 有会话。读取器据此把"没有数据"与"读取失败"分开,不把 no such table 报给用户。
+pub(crate) fn sqlite_table_exists(connection: &rusqlite::Connection, table: &str) -> Result<bool> {
+    let exists: Option<i64> = connection
+        .query_row(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1",
+            [table],
+            |row| row.get(0),
+        )
+        .map(Some)
+        .or_else(|error| match error {
+            rusqlite::Error::QueryReturnedNoRows => Ok(None),
+            other => Err(other),
+        })
+        .with_context(|| format!("Failed to inspect sqlite table {table}"))?;
+    Ok(exists.is_some())
 }
 
 pub(crate) fn clear_all_caches() -> Result<()> {
-    reader(SourceApp::Codex).clear_cache()?;
-    reader(SourceApp::ClaudeCode).clear_cache()?;
-    reader(SourceApp::OpenCode).clear_cache()?;
-    reader(SourceApp::Pi).clear_cache()?;
-    reader(SourceApp::GrokBuild).clear_cache()?;
-    reader(SourceApp::Zcode).clear_cache()?;
+    for spec in sources::SOURCES {
+        spec.reader.clear_cache()?;
+    }
     // 持久缓存一并清空：用户触发的刷新是"全量重建"的逃生通道。
     summary_cache::clear_all();
     usage_day_cache::clear_all();
     Ok(())
 }
 
-pub(crate) fn delete_session(source_app: SourceApp, path: &Path) -> Result<()> {
-    match source_app {
-        SourceApp::Codex => codex::delete_session(path),
-        SourceApp::ClaudeCode => claude_code::delete_session(path),
-        SourceApp::OpenCode => opencode::delete_session(path),
-        SourceApp::Pi => pi::delete_session(path),
-        SourceApp::GrokBuild => grokbuild::delete_session(path),
-        // zcode CLI 不随桌面版安装、无官方单会话删除命令,直接删库又与常驻
-        // 进程的写入冲突,所以整体不提供删除。
-        SourceApp::Zcode => bail!("ZCode session deletion is unsupported"),
+pub(crate) fn delete_session(source_app: SourceApp, source_session_id: &str) -> Result<()> {
+    match sources::spec(source_app).delete {
+        sources::DeletePolicy::Deleter { delete, .. } => delete(source_session_id),
+        sources::DeletePolicy::Unsupported { reason, .. } => bail!("{reason}"),
     }
 }
 

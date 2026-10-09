@@ -2,7 +2,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 
-use anyhow::{Result, anyhow};
+use anyhow::Result;
 use walkdir::WalkDir;
 
 pub(crate) fn grok_home_path(
@@ -83,7 +83,22 @@ pub(crate) fn path_key(path: &Path) -> String {
 // Write through a same-directory temp file + rename, so a crash mid-write can
 // never leave a half-written file behind. std::fs::rename replaces existing
 // files on Windows as well.
+//
+// 权限语义：rename 会用临时文件的权限覆盖目标，而临时文件是默认 umask
+// 建出来的——新文件必须是 0600 的敏感文件（如 dsh 的 .credentials.yaml）
+// 会被静默放宽为 0644，依赖方会在下次启动时拒绝加载。因此覆盖既有文件时
+// 先复制目标的权限，敏感文件用 write_atomic_private 强制 owner-only。
 pub(crate) fn write_atomic(path: &Path, contents: &str) -> Result<()> {
+    write_atomic_with(path, contents, false)
+}
+
+// 敏感文件（凭据等）的原子写：无论新建还是覆盖都强制 0600（unix），
+// 顺带修复被写坏权限的既有文件。非 unix 平台与 write_atomic 等价。
+pub(crate) fn write_atomic_private(path: &Path, contents: &str) -> Result<()> {
+    write_atomic_with(path, contents, true)
+}
+
+fn write_atomic_with(path: &Path, contents: &str, private: bool) -> Result<()> {
     use std::ffi::OsStr;
 
     let directory = path.parent().unwrap_or_else(|| Path::new("."));
@@ -97,7 +112,9 @@ pub(crate) fn write_atomic(path: &Path, contents: &str) -> Result<()> {
     // temp file, and the dot prefix keeps it out of glob listings.
     let tmp_path = directory.join(format!(".{file_name}.{}.tmp", uuid::Uuid::new_v4()));
 
-    let result = fs::write(&tmp_path, contents).and_then(|()| fs::rename(&tmp_path, path));
+    let result = fs::write(&tmp_path, contents)
+        .and_then(|()| apply_mode(&tmp_path, path, private))
+        .and_then(|()| fs::rename(&tmp_path, path));
     if result.is_err() {
         // Best-effort cleanup; a leftover temp file is harmless but noisy.
         let _ = fs::remove_file(&tmp_path);
@@ -106,6 +123,28 @@ pub(crate) fn write_atomic(path: &Path, contents: &str) -> Result<()> {
     // user-facing message, and stacking contexts would only obscure it.
     result?;
 
+    Ok(())
+}
+
+#[cfg(unix)]
+fn apply_mode(tmp_path: &Path, path: &Path, private: bool) -> std::io::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let mode = if private {
+        0o600
+    } else {
+        match fs::metadata(path) {
+            // mode() 是原始 st_mode，可能带文件类型位，chmod 只吃权限位。
+            Ok(metadata) => metadata.permissions().mode() & 0o7777,
+            Err(_) => return Ok(()),
+        }
+    };
+
+    fs::set_permissions(tmp_path, fs::Permissions::from_mode(mode))
+}
+
+#[cfg(not(unix))]
+fn apply_mode(_tmp_path: &Path, _path: &Path, _private: bool) -> std::io::Result<()> {
     Ok(())
 }
 
@@ -127,17 +166,6 @@ pub(crate) fn display_path(path: &Path) -> String {
     }
 }
 
-pub(crate) fn find_session_file(root: &Path, source_session_id: &str) -> Result<PathBuf> {
-    enumerate_jsonl_files(root)?
-        .into_iter()
-        .find(|path| {
-            path.file_name()
-                .and_then(|name| name.to_str())
-                .is_some_and(|name| name.contains(source_session_id))
-        })
-        .ok_or_else(|| anyhow!("Could not find session file for {source_session_id}"))
-}
-
 pub(crate) fn enumerate_jsonl_files(root: &Path) -> Result<Vec<PathBuf>> {
     if !root.exists() {
         return Ok(Vec::new());
@@ -157,4 +185,54 @@ pub(crate) fn enumerate_jsonl_files(root: &Path) -> Result<Vec<PathBuf>> {
     }
 
     Ok(files)
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+
+    fn mode_of(path: &Path) -> u32 {
+        fs::metadata(path).expect("metadata").permissions().mode() & 0o7777
+    }
+
+    fn test_dir(label: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("reins-fs-{label}-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&dir).expect("test dir");
+        dir
+    }
+
+    // 覆盖既有文件时权限必须随目标保留:临时文件是 umask 默认权限,
+    // 不处理后 rename 会把目标权限静默放宽。
+    #[test]
+    fn write_atomic_preserves_existing_permissions() {
+        let dir = test_dir("preserve");
+        let path = dir.join("config.yaml");
+        fs::write(&path, "old").unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o640)).unwrap();
+
+        write_atomic(&path, "new").unwrap();
+
+        assert_eq!(fs::read_to_string(&path).unwrap(), "new");
+        assert_eq!(mode_of(&path), 0o640);
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    // 敏感文件无论覆盖还是新建都强制 0600:覆盖场景顺带修复被旧版本
+    // 写坏的权限,dsh 的启动守卫要求凭据文件必须 owner-only。
+    #[test]
+    fn write_atomic_private_forces_owner_only() {
+        let dir = test_dir("private");
+        let existing = dir.join(".credentials.yaml");
+        fs::write(&existing, "old").unwrap();
+        fs::set_permissions(&existing, fs::Permissions::from_mode(0o644)).unwrap();
+
+        write_atomic_private(&existing, "new").unwrap();
+        assert_eq!(mode_of(&existing), 0o600);
+
+        let fresh = dir.join("fresh-credentials.yaml");
+        write_atomic_private(&fresh, "new").unwrap();
+        assert_eq!(mode_of(&fresh), 0o600);
+        fs::remove_dir_all(&dir).ok();
+    }
 }

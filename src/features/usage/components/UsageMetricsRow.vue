@@ -52,7 +52,7 @@ withDefaults(defineProps<UsageMetricsRowProps>(), { mode: "window" });
       <span class="usage-metric__meta">缓存读 / (输入 + 缓存读)</span>
     </div>
     <div class="usage-metric">
-      <span class="usage-metric__label">{{ mode === "today" ? "今日有用量会话" : "有用量会话" }}</span>
+      <span class="usage-metric__label">{{ mode === "today" ? "今日有消耗的会话" : "有消耗的会话" }}</span>
       <span class="usage-metric__value">{{ metrics.sessionCount.toLocaleString("zh-CN") }}</span>
       <span class="usage-metric__meta">{{
         mode === "today" ? "今日产生消耗的会话数" : "全周期累计,不随窗口变化"

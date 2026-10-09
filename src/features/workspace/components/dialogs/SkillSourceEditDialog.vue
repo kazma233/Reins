@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import DialogShell from "@shared/ui/DialogShell.vue";
+import AppFieldError from "@shared/ui/AppFieldError.vue";
 import SkillDiscoveryPreview from "../SkillDiscoveryPreview.vue";
 import type { SkillDiscoveryResult } from "../../types";
 import type { SkillSourceEditDialogState } from "../../model";
@@ -8,6 +9,7 @@ import type { SkillSourceEditDialogState } from "../../model";
 type SkillSourceEditDialogProps = {
   state: SkillSourceEditDialogState;
   loading: boolean;
+  error: string | null;
 };
 
 const props = defineProps<SkillSourceEditDialogProps>();
@@ -68,6 +70,8 @@ function handlePathPatternsInput(value: string) {
     </template>
 
     <div class="manager-import-shell manager-import-shell--compact">
+      <AppFieldError :message="error" />
+
       <template v-if="state.sourceType === 'git'">
         <div class="manager-import-row manager-import-row--git-source">
           <label class="manager-field manager-import-row__field manager-import-row__field--repo">
@@ -124,6 +128,7 @@ function handlePathPatternsInput(value: string) {
     <SkillDiscoveryPreview
       :discovery="state.preview.discovery"
       :empty-text="state.preview.previewLoading ? '正在读取来源...' : '先刷新预览。'"
+      :error="state.preview.previewError"
       :loading="state.preview.previewLoading"
     />
   </DialogShell>

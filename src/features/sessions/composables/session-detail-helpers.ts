@@ -135,14 +135,14 @@ export function formatVisibleEventLabel(
   timelineFilter: string
 ): string {
   if (timelineFilter.length > 0) {
-    return `匹配 ${filteredEventCount} 条事件`;
+    return `匹配 ${filteredEventCount} 条记录`;
   }
 
   if (filteredEventCount === 0 && nextEventOffset === 0) {
-    return `未加载事件`;
+    return `未加载记录`;
   }
 
-  return `已显示 ${filteredEventCount} 条事件`;
+  return `已显示 ${filteredEventCount} 条记录`;
 }
 
 export function emptyMessageText(timelineFilter: string): string {
@@ -155,9 +155,9 @@ export function emptyMessageText(timelineFilter: string): string {
 
 export function emptyEventText(timelineFilter: string): string {
   if (timelineFilter.length > 0) {
-    return `没有匹配“${timelineFilter}”的事件。`;
+    return `没有匹配“${timelineFilter}”的记录。`;
   }
-  return `当前暂无事件。`;
+  return `当前暂无记录。`;
 }
 
 export function shouldShowEventAgentChip(

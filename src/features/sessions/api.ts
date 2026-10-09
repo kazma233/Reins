@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { SourceSelection } from "./source-app";
 import type {
+  DeletePlan,
   DeleteSessionResult,
   SessionMessage,
   SessionPage,
@@ -57,16 +58,14 @@ export function refreshSessions(
 
 export function getSessionOverview(
   sourceApp: SourceApp,
-  sourceSessionId: string,
-  transcriptPath?: string
+  sourceSessionId: string
 ): Promise<SessionOverview> {
-  return invoke("get_session_overview", { sourceApp, sourceSessionId, transcriptPath });
+  return invoke("get_session_overview", { sourceApp, sourceSessionId });
 }
 
 type GetSessionItemsInput = {
   offset?: number;
   limit?: number;
-  transcriptPath?: string;
 };
 
 export function getSessionMessages(
@@ -77,7 +76,6 @@ export function getSessionMessages(
   return invoke("get_session_messages", {
     sourceApp,
     sourceSessionId,
-    transcriptPath: input.transcriptPath,
     offset: input.offset,
     limit: input.limit
   });
@@ -87,14 +85,12 @@ export function getSessionMessages(
 export function getSessionAgentMessages(
   sourceApp: SourceApp,
   sourceSessionId: string,
-  agentSessionId: string,
-  transcriptPath?: string
+  agentSessionId: string
 ): Promise<SessionMessage[]> {
   return invoke("get_session_agent_messages", {
     sourceApp,
     sourceSessionId,
-    agentSessionId,
-    transcriptPath
+    agentSessionId
   });
 }
 
@@ -106,20 +102,21 @@ export function getSessionEvents(
   return invoke("get_session_events", {
     sourceApp,
     sourceSessionId,
-    transcriptPath: input.transcriptPath,
     offset: input.offset,
     limit: input.limit
   });
 }
 
+export function getDeletePlan(
+  sourceApp: SourceApp,
+  sourceSessionId: string
+): Promise<DeletePlan> {
+  return invoke("get_delete_plan", { sourceApp, sourceSessionId });
+}
+
 export function deleteSession(
   sourceApp: SourceApp,
-  sourceSessionId: string,
-  transcriptPath?: string
+  sourceSessionId: string
 ): Promise<DeleteSessionResult> {
-  return invoke("delete_session", {
-    sourceApp,
-    sourceSessionId,
-    transcriptPath
-  });
+  return invoke("delete_session", { sourceApp, sourceSessionId });
 }

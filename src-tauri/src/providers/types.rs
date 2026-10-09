@@ -96,25 +96,25 @@ pub(crate) enum ProviderAppId {
     Opencode,
     Pi,
     Grokbuild,
+    Dsh,
 }
 
-pub(crate) const PROVIDER_APPS: [ProviderAppId; 5] = [
+pub(crate) const PROVIDER_APPS: [ProviderAppId; 6] = [
     ProviderAppId::Codex,
     ProviderAppId::Claude,
     ProviderAppId::Opencode,
     ProviderAppId::Pi,
     ProviderAppId::Grokbuild,
+    ProviderAppId::Dsh,
 ];
 
 impl ProviderAppId {
+    // 产品名唯一来源是 agents 清单；PROVIDER_APPS 对 AGENTS 的全覆盖由
+    // tests/agents.rs 的一致性断言守卫。
     pub(crate) fn label(self) -> &'static str {
-        match self {
-            ProviderAppId::Codex => "Codex",
-            ProviderAppId::Claude => "Claude Code",
-            ProviderAppId::Opencode => "OpenCode",
-            ProviderAppId::Pi => "Pi",
-            ProviderAppId::Grokbuild => "Grok Build",
-        }
+        crate::agents::spec_by_provider_app(self)
+            .expect("providers 工具未登记 agents 清单")
+            .label
     }
 }
 
@@ -337,11 +337,25 @@ pub(crate) struct ProviderModelInput {
     pub(crate) reasoning_levels: Option<Vec<ReasoningLevel>>,
 }
 
+// 调用方的写入意图：新增时拒绝覆盖同名记录，更新时要求记录已存在。
+// 不传按 upsert 处理（既有内部调用方保持原语义）。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../src/features/providers/generated/")]
+pub(crate) enum ProviderWriteMode {
+    #[default]
+    Upsert,
+    Create,
+    Update,
+}
+
 #[derive(Clone, Debug, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export, export_to = "../../src/features/providers/generated/")]
 pub(crate) struct ProviderUpsertInput {
     pub(crate) provider_id: String,
+    #[serde(default)]
+    pub(crate) mode: ProviderWriteMode,
     pub(crate) label: String,
     pub(crate) protocol: ProviderProtocol,
     pub(crate) base_url: String,
