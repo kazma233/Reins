@@ -24,7 +24,6 @@ type WorkspaceTargetPayload = {
   enabled: boolean;
   skillDir: string;
   configPath?: string | null;
-  mcpConfigPrefix: string;
 };
 
 type WorkspaceMcpPayload = {
@@ -68,7 +67,6 @@ function buildWorkspaceTargetPayload(payload: WorkspaceTargetPayload) {
     enabled: payload.enabled,
     skillDir: payload.skillDir,
     configPath: payload.configPath ?? null,
-    mcpConfigPrefix: payload.mcpConfigPrefix,
   };
 }
 

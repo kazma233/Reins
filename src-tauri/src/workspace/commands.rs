@@ -176,7 +176,6 @@ pub(crate) async fn create_workspace_target(
     enabled: bool,
     skill_dir: String,
     config_path: Option<String>,
-    mcp_config_prefix: String,
 ) -> std::result::Result<WorkspaceTargetMutationResult, String> {
     logger::log_info(format!("create_workspace_target target_id={target_id}"));
     let store = store.inner().clone();
@@ -188,7 +187,6 @@ pub(crate) async fn create_workspace_target(
                 enabled,
                 skill_dir,
                 config_path,
-                mcp_config_prefix,
             },
         )
     })
@@ -203,7 +201,6 @@ pub(crate) async fn update_workspace_target(
     enabled: bool,
     skill_dir: String,
     config_path: Option<String>,
-    mcp_config_prefix: String,
 ) -> std::result::Result<WorkspaceTargetMutationResult, String> {
     logger::log_info(format!(
         "update_workspace_target current_target_id={current_target_id} target_id={target_id}"
@@ -218,7 +215,6 @@ pub(crate) async fn update_workspace_target(
                 enabled,
                 skill_dir,
                 config_path,
-                mcp_config_prefix,
             },
         )
     })

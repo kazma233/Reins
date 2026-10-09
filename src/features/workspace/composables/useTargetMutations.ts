@@ -174,7 +174,6 @@ export function useTargetMutations() {
               enabled: !target.enabled,
               skillDir: target.skillDir,
               configPath: target.configPath,
-              mcpConfigPrefix: target.mcpConfigPrefix,
             }),
           reload: true,
           pageLock: false,
@@ -254,7 +253,6 @@ export function useTargetMutations() {
       enabled: form.enabled,
       skillDir: form.skillDir.trim(),
       configPath: form.configPath.trim() || null,
-      mcpConfigPrefix: form.mcpConfigPrefix.trim(),
     };
 
     targetCreateDialog.loading = true;

@@ -107,10 +107,27 @@ pub(crate) fn create_workspace_target_inner(
 ) -> Result<WorkspaceTargetMutationResult> {
     store.locked(|config| {
         let mut raw_config = config.parse_raw()?;
-        // create 只接受内置工具，MCP 格式由 AgentSpec 派生，不信任客户端传值。
-        let config_type = builtin_create_config_type(&normalize_target_id(&input.target_id)?)?;
-        let (target_id, target_config) =
-            normalize_raw_target_input(input, Some(config_type), config.config_path())?;
+        // create 只接受内置工具，MCP 格式由 AgentSpec 派生，不信任客户端
+        // 传值。配置节点路径默认留空(用户未显式提供 config_path 时不假设
+        // 想要 MCP,避免默认值诱发校验噪音);用户显式提供 config_path 时
+        // 从 defaults 取同工具的 configPrefix,与解析侧同口径。
+        let target_id = normalize_target_id(&input.target_id)?;
+        let config_type = builtin_create_config_type(&target_id)?;
+        let defaults_prefix = input
+            .config_path
+            .as_deref()
+            .filter(|path| !path.trim().is_empty())
+            .and_then(|_| {
+                builtin_target_defaults_map()
+                    .get(&target_id)
+                    .map(|defaults| defaults.config_prefix.to_string())
+            });
+        let (target_id, target_config) = normalize_raw_target_input(
+            input,
+            Some(config_type),
+            defaults_prefix,
+            config.config_path(),
+        )?;
 
         if raw_config.targets.contains_key(target_id.as_str()) {
             bail!("target 已存在：{}", target_id);
@@ -143,14 +160,23 @@ pub(crate) fn update_workspace_target_inner(
             bail!("target 不存在：{}", current_target_id);
         }
 
-        // 存量 config_type 原样保留（省略仍省略、显式仍显式），客户端不再
-        // 传 MCP 格式；有效类型回落内置 defaults 的口径与解析侧一致。
+        // 存量 config_type 与 config_prefix 原样保留(省略仍省略、显式仍
+        // 显式),客户端不再传这两个字段;有效类型回落内置 defaults 的口径
+        // 与解析侧一致。
+        let stored = raw_config
+            .targets
+            .get(current_target_id.as_str())
+            .and_then(|target| target.mcp.config_prefix.clone());
         let stored_config_type = raw_config
             .targets
             .get(current_target_id.as_str())
             .and_then(|target| target.mcp.config_type);
-        let (next_target_id, next_target) =
-            normalize_raw_target_input(input, stored_config_type, config.config_path())?;
+        let (next_target_id, next_target) = normalize_raw_target_input(
+            input,
+            stored_config_type,
+            stored,
+            config.config_path(),
+        )?;
 
         if next_target_id != current_target_id
             && raw_config.targets.contains_key(next_target_id.as_str())
@@ -288,6 +314,9 @@ fn normalize_raw_target_input(
     input: RawTargetInput,
     // 落盘的 config_type：create 传派生值，update 传存量原值。
     persisted_config_type: Option<McpConfigType>,
+    // MCP 配置节点路径：create 走内置 defaults 派生，update 走存量原值;
+    // 客户端不再传,有效值由调用方按场景选好传入。
+    persisted_config_prefix: Option<String>,
     _config_path: &Path,
 ) -> Result<(AgentTargetId, RawTargetConfig)> {
     let target_id = normalize_target_id(&input.target_id)?;
@@ -299,12 +328,12 @@ fn normalize_raw_target_input(
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(ToString::to_string);
-    let config_prefix = input.mcp_config_prefix.trim().to_string();
+    let config_prefix = persisted_config_prefix.unwrap_or_default();
 
     // MCP 配置文件和 configPrefix 必须成对出现：只有前缀没有路径无处可写，
     // 只有路径没有前缀无法定位写入节点。不需要 MCP 分发的 target
     // 允许两者都为空，此时只做 skill 分发。dsh 按 name+serverName 定位
-    // 条目（writer 声明 prefix 不必填），允许“有路径 + 空 prefix”。
+    // 条目（writer 声明 prefix 不必填），允许"有路径 + 空 prefix"。
     // 校验用的有效类型与解析侧同口径：存量值优先，其次内置 defaults。
     let effective_config_type = persisted_config_type
         .or_else(|| {
@@ -319,9 +348,12 @@ fn normalize_raw_target_input(
         Some(_) if config_prefix.is_empty() && prefix_required => {
             bail!("target {} 的 MCP configPrefix 不能为空。", target_id);
         }
-        None if !config_prefix.is_empty() => {
+        // 路径缺失时,只有声明 prefix 必填的格式(common/grok/opencode)
+        // 才算异常;dsh 这类 prefix 不必填的格式允许单独无 MCP 配置
+        // (用户只做 skills 分发,没有 MCP 需要清理)。
+        None if !config_prefix.is_empty() && prefix_required => {
             bail!(
-                "target {} 填写了 configPrefix，必须同时提供 MCP 配置文件路径。",
+                "target {} 填写了 configPrefix,必须同时提供 MCP 配置文件路径。",
                 target_id
             );
         }
@@ -372,6 +404,7 @@ fn builtin_create_config_type(target_id: &AgentTargetId) -> Result<McpConfigType
 // Target defaults (codex/claude/opencode builtin paths)
 // ---------------------------------------------------------------------------
 
+#[derive(Clone)]
 pub(crate) struct TargetDefaults {
     pub(crate) id: AgentTargetId,
     pub(crate) skill_dir: PathBuf,

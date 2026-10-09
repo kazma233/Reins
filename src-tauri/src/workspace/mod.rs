@@ -419,7 +419,7 @@ fn target_to_view(target: &ResolvedTargetConfig) -> TargetConfigView {
         config_path: target.config_path.as_ref().map(|path| display_path(path)),
         mcp_config_prefix: target.mcp_config_prefix.clone(),
         mcp_format_description: format_writer.description().to_string(),
-        mcp_format_example: format_writer.shape_example().to_string(),
+        mcp_format_example: format_writer.rendered_shape_example(&target.mcp_config_prefix),
     }
 }
 

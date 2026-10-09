@@ -28,9 +28,17 @@ pub(super) trait McpFormatWriter: Sync {
     /// 编辑页展示的「大概会怎么配置」中文说明；格式知识归 writer，前端不另存一份。
     fn description(&self) -> &'static str;
 
-    /// 编辑页展示的「写入配置文件后大致长什么样」静态示例；手写文本，
+    /// 编辑页展示的「写入配置文件后大致长什么样」的条目内层示例；手写文本，
     /// 键名与结构必须与各 desired 条目构造函数的产物一致。
     fn shape_example(&self) -> &'static str;
+
+    /// 组装该 target 的完整示例:如何呈现外层结构是格式自身的知识——
+    /// JSON 形态按点分 prefix 生成嵌套,TOML 形态替换表头的 `{prefix}`
+    /// (默认实现),dsh 原样输出。prefix 是各工具定义好的固定值,由此
+    /// 保证示例与真实写入结构一致。
+    fn rendered_shape_example(&self, prefix: &str) -> String {
+        self.shape_example().replace("{prefix}", prefix)
+    }
 
     /// 新建空 JSON 配置的默认根（OpenCode 注入 $schema）。
     fn default_json_root(&self) -> JsonValue;
@@ -95,6 +103,25 @@ struct GrokBuildWriter;
 struct OpenCodeWriter;
 struct DshPatchWriter;
 
+// JSON 形态的完整示例:按点分 prefix 逐段展开外层嵌套
+// ("mcp.servers" → "mcp": { "servers": { <条目> } }),条目内层缩进保持
+// 模板原样——示例是给用户看的结构示意,不做整体重排。
+fn json_nested_example(inner: &str, prefix: &str) -> String {
+    let segments: Vec<&str> = prefix.split('.').collect();
+    let indent = |level: usize| "  ".repeat(level);
+    let mut result = String::from("{\n");
+    for (level, segment) in segments.iter().enumerate() {
+        result.push_str(&format!("{}\"{}\": {{\n", indent(level + 1), segment));
+    }
+    result.push_str(inner);
+    result.push('\n');
+    for level in (1..=segments.len()).rev() {
+        result.push_str(&format!("{}}}\n", indent(level)));
+    }
+    result.push('}');
+    result
+}
+
 impl McpFormatWriter for CommonWriter {
     fn prefix_required(&self) -> bool {
         true
@@ -105,17 +132,17 @@ impl McpFormatWriter for CommonWriter {
     }
 
     fn shape_example(&self) -> &'static str {
-        // 外层键示意 prefix（如 mcpServers / mcp_servers），TOML 形态同构。
-        r#"{
-  "mcpServers": {
-    "my-server": {
-      "type": "stdio",
-      "command": "node",
-      "args": ["server.js"],
-      "env": { "KEY": "value" }
-    }
-  }
+        // 条目内层;外层嵌套按 configPrefix 生成(见 rendered_shape_example)。
+        r#""my-server": {
+  "type": "stdio",
+  "command": "node",
+  "args": ["server.js"],
+  "env": { "KEY": "value" }
 }"#
+    }
+
+    fn rendered_shape_example(&self, prefix: &str) -> String {
+        json_nested_example(self.shape_example(), prefix)
     }
 
     fn default_json_root(&self) -> JsonValue {
@@ -141,7 +168,7 @@ impl McpFormatWriter for GrokBuildWriter {
     }
 
     fn shape_example(&self) -> &'static str {
-        r#"[mcp_servers.my-server]
+        r#"[{prefix}.my-server]
 enabled = true
 command = "node"
 args = ["server.js"]
@@ -178,18 +205,16 @@ impl McpFormatWriter for OpenCodeWriter {
     }
 
     fn shape_example(&self) -> &'static str {
-        r#"{
-  "mcp": {
-    "servers": {
-      "my-server": {
-        "type": "local",
-        "enabled": true,
-        "command": ["node", "server.js"],
-        "environment": { "KEY": "value" }
-      }
-    }
-  }
+        r#""my-server": {
+  "type": "local",
+  "enabled": true,
+  "command": ["node", "server.js"],
+  "environment": { "KEY": "value" }
 }"#
+    }
+
+    fn rendered_shape_example(&self, prefix: &str) -> String {
+        json_nested_example(self.shape_example(), prefix)
     }
 
     fn default_json_root(&self) -> JsonValue {
@@ -230,6 +255,11 @@ impl McpFormatWriter for DshPatchWriter {
       cwd: /home/your-name
       toolCallTimeoutMs: 60000
       failOnStartupError: false"#
+    }
+
+    // patch YAML 没有 prefix 概念,示例原样输出。
+    fn rendered_shape_example(&self, _prefix: &str) -> String {
+        self.shape_example().to_string()
     }
 
     // dsh 的配置根是操作列表；dsh 写入路径不走 JSON 根，该方法仅为穷尽。

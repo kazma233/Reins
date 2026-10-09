@@ -67,6 +67,12 @@
   min-height: var(--control-height);
 }
 
+.manager-field input.is-readonly {
+  background: var(--color-surface-soft);
+  color: var(--color-text-muted);
+  cursor: default;
+}
+
 .manager-textarea {
   min-height: 92px;
   resize: vertical;

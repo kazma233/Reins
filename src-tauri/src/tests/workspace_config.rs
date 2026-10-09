@@ -131,7 +131,6 @@ fn create_workspace_target_inner_writes_target_to_config() -> Result<()> {
             enabled: true,
             skill_dir: root.path().join("codex-skills").display().to_string(),
             config_path: Some("~/.codex/config.toml".to_string()),
-            mcp_config_prefix: "mcp_servers".to_string(),
         },
     )?;
 
@@ -163,7 +162,6 @@ fn create_workspace_target_inner_allows_target_without_mcp_config() -> Result<()
             enabled: true,
             skill_dir: root.path().join("pi-skills").display().to_string(),
             config_path: None,
-            mcp_config_prefix: String::new(),
         },
     )?;
 
@@ -190,7 +188,6 @@ fn create_workspace_target_inner_rejects_non_builtin_id() -> Result<()> {
             enabled: true,
             skill_dir: root.path().join("skills").display().to_string(),
             config_path: None,
-            mcp_config_prefix: String::new(),
         },
     )
     .expect_err("非内置 target id 必须被拒绝");
@@ -205,7 +202,14 @@ fn create_workspace_target_inner_rejects_non_builtin_id() -> Result<()> {
 }
 
 #[test]
-fn create_workspace_target_inner_requires_mcp_path_and_prefix_in_pairs() -> Result<()> {
+// MCP 配置节点路径是各工具的固定知识,客户端不再传 prefix:create 时
+// 只有 prefix_required 的格式(codex/claude/opencode/common)才在 path
+// 缺失 + prefix 非空时报错;dsh 这类 prefix 不必填的格式允许无 MCP 配置。
+// 旧「codex 显式传 path 但 prefix 由客户端漏传」的失败用例已无意义——
+// prefix 现在由 defaults 自动填,落盘后 codex 的 path + mcp_servers
+// 是配套的合理状态。
+#[test]
+fn create_workspace_target_inner_keeps_prefix_in_sync_with_path() -> Result<()> {
     let root = TestDir::new("config-create-target-mcp-pair")?;
     let store = WorkspaceConfigStore::at(root.path());
     fs::write(
@@ -213,31 +217,38 @@ fn create_workspace_target_inner_requires_mcp_path_and_prefix_in_pairs() -> Resu
         serde_yaml::to_string(&RawManagerConfig::default())?,
     )?;
 
-    let missing_prefix = create_workspace_target_inner(
+    // 显式传 path 时,prefix 由 defaults 派生(此处为 codex 的 mcp_servers),
+    // 落盘后两者配对——不再是错误。
+    create_workspace_target_inner(
         &store,
         RawTargetInput {
             target_id: "codex".to_string(),
             enabled: true,
             skill_dir: root.path().join("skills").display().to_string(),
             config_path: Some("~/.codex/config.toml".to_string()),
-            mcp_config_prefix: String::new(),
         },
-    )
-    .expect_err("config path without prefix must fail");
-    assert!(missing_prefix.to_string().contains("configPrefix"));
+    )?;
+    let raw: RawManagerConfig = serde_yaml::from_str(&fs::read_to_string(store.config_path())?)?;
+    let codex = &raw.targets["codex"];
+    assert_eq!(codex.mcp.config_prefix.as_deref(), Some("mcp_servers"));
+    assert_eq!(codex.mcp.config_type, Some(McpConfigType::Common));
 
-    let missing_path = create_workspace_target_inner(
+    // 隐式缺 path 时,create 不假设想要 MCP——prefix 留空,只有 dsh 这类
+    // prefix_required=false 的格式天然不报错;common 隐式缺 path 同样不报错
+    // (因 prefix 留空、prefix_required 校验无事可校)。
+    create_workspace_target_inner(
         &store,
         RawTargetInput {
-            target_id: "codex".to_string(),
+            target_id: "zcode".to_string(),
             enabled: true,
             skill_dir: root.path().join("skills").display().to_string(),
             config_path: None,
-            mcp_config_prefix: "mcp_servers".to_string(),
         },
-    )
-    .expect_err("prefix without config path must fail");
-    assert!(missing_path.to_string().contains("MCP 配置文件路径"));
+    )?;
+    let raw: RawManagerConfig = serde_yaml::from_str(&fs::read_to_string(store.config_path())?)?;
+    let zcode = &raw.targets["zcode"];
+    assert!(zcode.mcp.config_prefix.is_none());
+    assert!(zcode.mcp.config_path.is_none());
 
     Ok(())
 }
@@ -284,7 +295,6 @@ fn update_workspace_target_inner_still_accepts_existing_custom_id() -> Result<()
                     .display()
                     .to_string(),
             ),
-            mcp_config_prefix: "mcpServers".to_string(),
         },
     )?;
 
@@ -312,7 +322,6 @@ fn create_workspace_target_inner_derives_config_type_from_builtin_defaults() -> 
             enabled: true,
             skill_dir: "skills".to_string(),
             config_path: Some("opencode.json".to_string()),
-            mcp_config_prefix: "mcp.servers".to_string(),
         },
     )?;
 
@@ -371,7 +380,6 @@ fn update_workspace_target_inner_preserves_stored_config_type() -> Result<()> {
             enabled: true,
             skill_dir: "custom-dsh/skills-v2".to_string(),
             config_path: Some("custom/patch.yml".to_string()),
-            mcp_config_prefix: String::new(),
         },
     )?;
     update_workspace_target_inner(
@@ -382,7 +390,6 @@ fn update_workspace_target_inner_preserves_stored_config_type() -> Result<()> {
             enabled: true,
             skill_dir: "codex/skills-v2".to_string(),
             config_path: Some("codex/config.toml".to_string()),
-            mcp_config_prefix: "mcp_servers".to_string(),
         },
     )?;
 

@@ -78,7 +78,6 @@ it("keeps explicit edits when submitting a preset-filled target", async () => {
   await mutations.handleSubmitTarget();
   expect(createWorkspaceTarget).toHaveBeenCalledWith({
     targetId: "grokbuild", enabled: true, skillDir: "/explicit/skills", configPath: "/explicit/config.toml",
-    mcpConfigPrefix: "mcp_servers",
   });
 });
 
@@ -116,7 +115,6 @@ it("registers dsh as a preset that submits without configPrefix", async () => {
     enabled: true,
     skillDir: "/home/.dsh/skills",
     configPath: "/home/.dsh/cordis.patch.yml",
-    mcpConfigPrefix: "",
   });
 });
 
@@ -145,7 +143,6 @@ it("carries the mcp format description when editing an existing target", async (
     enabled: true,
     skillDir: "/gateway/skills",
     configPath: "/gateway/config.json",
-    mcpConfigPrefix: "mcpServers",
   });
 });
 

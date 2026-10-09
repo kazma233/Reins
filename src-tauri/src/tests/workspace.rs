@@ -866,15 +866,34 @@ fn target_view_carries_mcp_format_description_per_config_type() {
 #[test]
 fn target_view_carries_mcp_format_example_per_config_type() {
     let mut target = resolved_target("codex", PathBuf::from("/tmp/reins-skills"));
+    target.mcp_config_prefix = "mcpServers".to_string();
     assert_eq!(
         target_to_view(&target).mcp_format_example,
         r#"{
   "mcpServers": {
-    "my-server": {
-      "type": "stdio",
-      "command": "node",
-      "args": ["server.js"],
-      "env": { "KEY": "value" }
+"my-server": {
+  "type": "stdio",
+  "command": "node",
+  "args": ["server.js"],
+  "env": { "KEY": "value" }
+}
+  }
+}"#
+    );
+
+    // 点分 prefix 逐段展开为 JSON 嵌套(zcode 的 mcp.servers)。
+    target.mcp_config_prefix = "mcp.servers".to_string();
+    assert_eq!(
+        target_to_view(&target).mcp_format_example,
+        r#"{
+  "mcp": {
+    "servers": {
+"my-server": {
+  "type": "stdio",
+  "command": "node",
+  "args": ["server.js"],
+  "env": { "KEY": "value" }
+}
     }
   }
 }"#
@@ -886,18 +905,19 @@ fn target_view_carries_mcp_format_example_per_config_type() {
         r#"{
   "mcp": {
     "servers": {
-      "my-server": {
-        "type": "local",
-        "enabled": true,
-        "command": ["node", "server.js"],
-        "environment": { "KEY": "value" }
-      }
+"my-server": {
+  "type": "local",
+  "enabled": true,
+  "command": ["node", "server.js"],
+  "environment": { "KEY": "value" }
+}
     }
   }
 }"#
     );
 
     target.mcp_config_type = McpConfigType::GrokBuild;
+    target.mcp_config_prefix = "mcp_servers".to_string();
     assert_eq!(
         target_to_view(&target).mcp_format_example,
         r#"[mcp_servers.my-server]

@@ -560,7 +560,6 @@ pub(crate) struct RawTargetInput {
     pub(crate) enabled: bool,
     pub(crate) skill_dir: String,
     pub(crate) config_path: Option<String>,
-    pub(crate) mcp_config_prefix: String,
 }
 
 #[derive(Clone, Debug)]

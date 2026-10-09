@@ -141,7 +141,6 @@ fn dsh_create_target_accepts_config_path_without_prefix() -> Result<()> {
             enabled: true,
             skill_dir: "dsh/skills".to_string(),
             config_path: Some("dsh/cordis.patch.yml".to_string()),
-            mcp_config_prefix: String::new(),
         },
     )?;
 

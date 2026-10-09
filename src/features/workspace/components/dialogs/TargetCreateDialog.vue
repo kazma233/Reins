@@ -175,26 +175,19 @@ const isCreate = computed(() => props.form.originalTargetId === null);
           </div>
         </div>
 
-        <label class="manager-field">
-          <span>
-            configPrefix
-            <AppFieldError
-              class="manager-field__error"
-              id="target-config-prefix-error"
-              :message="form.errors.mcpConfigPrefix ?? null"
-            />
-          </span>
+        <div class="manager-field">
+          <span>configPrefix</span>
           <small class="manager-field__hint">
-            写入 MCP 节点的路径，比如 `mcpServers` 或 `mcp`。与 MCP 配置文件路径成对填写。
+            该工具写入 MCP 配置文件的节点路径,由各工具定义好的固定值,展示只读。
           </small>
           <input
             v-model="form.mcpConfigPrefix"
-            :aria-describedby="form.errors.mcpConfigPrefix ? 'target-config-prefix-error' : undefined"
-            :aria-invalid="Boolean(form.errors.mcpConfigPrefix)"
+            readonly
+            tabindex="-1"
             type="text"
-            @input="$emit('clearFieldError', 'mcpConfigPrefix')"
+            class="is-readonly"
           />
-        </label>
+        </div>
 
         <div v-if="mcpFormatDescription && !isCreate" class="manager-stack">
           <span class="manager-field__label">MCP 配置格式</span>
