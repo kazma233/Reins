@@ -28,6 +28,10 @@ pub(super) trait McpFormatWriter: Sync {
     /// 编辑页展示的「大概会怎么配置」中文说明；格式知识归 writer，前端不另存一份。
     fn description(&self) -> &'static str;
 
+    /// 编辑页展示的「写入配置文件后大致长什么样」静态示例；手写文本，
+    /// 键名与结构必须与各 desired 条目构造函数的产物一致。
+    fn shape_example(&self) -> &'static str;
+
     /// 新建空 JSON 配置的默认根（OpenCode 注入 $schema）。
     fn default_json_root(&self) -> JsonValue;
 
@@ -100,6 +104,20 @@ impl McpFormatWriter for CommonWriter {
         "通用 MCP 条目（标准 command/args/env），按配置文件扩展名写入 JSON 或 TOML 的 mcp 节点下。"
     }
 
+    fn shape_example(&self) -> &'static str {
+        // 外层键示意 prefix（如 mcpServers / mcp_servers），TOML 形态同构。
+        r#"{
+  "mcpServers": {
+    "my-server": {
+      "type": "stdio",
+      "command": "node",
+      "args": ["server.js"],
+      "env": { "KEY": "value" }
+    }
+  }
+}"#
+    }
+
     fn default_json_root(&self) -> JsonValue {
         JsonValue::Object(JsonMap::new())
     }
@@ -120,6 +138,14 @@ impl McpFormatWriter for GrokBuildWriter {
 
     fn description(&self) -> &'static str {
         "Grok Build TOML 格式（远端类型用 headers 携带自定义头），写入 config.toml。"
+    }
+
+    fn shape_example(&self) -> &'static str {
+        r#"[mcp_servers.my-server]
+enabled = true
+command = "node"
+args = ["server.js"]
+# 远端形态改写为：url = "https://example.com/mcp" 与 headers = { X-Key = "value" }"#
     }
 
     fn default_json_root(&self) -> JsonValue {
@@ -151,6 +177,21 @@ impl McpFormatWriter for OpenCodeWriter {
         "OpenCode 专属格式（JSON，带 $schema 头，command 为数组、environment 键），写入 mcp.servers 根。"
     }
 
+    fn shape_example(&self) -> &'static str {
+        r#"{
+  "mcp": {
+    "servers": {
+      "my-server": {
+        "type": "local",
+        "enabled": true,
+        "command": ["node", "server.js"],
+        "environment": { "KEY": "value" }
+      }
+    }
+  }
+}"#
+    }
+
     fn default_json_root(&self) -> JsonValue {
         JsonValue::Object(JsonMap::from_iter([(
             "$schema".to_string(),
@@ -174,6 +215,21 @@ impl McpFormatWriter for DshPatchWriter {
 
     fn description(&self) -> &'static str {
         "DeepSeek Harness 的 Cordis patch YAML（insert/remove 操作列表，按 serverName 定位，无 configPrefix）。"
+    }
+
+    fn shape_example(&self) -> &'static str {
+        r#"- insert:
+  - id: reins-mcp-my-server
+    name: "@deepseek-ai/dsh-mcp-client"
+    config:
+      serverName: my-server
+      transport: stdio
+      command: node
+      args: [server.js]
+      env: { KEY: value }
+      cwd: /home/your-name
+      toolCallTimeoutMs: 60000
+      failOnStartupError: false"#
     }
 
     // dsh 的配置根是操作列表；dsh 写入路径不走 JSON 根，该方法仅为穷尽。

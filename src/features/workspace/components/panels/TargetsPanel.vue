@@ -230,6 +230,7 @@ function isTogglingTarget(targetId: string): boolean {
     :presets-loading="targetCreateDialog.presetsLoading"
     :presets-error="targetCreateDialog.presetsError"
     :mcp-format-description="targetCreateDialog.mcpFormatDescription"
+    :mcp-format-example="targetCreateDialog.mcpFormatExample"
     @close="closeTargetCreateDialog"
     @confirm="handleSubmitTarget"
     @clear-field-error="clearTargetFormError"

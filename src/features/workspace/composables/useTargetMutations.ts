@@ -49,6 +49,8 @@ export function useTargetMutations() {
     presetsError: string | null;
     // 编辑模式下后端下发的 MCP 配置格式说明，创建模式为 null。
     mcpFormatDescription: string | null;
+    // 编辑模式下后端下发的写入形状示例片段，创建模式为 null。
+    mcpFormatExample: string | null;
   }>({
     open: false,
     loading: false,
@@ -58,6 +60,7 @@ export function useTargetMutations() {
     presetsLoading: false,
     presetsError: null,
     mcpFormatDescription: null,
+    mcpFormatExample: null,
   });
 
   const targetDeleteDialog = reactive<TargetDeleteDialogState>({
@@ -83,6 +86,7 @@ export function useTargetMutations() {
     targetCreateDialog.form = { ...DEFAULT_TARGET_FORM, errors: {} };
     targetCreateDialog.error = null;
     targetCreateDialog.mcpFormatDescription = null;
+    targetCreateDialog.mcpFormatExample = null;
     targetCreateDialog.open = true;
     return loadTargetPresets();
   }
@@ -99,6 +103,7 @@ export function useTargetMutations() {
     };
     targetCreateDialog.error = null;
     targetCreateDialog.mcpFormatDescription = target.mcpFormatDescription;
+    targetCreateDialog.mcpFormatExample = target.mcpFormatExample;
     targetCreateDialog.open = true;
   }
 
@@ -106,6 +111,7 @@ export function useTargetMutations() {
     targetCreateDialog.open = false;
     targetCreateDialog.error = null;
     targetCreateDialog.mcpFormatDescription = null;
+    targetCreateDialog.mcpFormatExample = null;
     targetCreateDialog.form = { ...DEFAULT_TARGET_FORM, errors: {} };
   }
 

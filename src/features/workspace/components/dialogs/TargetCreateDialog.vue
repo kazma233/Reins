@@ -17,6 +17,8 @@ type TargetCreateDialogProps = {
   presetsError: string | null;
   // 编辑模式：后端下发的该 target 的 MCP 配置格式说明。
   mcpFormatDescription: string | null;
+  // 编辑模式：后端下发的写入形状示例片段。
+  mcpFormatExample: string | null;
 };
 
 const props = defineProps<TargetCreateDialogProps>();
@@ -197,6 +199,7 @@ const isCreate = computed(() => props.form.originalTargetId === null);
         <div v-if="mcpFormatDescription && !isCreate" class="manager-stack">
           <span class="manager-field__label">MCP 配置格式</span>
           <small class="manager-field__hint">{{ mcpFormatDescription }}</small>
+          <pre v-if="mcpFormatExample" class="manager-pre">{{ mcpFormatExample }}</pre>
         </div>
       </div>
     </div>

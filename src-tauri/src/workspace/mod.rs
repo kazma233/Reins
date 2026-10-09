@@ -411,15 +411,15 @@ fn config_to_view(
 }
 
 fn target_to_view(target: &ResolvedTargetConfig) -> TargetConfigView {
+    let format_writer = mcp_formats::mcp_format_writer(target.mcp_config_type);
     TargetConfigView {
         id: target.id.clone(),
         enabled: target.enabled,
         skill_dir: display_path(&target.skill_dir),
         config_path: target.config_path.as_ref().map(|path| display_path(path)),
         mcp_config_prefix: target.mcp_config_prefix.clone(),
-        mcp_format_description: mcp_formats::mcp_format_writer(target.mcp_config_type)
-            .description()
-            .to_string(),
+        mcp_format_description: format_writer.description().to_string(),
+        mcp_format_example: format_writer.shape_example().to_string(),
     }
 }
 

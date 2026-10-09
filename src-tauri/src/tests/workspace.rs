@@ -861,6 +861,70 @@ fn target_view_carries_mcp_format_description_per_config_type() {
     );
 }
 
+// 编辑页展示的格式示例与 desired 条目构造函数的产物形状逐字锁定，
+// 键名或结构调整时必须同步改示例并有意为之。
+#[test]
+fn target_view_carries_mcp_format_example_per_config_type() {
+    let mut target = resolved_target("codex", PathBuf::from("/tmp/reins-skills"));
+    assert_eq!(
+        target_to_view(&target).mcp_format_example,
+        r#"{
+  "mcpServers": {
+    "my-server": {
+      "type": "stdio",
+      "command": "node",
+      "args": ["server.js"],
+      "env": { "KEY": "value" }
+    }
+  }
+}"#
+    );
+
+    target.mcp_config_type = McpConfigType::OpenCode;
+    assert_eq!(
+        target_to_view(&target).mcp_format_example,
+        r#"{
+  "mcp": {
+    "servers": {
+      "my-server": {
+        "type": "local",
+        "enabled": true,
+        "command": ["node", "server.js"],
+        "environment": { "KEY": "value" }
+      }
+    }
+  }
+}"#
+    );
+
+    target.mcp_config_type = McpConfigType::GrokBuild;
+    assert_eq!(
+        target_to_view(&target).mcp_format_example,
+        r#"[mcp_servers.my-server]
+enabled = true
+command = "node"
+args = ["server.js"]
+# 远端形态改写为：url = "https://example.com/mcp" 与 headers = { X-Key = "value" }"#
+    );
+
+    target.mcp_config_type = McpConfigType::Dsh;
+    assert_eq!(
+        target_to_view(&target).mcp_format_example,
+        r#"- insert:
+  - id: reins-mcp-my-server
+    name: "@deepseek-ai/dsh-mcp-client"
+    config:
+      serverName: my-server
+      transport: stdio
+      command: node
+      args: [server.js]
+      env: { KEY: value }
+      cwd: /home/your-name
+      toolCallTimeoutMs: 60000
+      failOnStartupError: false"#
+    );
+}
+
 #[test]
 fn pi_preset_and_template_follow_pi_coding_agent_dir() -> Result<()> {
     let _guard = TestEnvGuard::lock();

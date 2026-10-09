@@ -158,6 +158,8 @@ pub(crate) struct TargetConfigView {
     // 编辑页展示的 MCP 配置格式说明，取自对应格式 writer 的 description。
     // config_type 本体是 config.yaml 的存储判别字段，已从前端契约面退役。
     pub(crate) mcp_format_description: String,
+    // 编辑页展示的格式示例片段，取自对应格式 writer 的 shape_example。
+    pub(crate) mcp_format_example: String,
 }
 
 // 创建弹窗一次下发的内置工具预设：与 builtin defaults 同源（AgentSpec
