@@ -26,6 +26,27 @@ fn dsh_fixture(
     Ok(store)
 }
 
+// 远端形态 fixture：url/headers 可注入，stdio 专属字段留空，用于验证
+// streamable-http 条目与 stdio 形态互不携带对方字段。
+fn dsh_remote_fixture(
+    root: &TestDir,
+    transport: &str,
+    url: Option<&str>,
+    headers: serde_json::Value,
+    name: &str,
+) -> Result<WorkspaceConfigStore> {
+    let store = WorkspaceConfigStore::at(root.path());
+    let config = json!({
+        "targets": {
+            "dsh": {"skill_dir": "dsh/skills", "mcp": {"config_path": "dsh/cordis.patch.yml", "config_type": "dsh"}}
+        },
+        "mcps": [{"name": name, "enabled": true, "transport": transport,
+            "url": url, "headers": headers}]
+    });
+    fs::write(store.config_path(), serde_yaml::to_string(&config)?)?;
+    Ok(store)
+}
+
 fn patch_path(store: &WorkspaceConfigStore) -> PathBuf {
     store
         .config_path()
@@ -441,22 +462,167 @@ fn dsh_server_name_sanitization() -> Result<()> {
 }
 
 #[test]
-fn dsh_rejects_http_transport_and_malformed_files_without_writing() -> Result<()> {
-    // apply/preview 流程会把 cwd(home) 写进 patch 并在断言侧再读一次,
-    // 不持锁存在与并行 env 测试的 TOCTOU 窗口。
-    let _guard = TestEnvGuard::lock();
-    let root = TestDir::new("dsh-invalid")?;
-    let store = dsh_fixture(&root, "http", None, "probe")?;
+fn dsh_http_transport_writes_streamable_http_entry() -> Result<()> {
+    let root = TestDir::new("dsh-http")?;
+    let store = dsh_remote_fixture(
+        &root,
+        "http",
+        Some("https://example.invalid/mcp"),
+        json!({"X-Key": "value"}),
+        "probe",
+    )?;
     let path = patch_path(&store);
 
+    let preview = preview_mcp_target_inner(&store, "probe", "dsh")?;
+    assert_eq!(preview.format, "yaml");
+    let preview_ops: serde_yaml::Value = serde_yaml::from_str(&preview.content)?;
+
+    apply_mcp_to_target_inner(&store, "probe", "dsh")?;
+    let ops = parse_ops(&path)?;
+    assert_eq!(preview_ops, ops, "preview 展示的就是将要写入的");
+
+    let config = claimed_config(&ops, "probe").ok_or_else(|| anyhow!("写入后应包含 probe 条目"))?;
+    assert_eq!(
+        config.get("transport").and_then(|v| v.as_str()),
+        Some("streamable-http")
+    );
+    assert_eq!(
+        config.get("serverName").and_then(|v| v.as_str()),
+        Some("probe")
+    );
+    assert_eq!(
+        config.get("url").and_then(|v| v.as_str()),
+        Some("https://example.invalid/mcp")
+    );
+    assert_eq!(
+        config
+            .get("headers")
+            .and_then(|v| v.get("X-Key"))
+            .and_then(|v| v.as_str()),
+        Some("value")
+    );
+    // 远端形态没有 command/args/env/cwd，校验这些字段不得出现。
+    for key in ["command", "args", "env", "cwd"] {
+        assert!(config.get(key).is_none(), "远端条目不得携带 {key}");
+    }
+
+    // 读回：inspect 归类与反显按 serverName 建键，远端的 url/headers 完整可读。
+    let parsed = store.parse()?;
+    let target = resolve_target_from_id(&parsed, "dsh").unwrap();
+    let entries = read_existing_mcp_entries(target, &path)?;
+    let read_back = entries
+        .get("probe")
+        .ok_or_else(|| anyhow!("读取应包含 probe"))?;
+    assert_eq!(
+        read_back.get("transport").and_then(|v| v.as_str()),
+        Some("streamable-http")
+    );
+    assert_eq!(
+        read_back.get("url").and_then(|v| v.as_str()),
+        Some("https://example.invalid/mcp")
+    );
+    assert_eq!(
+        read_back
+            .get("headers")
+            .and_then(|v| v.get("X-Key"))
+            .and_then(|v| v.as_str()),
+        Some("value")
+    );
+
+    // 重复 apply 幂等：文件字节不变。
+    let first = fs::read_to_string(&path)?;
+    apply_mcp_to_target_inner(&store, "probe", "dsh")?;
+    assert_eq!(fs::read_to_string(&path)?, first);
+
+    assert_eq!(
+        remove_mcp_from_target_inner(&store, "probe", "dsh")?.action,
+        "remove"
+    );
+    assert_eq!(fs::read_to_string(&path)?, "[]\n");
+    assert_eq!(
+        remove_mcp_from_target_inner(&store, "probe", "dsh")?.action,
+        "noop"
+    );
+    Ok(())
+}
+
+#[test]
+fn dsh_http_without_headers_omits_headers_key() -> Result<()> {
+    let root = TestDir::new("dsh-http-no-headers")?;
+    let store = dsh_remote_fixture(
+        &root,
+        "http",
+        Some("https://example.invalid/mcp"),
+        json!({}),
+        "probe",
+    )?;
+    let path = patch_path(&store);
+
+    apply_mcp_to_target_inner(&store, "probe", "dsh")?;
+    let ops = parse_ops(&path)?;
+    let config = claimed_config(&ops, "probe").ok_or_else(|| anyhow!("缺少 probe 条目"))?;
+    assert!(
+        config.get("headers").is_none(),
+        "headers 为空时不写该键：{config:?}"
+    );
+    Ok(())
+}
+
+#[test]
+fn dsh_sse_transport_maps_to_streamable_http() -> Result<()> {
+    let root = TestDir::new("dsh-sse")?;
+    let store = dsh_remote_fixture(
+        &root,
+        "sse",
+        Some("https://example.invalid/sse"),
+        json!({}),
+        "probe",
+    )?;
+    let path = patch_path(&store);
+
+    apply_mcp_to_target_inner(&store, "probe", "dsh")?;
+    let ops = parse_ops(&path)?;
+    let config = claimed_config(&ops, "probe").ok_or_else(|| anyhow!("缺少 probe 条目"))?;
+    assert_eq!(
+        config.get("transport").and_then(|v| v.as_str()),
+        Some("streamable-http"),
+        "dsh 的 streamable-http 形态本身覆盖 SSE 系协议"
+    );
+    assert_eq!(
+        config.get("url").and_then(|v| v.as_str()),
+        Some("https://example.invalid/sse")
+    );
+    Ok(())
+}
+
+#[test]
+fn dsh_remote_without_url_fails_without_writing() -> Result<()> {
+    let root = TestDir::new("dsh-remote-no-url")?;
+    let store = dsh_remote_fixture(&root, "http", None, json!({}), "probe")?;
+    let path = patch_path(&store);
+
+    // 配置解析层先于 writer 拒绝无链接的远端 MCP。
     for result in [
         preview_mcp_target_inner(&store, "probe", "dsh").map(|_| ()),
         apply_mcp_to_target_inner(&store, "probe", "dsh").map(|_| ()),
     ] {
-        assert!(result.unwrap_err().to_string().contains("仅支持 stdio"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("必须提供 mcp 链接"),
+            "无链接的远端 MCP 应报错"
+        );
     }
     assert!(!path.exists(), "失败路径不得创建文件");
+    Ok(())
+}
 
+#[test]
+fn dsh_malformed_files_are_rejected_without_writing() -> Result<()> {
+    // apply/preview 流程会把 cwd(home) 写进 patch 并在断言侧再读一次,
+    // 不持锁存在与并行 env 测试的 TOCTOU 窗口。
+    let _guard = TestEnvGuard::lock();
     let root = TestDir::new("dsh-malformed")?;
     let store = dsh_fixture(&root, "stdio", None, "probe")?;
     let path = patch_path(&store);

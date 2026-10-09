@@ -140,9 +140,27 @@ dsh 无 mcpServers JSON/TOML。MCP server = Cordis 插件树里的一个 `@deeps
 - patch 层位置:全局 `~/.dsh/cordis.patch.yml`(所有 profile 生效)或 `~/.dsh/profiles/<name>/cordis.patch.yml`(单 profile)。**Reins 写全局层**。
 - patch 文件是操作列表(`- insert: [...]`,可能还有其他 op),**官方明确警告:merge 进已有文件,不能整文件覆盖**(用户可能已有无关 patch)。
 - `!!js process.cwd()` 是 dsh 自有 YAML 扩展标签;Reins 写入时用普通字符串路径(cwd 必填字段,填 workspace 路径或用户 home)。
-- stdio config 必填:`serverName`([A-Za-z0-9_-]{1,32},工具名前缀 mcp__<serverName>__*)、command、args、env、cwd、toolCallTimeoutMs、failOnStartupError。另有 `transport: streamable-http`(url/headers)。Reins 的 McpConfig(command/args/env)映射到 stdio 形态;toolCallTimeoutMs/failOnStartupError 用合理默认值。
+- stdio config 必填:`serverName`([A-Za-z0-9_-]{1,32},工具名前缀 mcp__<serverName>__*)、command、args、env、cwd、toolCallTimeoutMs、failOnStartupError。另有 `transport: streamable-http`(url/headers)。Reins 的 McpConfig(command/args/env)映射到 stdio 形态;toolCallTimeoutMs/failOnStartupError 用合理默认值(远端分发见本节 2026-10-09 补充)。
 - 增删语义:按条目 `id` 定位(建议 Reins 用稳定 id 如 `reins-mcp-<serverName>`),remove op 的确切写法实现时查 Cordis patch 文法(`docs/cordis-primer.md` / vendor/cordis 源码)。
 - **实现时踩坑(已解决)**:serde_yaml 0.9.34 解析 `!!js` 双叹号标签时直接丢弃标签(解析成普通 String),`!js` 单叹号才保留 Tagged。用户 patch 里的 `cwd: !!js process.cwd()` 若直接 serde_yaml 往返会被静默剥掉标签、改变 dsh 运行时语义。Reins 的解法:读入时把 `!!` 文本替换成哨兵单叹号标签(`!reins-yaml-bangbang-`)保住 Tagged 结构,写出时再反向还原(`mcps.rs` 的 `DSH_BANGBANG_SENTINEL`)。哨兵字符串出现在用户文件里的概率视为零。另:展示已有条目时 Tagged 值递归取内层(untag_yaml)。serde_yaml 往返同样不保留注释/锚点,与现有 JSON/TOML target 的行为一致,可接受。
+
+### 补充(2026-10-09):streamable-http 契约已核验,Reins 支持远端分发
+
+- 证据:本机安装产物 `~/.dsh/profiles/node_modules/@deepseek-ai/dsh-mcp-client/lib/types/index.d.ts`(dsh-mcp-client 0.1.5-rc.2)。`StreamableHttpConfig` 必填 `transport: 'streamable-http'`、`serverName`、`url`;`headers` 在 Input 形态为可选(Partial,resolved 有默认),`toolCallTimeoutMs`/`failOnStartupError` 亦可选;**远端形态没有 `command`/`args`/`env`/`cwd`**。类型注释原文:`Config for connecting to an MCP server over Streamable HTTP (SSE).` —— 该形态本身覆盖 SSE 系协议,因此 Reins 的 `McpTransport::Http` 与 `McpTransport::Sse` 都映射到 `streamable-http`。
+- Reins 分发(此前仅 stdio,远端显式 bail;现已支持):
+
+```yaml
+- insert:
+    - id: reins-mcp-<serverName>
+      name: '@deepseek-ai/dsh-mcp-client'
+      config:
+        transport: streamable-http
+        serverName: probe
+        url: https://example.com/mcp
+        headers: { X-Key: value }   # 为空时省略该键
+```
+
+- 读取/反显:远端条目按 `config` 原样反读(条目 key 为清洗后的 serverName),inspect 归类与移除路径无需 dsh 特例;编辑页按钮不再对 dsh 的远端 MCP 置灰。
 
 ## 五、skills 目录
 

@@ -1012,10 +1012,26 @@ X-Key = "value"
 "#
     );
 
-    // DSH:patch YAML,无 prefix 概念且 v1 只分发 stdio,仅一段。
+    // DSH:patch YAML,无 prefix 概念，stdio 与 streamable-http 各一段。
     target.mcp_config_type = McpConfigType::Dsh;
     let view = target_to_view(&target);
-    assert_eq!(labels(&view), ["本地命令（stdio）"]);
+    assert_eq!(
+        labels(&view),
+        ["本地命令（stdio）", "远端地址（http / sse）"]
+    );
+    assert_eq!(
+        body(&view, 1),
+        r#"- insert:
+  - id: reins-mcp-my-server
+    name: '@deepseek-ai/dsh-mcp-client'
+    config:
+      transport: streamable-http
+      serverName: my-server
+      url: https://example.com/mcp
+      headers:
+        X-Key: value
+"#
+    );
     assert_eq!(
         body(&view, 0),
         format!(

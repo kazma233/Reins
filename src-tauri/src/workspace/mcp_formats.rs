@@ -319,14 +319,22 @@ impl McpFormatWriter for DshPatchWriter {
     }
 
     fn shape_examples(&self, _prefix: &str, server_name: &str) -> Result<Vec<ShapeExample>> {
-        // patch YAML 没有 prefix 概念,且 v1 只分发 stdio;示例即真实写入的
-        // insert 操作序列。
-        let op = desired_dsh_insert_op(server_name, &example_server(server_name))?;
-        Ok(vec![ShapeExample {
-            label: STDIO_EXAMPLE_LABEL,
-            body: serde_yaml::to_string(&YamlValue::Sequence(vec![op]))
-                .context("MCP 示例序列化失败")?,
-        }])
+        // patch YAML 没有 prefix 概念;示例即真实写入的 insert 操作序列,
+        // stdio 与远端各一段。
+        [
+            (STDIO_EXAMPLE_LABEL, example_server(server_name)),
+            (REMOTE_EXAMPLE_LABEL, example_remote_server(server_name)),
+        ]
+        .into_iter()
+        .map(|(label, server)| {
+            let op = desired_dsh_insert_op(server_name, &server)?;
+            Ok(ShapeExample {
+                label,
+                body: serde_yaml::to_string(&YamlValue::Sequence(vec![op]))
+                    .context("MCP 示例序列化失败")?,
+            })
+        })
+        .collect()
     }
 
     // dsh 的配置根是操作列表；dsh 写入路径不走 JSON 根，该方法仅为穷尽。
@@ -650,9 +658,21 @@ fn dsh_server_name(server_name: &str) -> String {
     sanitized
 }
 
+// dsh-mcp-client 的 config 是 stdio / streamable-http 两种形态的判别联合
+// （见 dsh-mcp-client 的类型契约）：stdio 走子进程、必填 command；远端只有
+// url+headers，没有 command/args/env/cwd。用 untagged 而非内部标签枚举：
+// 内部标签会把 transport 提到映射首位，破坏 stdio 既有条目的键顺序；
+// 判别值由各形态自己的 transport 字段携带。
+#[derive(Serialize)]
+#[serde(untagged)]
+enum DshMcpClientConfig {
+    Stdio(DshStdioConfig),
+    StreamableHttp(DshStreamableHttpConfig),
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-struct DshMcpClientConfig {
+struct DshStdioConfig {
     server_name: String,
     transport: String,
     command: String,
@@ -663,6 +683,18 @@ struct DshMcpClientConfig {
     fail_on_startup_error: bool,
 }
 
+// dsh-mcp-client 的 streamable-http 形态本身覆盖 SSE 系协议，故 http/sse
+// 两种 transport 都写这个形态；headers 为空时省略（Input 形态可选）。
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DshStreamableHttpConfig {
+    transport: String,
+    server_name: String,
+    url: String,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    headers: BTreeMap<String, String>,
+}
+
 #[derive(Serialize)]
 struct DshInsertEntry {
     id: String,
@@ -671,19 +703,8 @@ struct DshInsertEntry {
 }
 
 fn desired_dsh_insert_entry(server_name: &str, server: &ResolvedMcpConfig) -> Result<YamlValue> {
-    // streamable-http 形态的必填字段契约未定稿，v1 只分发 stdio。
-    // 与其写出 dsh 无法启动的条目不如直接失败。
-    match server.transport {
-        McpTransport::Stdio => {}
-        McpTransport::Http | McpTransport::Sse => {
-            bail!("dsh 的 MCP 分发仅支持 stdio transport。")
-        }
-    }
-
-    let entry = DshInsertEntry {
-        id: format!("reins-mcp-{server_name}"),
-        name: DSH_MCP_CLIENT_PLUGIN.to_string(),
-        config: DshMcpClientConfig {
+    let config = match server.transport {
+        McpTransport::Stdio => DshMcpClientConfig::Stdio(DshStdioConfig {
             server_name: server_name.to_string(),
             transport: "stdio".to_string(),
             command: server
@@ -698,7 +719,24 @@ fn desired_dsh_insert_entry(server_name: &str, server: &ResolvedMcpConfig) -> Re
                 .to_string(),
             tool_call_timeout_ms: server.timeout.unwrap_or(DSH_DEFAULT_TOOL_CALL_TIMEOUT_MS),
             fail_on_startup_error: false,
-        },
+        }),
+        McpTransport::Http | McpTransport::Sse => {
+            DshMcpClientConfig::StreamableHttp(DshStreamableHttpConfig {
+                transport: "streamable-http".to_string(),
+                server_name: server_name.to_string(),
+                url: server
+                    .url
+                    .clone()
+                    .ok_or_else(|| anyhow::anyhow!("远程 MCP 缺少 mcp 链接"))?,
+                headers: server.headers.clone(),
+            })
+        }
+    };
+
+    let entry = DshInsertEntry {
+        id: format!("reins-mcp-{server_name}"),
+        name: DSH_MCP_CLIENT_PLUGIN.to_string(),
+        config,
     };
 
     Ok(serde_yaml::to_value(entry).context("dsh MCP 条目序列化失败")?)
@@ -1164,6 +1202,72 @@ mod tests {
                 .unwrap_err()
                 .to_string(),
             DSH_YAML_ONLY
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn dsh_patch_remote_entry_uses_streamable_http_shape() -> Result<()> {
+        let root = TestDir::new("mcp-fmt-dsh-remote")?;
+        let config_path = root.path().join("cordis.patch.yml");
+        let target = target("dsh", config_path.clone(), "", McpConfigType::Dsh);
+        let writer = mcp_format_writer(McpConfigType::Dsh);
+        let server = ResolvedMcpConfig {
+            name: "probe".to_string(),
+            enabled: true,
+            transport: McpTransport::Http,
+            created_at: None,
+            homepage: None,
+            command: None,
+            args: Vec::new(),
+            env: BTreeMap::new(),
+            url: Some("https://example.com/mcp".to_string()),
+            headers: BTreeMap::from([("X-Key".to_string(), "value".to_string())]),
+            timeout: None,
+        };
+
+        writer.apply_entry(&target, &config_path, &server)?;
+        let ops: serde_yaml::Value = serde_yaml::from_str(&fs::read_to_string(&config_path)?)?;
+        let entry = ops
+            .as_sequence()
+            .and_then(|list| list.first())
+            .and_then(|op| op.get("insert"))
+            .and_then(|value| value.as_sequence())
+            .and_then(|entries| entries.first())
+            .expect("写入后应有 insert 条目");
+        let config = entry.get("config").unwrap();
+        assert_eq!(
+            config.get("transport").and_then(|value| value.as_str()),
+            Some("streamable-http")
+        );
+        assert_eq!(
+            config.get("serverName").and_then(|value| value.as_str()),
+            Some("probe")
+        );
+        assert_eq!(
+            config.get("url").and_then(|value| value.as_str()),
+            Some("https://example.com/mcp")
+        );
+        assert_eq!(
+            config
+                .get("headers")
+                .and_then(|value| value.get("X-Key"))
+                .and_then(|value| value.as_str()),
+            Some("value")
+        );
+        assert!(config.get("command").is_none(), "远端形态没有 command");
+
+        // 配置解析层已拦截无链接的远端 MCP；writer 仍按既有文案防御性拒绝。
+        let without_url = ResolvedMcpConfig {
+            url: None,
+            ..server
+        };
+        assert_eq!(
+            writer
+                .apply_entry(&target, &config_path, &without_url)
+                .unwrap_err()
+                .to_string(),
+            "远程 MCP 缺少 mcp 链接"
         );
         Ok(())
     }
