@@ -275,8 +275,15 @@ fn open_connection_at(scan_root: &Path) -> Result<Connection> {
     Connection::open(db_path_at(scan_root)).context("Failed to open OpenCode sqlite database")
 }
 
+// db 缺失(来源还没有会话)时取 0,让 family_index 走到空列表分支,而不是在
+// metadata 读取上失败。
 fn opencode_db_timestamp_at(scan_root: &Path) -> Result<i64> {
-    crate::support::time::file_modified_timestamp_millis(&db_path_at(scan_root))
+    let path = db_path_at(scan_root);
+    if !path.is_file() {
+        return Ok(0);
+    }
+
+    crate::support::time::file_modified_timestamp_millis(&path)
 }
 
 pub(crate) fn delete_session(source_session_id: &str) -> Result<()> {
@@ -347,8 +354,19 @@ pub(crate) fn delete_plan(overview: &SessionOverview) -> Result<Vec<DeletePlanAc
 }
 
 fn list_session_rows(scan_root: &Path) -> Result<Vec<OpenCodeSessionRow>> {
-    let connection = open_connection_at(scan_root)?;
+    // db 与 session_v2 表都随首次会话写入才落地,缺失只说明该来源还没有会话。
+    // 这里用读写模式打开,不先判存在就会凭空创建一个空 db 文件。
     let db_path = db_path_at(scan_root);
+    if !db_path.is_file() {
+        return Ok(Vec::new());
+    }
+
+    let connection =
+        Connection::open(&db_path).context("Failed to open OpenCode sqlite database")?;
+    if !super::sqlite_table_exists(&connection, "session_v2")? {
+        return Ok(Vec::new());
+    }
+
     let token_usages = session_token_usages(&connection)?;
     let mut statement = connection.prepare(
         "SELECT id, parent_id, directory, title, time_created, time_updated FROM session_v2 ORDER BY time_updated DESC",
@@ -423,13 +441,20 @@ fn session_token_usages(connection: &Connection) -> Result<HashMap<String, Sessi
 
 // 用量曲线的小时桶:assistant 消息的增量 usage 按消息时间归小时,归一口径与
 // session_token_usages 一致(output 并入 reasoning);消息时间优先
-// data.time.created,回退 time_created 列,与消息时间线一致。db 缺失表示
-// 来源不可用,返回 None。
+// data.time.created,回退 time_created 列,与消息时间线一致。db 缺失、或
+// session_message 表还没建,都表示来源不可用,返回 None。
 pub(crate) fn usage_hours() -> Result<Option<SqlUsageHours>> {
-    let connection = match open_connection() {
+    let db_path = db_path()?;
+    if !db_path.is_file() {
+        return Ok(None);
+    }
+    let connection = match Connection::open(db_path) {
         Ok(connection) => connection,
         Err(_) => return Ok(None),
     };
+    if !super::sqlite_table_exists(&connection, "session_message")? {
+        return Ok(None);
+    }
 
     let mut statement = connection
         .prepare(

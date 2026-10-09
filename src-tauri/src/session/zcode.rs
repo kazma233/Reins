@@ -293,6 +293,11 @@ fn zcode_db_timestamp_at(scan_root: &Path) -> Result<i64> {
 
 fn list_session_rows(scan_root: &Path) -> Result<Vec<ZcodeSessionRow>> {
     let connection = open_connection_at(scan_root)?;
+    // db 文件与数据表都随 zcode 首次写入才落地,表缺失只说明该来源还没有会话。
+    if !super::sqlite_table_exists(&connection, "session")? {
+        return Ok(Vec::new());
+    }
+
     let token_usages = session_token_usages(&connection)?;
     let mut statement = connection.prepare(
         "SELECT id, parent_id, directory, title, time_created, time_updated FROM session ORDER BY time_updated DESC",
@@ -366,12 +371,15 @@ fn session_token_usages(connection: &Connection) -> Result<HashMap<String, Sessi
 
 // 用量曲线的小时桶:turn_usage 每 turn 预聚合且自带 started_at,归一口径与
 // session_token_usages 一致(input 拆掉 cache_read,output 并入 reasoning)。
-// db 缺失表示来源不可用,返回 None。
+// db 缺失、或 turn_usage 表还没建,都表示来源不可用,返回 None。
 pub(crate) fn usage_hours() -> Result<Option<SqlUsageHours>> {
     let connection = match open_connection() {
         Ok(connection) => connection,
         Err(_) => return Ok(None),
     };
+    if !super::sqlite_table_exists(&connection, "turn_usage")? {
+        return Ok(None);
+    }
 
     let mut statement = connection
         .prepare(

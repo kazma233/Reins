@@ -3,6 +3,7 @@ use std::fs;
 use std::path::PathBuf;
 
 use anyhow::Result;
+use rusqlite::Connection;
 use serde_json::json;
 use uuid::Uuid;
 
@@ -181,6 +182,64 @@ fn zcode_engine_reads_custom_root_without_env() -> Result<()> {
             .iter()
             .any(|block| block.text.as_deref() == Some("帮我看下这个项目"))
     }));
+
+    fs::remove_dir_all(&dir).ok();
+    Ok(())
+}
+
+// 来源根目录存在但数据还没落地时按"还没有会话"处理,不把 no such table 或
+// metadata 读取错误抛给用户。db 文件、数据表、sessions 子目录分属三种缺失形态。
+
+#[test]
+fn opencode_engine_without_session_v2_table_lists_empty() -> Result<()> {
+    let dir = env::temp_dir().join(format!("reins-engine-opencode-empty-{}", Uuid::new_v4()));
+    fs::create_dir_all(&dir)?;
+    // db 已存在但建表还没发生:session_v2 随 opencode 首次会话写入才创建。
+    Connection::open(dir.join("opencode.db"))?.execute_batch("CREATE TABLE other (id TEXT);")?;
+
+    let engine = opencode::engine_at(dir.clone(), dir.join("store"));
+    assert!(engine.list_entries()?.is_empty());
+
+    fs::remove_dir_all(&dir).ok();
+    Ok(())
+}
+
+#[test]
+fn opencode_engine_without_db_lists_empty_without_creating_it() -> Result<()> {
+    let dir = env::temp_dir().join(format!("reins-engine-opencode-nodb-{}", Uuid::new_v4()));
+    fs::create_dir_all(&dir)?;
+
+    let engine = opencode::engine_at(dir.clone(), dir.join("store"));
+    assert!(engine.list_entries()?.is_empty());
+    // 读取路径用读写模式打开 sqlite,不先判存在就会凭空建出空库。
+    assert!(!dir.join("opencode.db").exists());
+
+    fs::remove_dir_all(&dir).ok();
+    Ok(())
+}
+
+#[test]
+fn codex_engine_without_sessions_dir_lists_empty() -> Result<()> {
+    let dir = env::temp_dir().join(format!("reins-engine-codex-empty-{}", Uuid::new_v4()));
+    // 只建 codex 根目录(~/.codex 在登录/配置阶段就有),sessions 子目录还没有。
+    fs::create_dir_all(&dir)?;
+
+    let engine = codex::engine_at(dir.clone(), dir.join("store"));
+    assert!(engine.list_entries()?.is_empty());
+
+    fs::remove_dir_all(&dir).ok();
+    Ok(())
+}
+
+#[test]
+fn zcode_engine_without_session_table_lists_empty() -> Result<()> {
+    let dir = env::temp_dir().join(format!("reins-engine-zcode-empty-{}", Uuid::new_v4()));
+    fs::create_dir_all(&dir)?;
+    let db_path = dir.join("db.sqlite");
+    Connection::open(&db_path)?.execute_batch("CREATE TABLE other (id TEXT);")?;
+
+    let engine = zcode::engine_at(db_path.clone(), dir.join("store"));
+    assert!(engine.list_entries()?.is_empty());
 
     fs::remove_dir_all(&dir).ok();
     Ok(())

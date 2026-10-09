@@ -808,6 +808,12 @@ pub(crate) fn scan_files<Row>(
 }
 
 fn subtree_mtime_max(root: &Path) -> Result<i64> {
+    // 扫描根可能还没落地(codex 的 sessions 子目录随首次会话才创建),缺失按空
+    // 目录处理,让索引走到空列表分支而不是在 metadata 读取上失败。
+    if !root.is_dir() {
+        return Ok(0);
+    }
+
     let mut latest = crate::support::time::file_modified_timestamp_millis(root)?;
 
     for path in crate::support::fs::enumerate_jsonl_files(root)? {

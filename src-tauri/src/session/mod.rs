@@ -1,4 +1,4 @@
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 
 pub(crate) mod catalog;
 pub(crate) mod commands;
@@ -74,6 +74,24 @@ pub(crate) trait SessionReader: Sync {
 
 pub(crate) fn reader(source_app: SourceApp) -> &'static dyn SessionReader {
     sources::spec(source_app).reader
+}
+
+// SQLite 来源的 db 文件与数据表都随该来源首次写入才落地,表缺失只说明它还没
+// 有会话。读取器据此把"没有数据"与"读取失败"分开,不把 no such table 报给用户。
+pub(crate) fn sqlite_table_exists(connection: &rusqlite::Connection, table: &str) -> Result<bool> {
+    let exists: Option<i64> = connection
+        .query_row(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1",
+            [table],
+            |row| row.get(0),
+        )
+        .map(Some)
+        .or_else(|error| match error {
+            rusqlite::Error::QueryReturnedNoRows => Ok(None),
+            other => Err(other),
+        })
+        .with_context(|| format!("Failed to inspect sqlite table {table}"))?;
+    Ok(exists.is_some())
 }
 
 pub(crate) fn clear_all_caches() -> Result<()> {
