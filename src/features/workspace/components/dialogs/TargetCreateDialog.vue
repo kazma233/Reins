@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import { type TargetFormState } from "../../model";
-import type { TargetPreset } from "../../types";
+import type { McpFormatExample, TargetPreset } from "../../types";
 import AppFieldError from "@shared/ui/AppFieldError.vue";
 import AppLoadError from "@shared/ui/AppLoadError.vue";
 import DialogShell from "@shared/ui/DialogShell.vue";
@@ -17,8 +17,8 @@ type TargetCreateDialogProps = {
   presetsError: string | null;
   // 编辑模式：后端下发的该 target 的 MCP 配置格式说明。
   mcpFormatDescription: string | null;
-  // 编辑模式：后端下发的写入形状示例片段。
-  mcpFormatExample: string | null;
+  // 编辑模式：后端下发的写入形态示例（按形态各一段）。
+  mcpFormatExamples: McpFormatExample[];
 };
 
 const props = defineProps<TargetCreateDialogProps>();
@@ -192,7 +192,14 @@ const isCreate = computed(() => props.form.originalTargetId === null);
         <div v-if="mcpFormatDescription && !isCreate" class="manager-stack">
           <span class="manager-field__label">MCP 配置格式</span>
           <small class="manager-field__hint">{{ mcpFormatDescription }}</small>
-          <pre v-if="mcpFormatExample" class="manager-pre">{{ mcpFormatExample }}</pre>
+          <div
+            v-for="example in mcpFormatExamples"
+            :key="example.label"
+            class="manager-stack"
+          >
+            <small class="manager-field__hint">{{ example.label }}</small>
+            <pre class="manager-pre">{{ example.body }}</pre>
+          </div>
         </div>
       </div>
     </div>

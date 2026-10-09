@@ -419,10 +419,16 @@ fn target_to_view(target: &ResolvedTargetConfig) -> TargetConfigView {
         config_path: target.config_path.as_ref().map(|path| display_path(path)),
         mcp_config_prefix: target.mcp_config_prefix.clone(),
         mcp_format_description: format_writer.description().to_string(),
-        // 示例生成失败(序列化异常)时留空,前端隐藏代码块——说明行仍在。
-        mcp_format_example: format_writer
-            .shape_example(&target.mcp_config_prefix, "my-server")
-            .unwrap_or_default(),
+        // 示例生成失败(序列化异常)时留空,前端隐藏示例区——说明行仍在。
+        mcp_format_examples: format_writer
+            .shape_examples(&target.mcp_config_prefix, "my-server")
+            .unwrap_or_default()
+            .into_iter()
+            .map(|example| McpFormatExample {
+                label: example.label.to_string(),
+                body: example.body,
+            })
+            .collect(),
     }
 }
 

@@ -870,10 +870,25 @@ fn target_view_carries_mcp_format_example_per_config_type() {
     let _guard = TestEnvGuard::lock();
     let home = home_dir().expect("测试环境缺少 HOME");
 
+    let labels = |view: &super::TargetConfigView| {
+        view.mcp_format_examples
+            .iter()
+            .map(|example| example.label.clone())
+            .collect::<Vec<_>>()
+    };
+    let body =
+        |view: &super::TargetConfigView, index: usize| view.mcp_format_examples[index].body.clone();
+
+    // codex:common 形态,本地与远端各一段。
     let mut target = resolved_target("codex", PathBuf::from("/tmp/reins-skills"));
     target.mcp_config_prefix = "mcpServers".to_string();
+    let view = target_to_view(&target);
     assert_eq!(
-        target_to_view(&target).mcp_format_example,
+        labels(&view),
+        ["本地命令（stdio）", "远端地址（http / sse）"]
+    );
+    assert_eq!(
+        body(&view, 0),
         r#"{
   "mcpServers": {
     "my-server": {
@@ -889,11 +904,25 @@ fn target_view_carries_mcp_format_example_per_config_type() {
   }
 }"#
     );
+    assert_eq!(
+        body(&view, 1),
+        r#"{
+  "mcpServers": {
+    "my-server": {
+      "headers": {
+        "X-Key": "value"
+      },
+      "type": "http",
+      "url": "https://example.com/mcp"
+    }
+  }
+}"#
+    );
 
-    // 点分 prefix 结构化嵌套(zcode 的 mcp.servers)。
+    // zcode 的点分 prefix 结构化嵌套为 JSON 层级。
     target.mcp_config_prefix = "mcp.servers".to_string();
     assert_eq!(
-        target_to_view(&target).mcp_format_example,
+        body(&target_to_view(&target), 0),
         r#"{
   "mcp": {
     "servers": {
@@ -912,9 +941,15 @@ fn target_view_carries_mcp_format_example_per_config_type() {
 }"#
     );
 
+    // OpenCode:专属形态(local/remote,command 数组与 environment 键)。
     target.mcp_config_type = McpConfigType::OpenCode;
+    let view = target_to_view(&target);
     assert_eq!(
-        target_to_view(&target).mcp_format_example,
+        labels(&view),
+        ["本地命令（stdio）", "远端地址（http / sse）"]
+    );
+    assert_eq!(
+        body(&view, 0),
         r#"{
   "mcp": {
     "servers": {
@@ -933,11 +968,30 @@ fn target_view_carries_mcp_format_example_per_config_type() {
   }
 }"#
     );
+    assert_eq!(
+        body(&view, 1),
+        r#"{
+  "mcp": {
+    "servers": {
+      "my-server": {
+        "enabled": true,
+        "headers": {
+          "X-Key": "value"
+        },
+        "type": "remote",
+        "url": "https://example.com/mcp"
+      }
+    }
+  }
+}"#
+    );
 
+    // GrokBuild:TOML 表头,本地与远端各一段。
     target.mcp_config_type = McpConfigType::GrokBuild;
     target.mcp_config_prefix = "mcp_servers".to_string();
+    let view = target_to_view(&target);
     assert_eq!(
-        target_to_view(&target).mcp_format_example,
+        body(&view, 0),
         r#"[mcp_servers.my-server]
 args = ["server.js"]
 command = "node"
@@ -945,10 +999,11 @@ enabled = true
 
 [mcp_servers.my-server.env]
 KEY = "value"
-
-
-# 远端形态（HTTP 传输）改写为：
-[mcp_servers.my-server]
+"#
+    );
+    assert_eq!(
+        body(&view, 1),
+        r#"[mcp_servers.my-server]
 enabled = true
 url = "https://example.com/mcp"
 
@@ -957,9 +1012,12 @@ X-Key = "value"
 "#
     );
 
+    // DSH:patch YAML,无 prefix 概念且 v1 只分发 stdio,仅一段。
     target.mcp_config_type = McpConfigType::Dsh;
+    let view = target_to_view(&target);
+    assert_eq!(labels(&view), ["本地命令（stdio）"]);
     assert_eq!(
-        target_to_view(&target).mcp_format_example,
+        body(&view, 0),
         format!(
             r#"- insert:
   - id: reins-mcp-my-server

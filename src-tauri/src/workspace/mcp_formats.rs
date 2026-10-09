@@ -28,11 +28,11 @@ pub(super) trait McpFormatWriter: Sync {
     /// 编辑页展示的「大概会怎么配置」中文说明；格式知识归 writer，前端不另存一份。
     fn description(&self) -> &'static str;
 
-    /// 编辑页展示的「写入配置文件后大致长什么样」。示例与真实写入走同一
-    /// 构造路径：样例 server → writer 自己的 desired 条目构造 → 按 prefix
-    /// 结构化嵌套 → serde 序列化（JSON/TOML/YAML），不手拼字符串——结构
-    /// 变更自动反映到示例。
-    fn shape_example(&self, prefix: &str, server_name: &str) -> Result<String>;
+    /// 编辑页展示的「写入配置文件后大致长什么样」，按形态各一段（stdio、
+    /// 远端…）。每段与真实写入走同一构造路径：样例 server → writer 自己的
+    /// desired 条目构造 → 按 prefix 结构化嵌套 → serde 序列化，不手拼字符串
+    /// ——结构变更自动反映到示例。
+    fn shape_examples(&self, prefix: &str, server_name: &str) -> Result<Vec<ShapeExample>>;
 
     /// 新建空 JSON 配置的默认根（OpenCode 注入 $schema）。
     fn default_json_root(&self) -> JsonValue;
@@ -97,6 +97,15 @@ struct GrokBuildWriter;
 struct OpenCodeWriter;
 struct DshPatchWriter;
 
+/// 编辑页展示的一段写入形态示例：形态名 + 已序列化的正文。
+pub(super) struct ShapeExample {
+    pub(super) label: &'static str,
+    pub(super) body: String,
+}
+
+const STDIO_EXAMPLE_LABEL: &str = "本地命令（stdio）";
+const REMOTE_EXAMPLE_LABEL: &str = "远端地址（http / sse）";
+
 // 示例用的样例 server:与真实写入走同一 desired 构造路径,只是喂固定值。
 fn example_server(name: &str) -> ResolvedMcpConfig {
     ResolvedMcpConfig {
@@ -110,6 +119,22 @@ fn example_server(name: &str) -> ResolvedMcpConfig {
         homepage: None,
         url: None,
         headers: BTreeMap::new(),
+        timeout: None,
+    }
+}
+
+fn example_remote_server(name: &str) -> ResolvedMcpConfig {
+    ResolvedMcpConfig {
+        name: name.to_string(),
+        enabled: true,
+        transport: McpTransport::Http,
+        command: None,
+        args: Vec::new(),
+        env: BTreeMap::new(),
+        created_at: None,
+        homepage: None,
+        url: Some("https://example.com/mcp".to_string()),
+        headers: BTreeMap::from([("X-Key".to_string(), "value".to_string())]),
         timeout: None,
     }
 }
@@ -157,11 +182,26 @@ impl McpFormatWriter for CommonWriter {
         "通用 MCP 条目（标准 command/args/env），按配置文件扩展名写入 JSON 或 TOML 的 mcp 节点下。"
     }
 
-    fn shape_example(&self, prefix: &str, server_name: &str) -> Result<String> {
+    fn shape_examples(&self, prefix: &str, server_name: &str) -> Result<Vec<ShapeExample>> {
         // 与真实写入同一路径:样例 server 走 desired 构造,再结构化嵌套序列化。
-        let entry = self.desired_json_entry(&example_server(server_name))?;
-        let document = nest_json_document(prefix, server_name, entry);
-        serde_json::to_string_pretty(&document).context("MCP 示例序列化失败")
+        let stdio = self.desired_json_entry(&example_server(server_name))?;
+        let remote = self.desired_json_entry(&example_remote_server(server_name))?;
+        Ok(vec![
+            ShapeExample {
+                label: STDIO_EXAMPLE_LABEL,
+                body: serde_json::to_string_pretty(&nest_json_document(prefix, server_name, stdio))
+                    .context("MCP 示例序列化失败")?,
+            },
+            ShapeExample {
+                label: REMOTE_EXAMPLE_LABEL,
+                body: serde_json::to_string_pretty(&nest_json_document(
+                    prefix,
+                    server_name,
+                    remote,
+                ))
+                .context("MCP 示例序列化失败")?,
+            },
+        ])
     }
 
     fn default_json_root(&self) -> JsonValue {
@@ -186,26 +226,21 @@ impl McpFormatWriter for GrokBuildWriter {
         "Grok Build TOML 格式（远端类型用 headers 携带自定义头），写入 config.toml。"
     }
 
-    fn shape_example(&self, prefix: &str, server_name: &str) -> Result<String> {
-        let entry = self.desired_toml_entry(&example_server(server_name))?;
-        let document = nest_toml_document(prefix, server_name, entry);
-        // 远端形态(HTTP 传输)复用同一构造路径,单独序列化一段带注释头的
-        // 示例,说明 headers 的写法。
-        let mut remote = example_server(server_name);
-        remote.transport = McpTransport::Http;
-        remote.command = None;
-        remote.args = Vec::new();
-        remote.env = BTreeMap::new();
-        remote.url = Some("https://example.com/mcp".to_string());
-        remote.headers = BTreeMap::from([("X-Key".to_string(), "value".to_string())]);
-        let remote_entry = self.desired_toml_entry(&remote)?;
-        let remote_document = nest_toml_document(prefix, server_name, remote_entry);
-
-        Ok(format!(
-            "{}\n\n# 远端形态（HTTP 传输）改写为：\n{}",
-            toml::to_string_pretty(&document).context("MCP 示例序列化失败")?,
-            toml::to_string_pretty(&remote_document).context("MCP 示例序列化失败")?,
-        ))
+    fn shape_examples(&self, prefix: &str, server_name: &str) -> Result<Vec<ShapeExample>> {
+        let stdio = self.desired_toml_entry(&example_server(server_name))?;
+        let remote = self.desired_toml_entry(&example_remote_server(server_name))?;
+        Ok(vec![
+            ShapeExample {
+                label: STDIO_EXAMPLE_LABEL,
+                body: toml::to_string_pretty(&nest_toml_document(prefix, server_name, stdio))
+                    .context("MCP 示例序列化失败")?,
+            },
+            ShapeExample {
+                label: REMOTE_EXAMPLE_LABEL,
+                body: toml::to_string_pretty(&nest_toml_document(prefix, server_name, remote))
+                    .context("MCP 示例序列化失败")?,
+            },
+        ])
     }
 
     fn default_json_root(&self) -> JsonValue {
@@ -237,10 +272,25 @@ impl McpFormatWriter for OpenCodeWriter {
         "OpenCode 专属格式（JSON，带 $schema 头，command 为数组、environment 键），写入 mcp.servers 根。"
     }
 
-    fn shape_example(&self, prefix: &str, server_name: &str) -> Result<String> {
-        let entry = self.desired_json_entry(&example_server(server_name))?;
-        let document = nest_json_document(prefix, server_name, entry);
-        serde_json::to_string_pretty(&document).context("MCP 示例序列化失败")
+    fn shape_examples(&self, prefix: &str, server_name: &str) -> Result<Vec<ShapeExample>> {
+        let local = self.desired_json_entry(&example_server(server_name))?;
+        let remote = self.desired_json_entry(&example_remote_server(server_name))?;
+        Ok(vec![
+            ShapeExample {
+                label: STDIO_EXAMPLE_LABEL,
+                body: serde_json::to_string_pretty(&nest_json_document(prefix, server_name, local))
+                    .context("MCP 示例序列化失败")?,
+            },
+            ShapeExample {
+                label: REMOTE_EXAMPLE_LABEL,
+                body: serde_json::to_string_pretty(&nest_json_document(
+                    prefix,
+                    server_name,
+                    remote,
+                ))
+                .context("MCP 示例序列化失败")?,
+            },
+        ])
     }
 
     fn default_json_root(&self) -> JsonValue {
@@ -268,10 +318,15 @@ impl McpFormatWriter for DshPatchWriter {
         "DeepSeek Harness 的 Cordis patch YAML（insert/remove 操作列表，按 serverName 定位，无 configPrefix）。"
     }
 
-    fn shape_example(&self, _prefix: &str, server_name: &str) -> Result<String> {
-        // patch YAML 没有 prefix 概念;示例即真实写入的 insert 操作序列。
+    fn shape_examples(&self, _prefix: &str, server_name: &str) -> Result<Vec<ShapeExample>> {
+        // patch YAML 没有 prefix 概念,且 v1 只分发 stdio;示例即真实写入的
+        // insert 操作序列。
         let op = desired_dsh_insert_op(server_name, &example_server(server_name))?;
-        serde_yaml::to_string(&YamlValue::Sequence(vec![op])).context("MCP 示例序列化失败")
+        Ok(vec![ShapeExample {
+            label: STDIO_EXAMPLE_LABEL,
+            body: serde_yaml::to_string(&YamlValue::Sequence(vec![op]))
+                .context("MCP 示例序列化失败")?,
+        }])
     }
 
     // dsh 的配置根是操作列表；dsh 写入路径不走 JSON 根，该方法仅为穷尽。

@@ -128,13 +128,20 @@ it("carries the mcp format description when editing an existing target", async (
     configPath: "/gateway/config.json",
     mcpConfigPrefix: "mcpServers",
     mcpFormatDescription: "通用 MCP 条目（标准 command/args/env），按配置文件扩展名写入 JSON 或 TOML 的 mcp 节点下。",
-    mcpFormatExample: "{\n  \"mcpServers\": {\n    \"my-server\": { ... }\n  }\n}",
+    mcpFormatExamples: [
+      {
+        label: "本地命令（stdio）",
+        body: "{\n  \"mcpServers\": {\n    \"my-server\": { ... }\n  }\n}",
+      },
+    ],
   });
 
   // 编辑模式不拉预设，格式说明来自 target 视图。
   expect(getTargetPresets).not.toHaveBeenCalled();
   expect(mutations.targetCreateDialog.mcpFormatDescription).toContain("通用 MCP 条目");
-  expect(mutations.targetCreateDialog.mcpFormatExample).toContain("mcpServers");
+  expect(mutations.targetCreateDialog.mcpFormatExamples).toHaveLength(1);
+  expect(mutations.targetCreateDialog.mcpFormatExamples[0].label).toContain("stdio");
+  expect(mutations.targetCreateDialog.mcpFormatExamples[0].body).toContain("mcpServers");
   expect(mutations.targetCreateDialog.form.originalTargetId).toBe("my-gateway");
 
   await mutations.handleSubmitTarget();
@@ -185,7 +192,12 @@ it("keeps a failed enable/disable on the panel result slot", async () => {
     configPath: null,
     mcpConfigPrefix: "",
     mcpFormatDescription: "通用 MCP 条目（标准 command/args/env），按配置文件扩展名写入 JSON 或 TOML 的 mcp 节点下。",
-    mcpFormatExample: "{\n  \"mcpServers\": {\n    \"my-server\": { ... }\n  }\n}",
+    mcpFormatExamples: [
+      {
+        label: "本地命令（stdio）",
+        body: "{\n  \"mcpServers\": {\n    \"my-server\": { ... }\n  }\n}",
+      },
+    ],
   });
 
   expect(store.actionResults["target-toggle:codex"]).toMatchObject({
@@ -212,7 +224,12 @@ it("marks only the toggled card as pending and keeps the page lock off", async (
     configPath: null,
     mcpConfigPrefix: "",
     mcpFormatDescription: "通用 MCP 条目（标准 command/args/env），按配置文件扩展名写入 JSON 或 TOML 的 mcp 节点下。",
-    mcpFormatExample: "{\n  \"mcpServers\": {\n    \"my-server\": { ... }\n  }\n}",
+    mcpFormatExamples: [
+      {
+        label: "本地命令（stdio）",
+        body: "{\n  \"mcpServers\": {\n    \"my-server\": { ... }\n  }\n}",
+      },
+    ],
   });
 
   expect(runningActionDuringWrite).toEqual([false]);
@@ -241,7 +258,12 @@ it("runs queued enable/disable writes in order", async () => {
       configPath: null,
       mcpConfigPrefix: "",
       mcpFormatDescription: "通用 MCP 条目（标准 command/args/env），按配置文件扩展名写入 JSON 或 TOML 的 mcp 节点下。",
-      mcpFormatExample: "{\n  \"mcpServers\": {\n    \"my-server\": { ... }\n  }\n}",
+      mcpFormatExamples: [
+      {
+        label: "本地命令（stdio）",
+        body: "{\n  \"mcpServers\": {\n    \"my-server\": { ... }\n  }\n}",
+      },
+    ],
     });
 
   const codexToggle = toggle("codex");

@@ -7,6 +7,7 @@ export * from "./BatchGitSkillImportItemResult";
 export * from "./BatchGitSkillImportResult";
 export * from "./DiscoveredSkill";
 export * from "./McpConfigView";
+export * from "./McpFormatExample";
 export * from "./McpInspection";
 export * from "./McpTargetInspection";
 export * from "./McpTargetMutationResult";
