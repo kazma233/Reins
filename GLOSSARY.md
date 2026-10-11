@@ -63,3 +63,7 @@ _Avoid_: config type 分发（指旧的散落 match 形态）
 **聚合平台（provider）**：
 除 OpenAI、Anthropic 官方外的一切模型平台与自建网关，由 reins 管理端点、协议、模型与 API Key。
 _Avoid_: 供应商、平台（单独使用太泛）
+
+**方言（dialect）**：
+一个归一化枚举（协议、思考档位）在某工具配置文件里的实际拼写知识：正向写入、反向识别（含只读别名与有损折叠）由同一张表派生，各适配器经 `AppAdapter` 声明（Pi 与 dsh 共用 pi-ai 方言），roundtrip 测试守卫正反互逆。
+_Avoid_: 映射函数（指散落在适配器里的正反函数对）
