@@ -11,6 +11,7 @@ use std::path::PathBuf;
 use anyhow::{Result, bail};
 use toml::Value as TomlValue;
 
+use super::dialect::{GROK_PROTOCOL, GROK_REASONING};
 use super::{
     AppAdapter, AppCapability, ModelField, ToolEnv, display_path, ensure_protocol_supported,
     external_entry, grok_config_path, read_toml, registration_key, serialize_toml,
@@ -24,28 +25,6 @@ pub(crate) struct GrokbuildAdapter;
 
 const ANTHROPIC_VERSION_HEADER: &str = "anthropic-version";
 const ANTHROPIC_VERSION: &str = "2023-06-01";
-
-// Grok 1.0.40 实测 + 官方 settings-reference 确认：api_backend 合法取值为
-// chat_completions / responses / messages；provider 表不接受 name；
-// default_reasoning_effort 必须放在 [models] 表内。
-fn api_backend(protocol: ProviderProtocol) -> &'static str {
-    match protocol {
-        ProviderProtocol::OpenaiResponses => "responses",
-        ProviderProtocol::OpenaiChatCompletions => "chat_completions",
-        ProviderProtocol::AnthropicMessages => "messages",
-    }
-}
-
-// Grok 的 default_reasoning_effort 配置层接受 max，但交互 UI 只渲染
-// low/medium/high/xhigh 四档，且 messages 后端请求层 max 与 xhigh 的
-// thinking 参数完全相同（1.0.41 实测）；映射后弹窗所选档位在 Grok
-// 界面可见、请求等价。
-fn grok_reasoning_effort(level: ReasoningLevel) -> &'static str {
-    match level {
-        ReasoningLevel::Max => "xhigh",
-        _ => level.as_str(),
-    }
-}
 
 // Grok 的 messages 后端固定请求 {base_url}/messages，不补 /v1 段
 // （grok 1.0.41 本地监听实测）；而 anthropic 生态约定 base_url 不带
@@ -73,16 +52,6 @@ fn grok_providers_view(
             (id.clone(), view)
         })
         .collect()
-}
-
-// 反读时从 model_providers 的 api_backend 字段反推协议；未知取值留空展示。
-fn protocol_from_backend(backend: Option<&str>) -> Option<ProviderProtocol> {
-    match backend? {
-        "responses" => Some(ProviderProtocol::OpenaiResponses),
-        "chat_completions" => Some(ProviderProtocol::OpenaiChatCompletions),
-        "messages" => Some(ProviderProtocol::AnthropicMessages),
-        _ => None,
-    }
 }
 
 fn model_entry_key(registration: &str, model_id: &str) -> String {
@@ -216,8 +185,12 @@ impl AppAdapter for GrokbuildAdapter {
         }
     }
 
-    fn reasoning_effort_write(&self, level: ReasoningLevel) -> String {
-        grok_reasoning_effort(level).to_string()
+    fn reasoning_dialect(&self) -> &'static super::dialect::ReasoningDialect {
+        &GROK_REASONING
+    }
+
+    fn protocol_dialect(&self) -> Option<&'static super::dialect::ProtocolDialect> {
+        Some(&GROK_PROTOCOL)
     }
 
     fn inspect(
@@ -238,7 +211,7 @@ impl AppAdapter for GrokbuildAdapter {
             .get("models")
             .and_then(|value| value.get("default_reasoning_effort"))
             .and_then(TomlValue::as_str)
-            .and_then(ReasoningLevel::parse);
+            .and_then(|value| self.reasoning_dialect().parse(value));
         let default_model = root
             .get("models")
             .and_then(|value| value.get("default"))
@@ -250,8 +223,10 @@ impl AppAdapter for GrokbuildAdapter {
             let grok_providers = grok_providers_view(providers);
             for (key, value) in table {
                 let base_url = value.get("base_url").and_then(TomlValue::as_str);
-                let protocol =
-                    protocol_from_backend(value.get("api_backend").and_then(TomlValue::as_str));
+                let protocol = value
+                    .get("api_backend")
+                    .and_then(TomlValue::as_str)
+                    .and_then(|backend| GROK_PROTOCOL.parse(backend));
                 let entry = if key.starts_with(super::REINS_PREFIX) {
                     let mut entry =
                         super::classify_reins_entry(key, base_url, protocol, &grok_providers);
@@ -321,7 +296,10 @@ impl AppAdapter for GrokbuildAdapter {
                     label
                         .map(|label| vec![format!("外部模型：{label}")])
                         .unwrap_or_default(),
-                    protocol_from_backend(value.get("api_backend").and_then(TomlValue::as_str)),
+                    value
+                        .get("api_backend")
+                        .and_then(TomlValue::as_str)
+                        .and_then(|backend| GROK_PROTOCOL.parse(backend)),
                 ));
             }
         }
@@ -360,7 +338,7 @@ impl AppAdapter for GrokbuildAdapter {
         );
         provider_table.insert(
             "api_backend".to_string(),
-            TomlValue::String(api_backend(provider.protocol).to_string()),
+            TomlValue::String(GROK_PROTOCOL.spell(provider.protocol).to_string()),
         );
         providers_table
             .as_table_mut()
@@ -457,7 +435,7 @@ impl AppAdapter for GrokbuildAdapter {
         if let Some(level) = plan.default_reasoning_level {
             models_table.insert(
                 "default_reasoning_effort".to_string(),
-                TomlValue::String(grok_reasoning_effort(level).to_string()),
+                TomlValue::String(GROK_REASONING.spell(level).to_string()),
             );
         }
 

@@ -14,6 +14,7 @@ use std::path::PathBuf;
 use anyhow::{Context, Result, bail};
 use serde_yaml::{Mapping, Value as YamlValue};
 
+use super::dialect::{PI_AI_PROTOCOL, PI_AI_REASONING};
 use super::{
     AppAdapter, AppCapability, ModelField, ToolEnv, display_path, ensure_protocol_supported,
     external_entry, registration_key,
@@ -27,44 +28,8 @@ use crate::support::fs::user_home_dir;
 
 pub(crate) struct DshAdapter;
 
-// dsh 的 llm-pi-ai 层与 pi 共用同一套 KnownApi 枚举（协议名同 pi）。
-fn api_name(protocol: ProviderProtocol) -> &'static str {
-    match protocol {
-        ProviderProtocol::OpenaiResponses => "openai-responses",
-        ProviderProtocol::OpenaiChatCompletions => "openai-completions",
-        ProviderProtocol::AnthropicMessages => "anthropic-messages",
-    }
-}
-
-// 反读时从 api 字段反推协议；未知取值留空展示。
-fn protocol_from_api(api: Option<&str>) -> Option<ProviderProtocol> {
-    match api? {
-        "openai-responses" => Some(ProviderProtocol::OpenaiResponses),
-        "openai-completions" => Some(ProviderProtocol::OpenaiChatCompletions),
-        "anthropic-messages" => Some(ProviderProtocol::AnthropicMessages),
-        _ => None,
-    }
-}
-
 fn key(name: &str) -> YamlValue {
     YamlValue::String(name.to_string())
-}
-
-// pi-ai 的思考档位首档是 "off"（与 Pi 适配器同一套档位枚举，dsh 的 LLM 层
-// 就是 llm-pi-ai）。
-fn dsh_thinking_level(level: ReasoningLevel) -> &'static str {
-    match level {
-        ReasoningLevel::Off => "off",
-        _ => level.as_str(),
-    }
-}
-
-// 反读 reasoningEffort / reasoning 字段：首档同样是 "off"。
-fn dsh_thinking_level_from_str(value: &str) -> Option<ReasoningLevel> {
-    if value.trim().eq_ignore_ascii_case("off") {
-        return Some(ReasoningLevel::Off);
-    }
-    ReasoningLevel::parse(value)
 }
 
 // 路由的凭据引用名：.credentials.yaml 的键与路由 apiKeyEnv 用同一名字。
@@ -291,9 +256,9 @@ fn route_entry(provider: &ResolvedProvider, plan: &ApplyProviderInput) -> Mappin
                 let wire = if *level == ReasoningLevel::Off {
                     YamlValue::Null
                 } else {
-                    YamlValue::String(dsh_thinking_level(*level).to_string())
+                    YamlValue::String(PI_AI_REASONING.spell(*level).to_string())
                 };
-                efforts.insert(key(dsh_thinking_level(*level)), wire);
+                efforts.insert(key(PI_AI_REASONING.spell(*level)), wire);
             }
             model_entry.insert(key("reasoningEfforts"), YamlValue::Mapping(efforts));
         }
@@ -303,13 +268,13 @@ fn route_entry(provider: &ResolvedProvider, plan: &ApplyProviderInput) -> Mappin
     let mut route = Mapping::new();
     route.insert(key("apiKeyEnv"), key(&api_key_ref(&provider.id)));
     route.insert(key("baseURL"), key(&provider.base_url));
-    route.insert(key("api"), key(api_name(provider.protocol)));
+    route.insert(key("api"), key(PI_AI_PROTOCOL.spell(provider.protocol)));
     route.insert(key("models"), YamlValue::Sequence(models));
     // 路由级默认思考档；会话实际采用的默认档来自 agent-default-model 行。
     if let Some(level) = plan.default_reasoning_level {
         route.insert(
             key("reasoning"),
-            YamlValue::String(dsh_thinking_level(level).to_string()),
+            YamlValue::String(PI_AI_REASONING.spell(level).to_string()),
         );
     }
     route
@@ -324,7 +289,7 @@ fn default_model_row(plan: &ApplyProviderInput, registration: &str) -> Mapping {
         // 落在这里才能纠正 settings 导入留下的旧行。
         config.insert(
             key("reasoningEffort"),
-            YamlValue::String(dsh_thinking_level(level).to_string()),
+            YamlValue::String(PI_AI_REASONING.spell(level).to_string()),
         );
     }
     config
@@ -362,6 +327,14 @@ impl AppAdapter for DshAdapter {
             unwritten_model_fields: &[ModelField::Reasoning],
             supported_reasoning_levels: ReasoningLevel::all(),
         }
+    }
+
+    fn reasoning_dialect(&self) -> &'static super::dialect::ReasoningDialect {
+        &PI_AI_REASONING
+    }
+
+    fn protocol_dialect(&self) -> Option<&'static super::dialect::ProtocolDialect> {
+        Some(&PI_AI_PROTOCOL)
     }
 
     fn inspect(
@@ -406,7 +379,7 @@ impl AppAdapter for DshAdapter {
                     config
                         .get(&key("reasoningEffort"))
                         .and_then(YamlValue::as_str)
-                        .and_then(dsh_thinking_level_from_str),
+                        .and_then(|value| self.reasoning_dialect().parse(value)),
                 )
             }
             None => (None, None, None),
@@ -417,7 +390,10 @@ impl AppAdapter for DshAdapter {
                 continue;
             };
             let base_url = value.get("baseURL").and_then(YamlValue::as_str);
-            let protocol = protocol_from_api(value.get("api").and_then(YamlValue::as_str));
+            let protocol = value
+                .get("api")
+                .and_then(YamlValue::as_str)
+                .and_then(|api| PI_AI_PROTOCOL.parse(api));
             let mut entry = if entry_key.starts_with(super::REINS_PREFIX) {
                 super::classify_reins_entry(entry_key, base_url, protocol, providers)
             } else {

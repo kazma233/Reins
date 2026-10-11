@@ -17,9 +17,11 @@ use super::types::{
 use crate::support::fs::{
     display_path, grok_home_path, user_home_dir, write_atomic, write_atomic_private,
 };
+use dialect::{ProtocolDialect, ReasoningDialect};
 
 pub(crate) mod claude;
 pub(crate) mod codex;
+pub(crate) mod dialect;
 pub(crate) mod dsh;
 pub(crate) mod grokbuild;
 pub(crate) mod opencode;
@@ -126,12 +128,14 @@ pub(crate) trait AppAdapter: Sync {
         Vec::new()
     }
 
-    // 思考等级在该平台配置文件里的实际写入值；必须与 apply 的写入
-    // 逻辑同源（特殊映射的平台覆写，如 Grok max→xhigh、Pi off→off），
-    // 供应用弹窗展示映射，避免前端复刻规则。
-    fn reasoning_effort_write(&self, level: ReasoningLevel) -> String {
-        level.as_str().to_string()
-    }
+    // 本工具的思考档位方言：apply 写入、inspect 反读、弹窗映射文案全部
+    // 从这张表派生（特殊映射在表内声明，如 Grok max→xhigh、pi-ai
+    // off→off），正反互逆由 roundtrip 测试守卫。
+    fn reasoning_dialect(&self) -> &'static ReasoningDialect;
+
+    // 本工具的协议方言；配置文件里没有协议字段、语义固定的工具（Claude）
+    // 返回 None。
+    fn protocol_dialect(&self) -> Option<&'static ProtocolDialect>;
 
     // 反读工具配置；providers.yaml 解析结果用于把 reins- 条目归类为
     // 已应用 / 漂移，无法归类的都按外部配置展示。
@@ -487,12 +491,13 @@ pub(crate) fn classify_reins_entry(
 pub(crate) fn empty_state(app: ProviderAppId, config_paths: Vec<PathBuf>) -> ProviderAppState {
     let adapter = adapter_for(app);
     let capability = adapter.capability();
+    let reasoning_dialect = adapter.reasoning_dialect();
     let reasoning_level_writes = capability
         .supported_reasoning_levels
         .iter()
         .map(|level| ReasoningEffortWrite {
             level: *level,
-            writes: adapter.reasoning_effort_write(*level),
+            writes: reasoning_dialect.spell(*level).to_string(),
         })
         .collect();
     ProviderAppState {

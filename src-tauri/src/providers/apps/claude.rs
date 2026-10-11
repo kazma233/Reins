@@ -64,6 +64,16 @@ impl AppAdapter for ClaudeAdapter {
         }
     }
 
+    fn reasoning_dialect(&self) -> &'static super::dialect::ReasoningDialect {
+        &super::dialect::IDENTITY_REASONING
+    }
+
+    // Claude 的 env 写法语义固定为 Anthropic Messages，配置里没有协议字段
+    // 可写可反推，无方言可声明。
+    fn protocol_dialect(&self) -> Option<&'static super::dialect::ProtocolDialect> {
+        None
+    }
+
     fn inspect(
         &self,
         env: &ToolEnv,
@@ -80,7 +90,7 @@ impl AppAdapter for ClaudeAdapter {
         state.default_reasoning_level = root
             .get("effortLevel")
             .and_then(JsonValue::as_str)
-            .and_then(ReasoningLevel::parse);
+            .and_then(|value| self.reasoning_dialect().parse(value));
         let Some(env_table) = root.get("env").and_then(JsonValue::as_object) else {
             return Ok(state);
         };
@@ -188,7 +198,7 @@ impl AppAdapter for ClaudeAdapter {
         if let Some(level) = plan.default_reasoning_level {
             root.insert(
                 "effortLevel".to_string(),
-                JsonValue::String(level.as_str().to_string()),
+                JsonValue::String(self.reasoning_dialect().spell(level).to_string()),
             );
         }
 
@@ -242,7 +252,7 @@ impl AppAdapter for ClaudeAdapter {
         if model_is_ours {
             root.remove("model");
             if let Some(level) = root.get("effortLevel").and_then(JsonValue::as_str) {
-                if ReasoningLevel::parse(level).is_some() {
+                if self.reasoning_dialect().parse(level).is_some() {
                     root.remove("effortLevel");
                 }
             }

@@ -13,6 +13,7 @@ use anyhow::{Result, bail};
 use serde_json::{Value as JsonValue, json};
 use toml::Value as TomlValue;
 
+use super::dialect::CODEX_PROTOCOL;
 use super::{
     AppAdapter, AppCapability, ModelField, ToolEnv, classify_reins_entry, codex_config_path,
     codex_home_dir, display_path, ensure_protocol_supported, external_entry, read_toml,
@@ -25,7 +26,11 @@ use crate::providers::types::{
 
 pub(crate) struct CodexAdapter;
 
-const WIRE_API: &str = "responses";
+// wire_api 唯一合法取值来自协议方言表（codex 仅接受 openai_responses）。
+fn wire_api() -> &'static str {
+    CODEX_PROTOCOL.spell(ProviderProtocol::OpenaiResponses)
+}
+
 const CATALOG_FILE_NAME: &str = "reins-models.json";
 
 // codex 内置兜底提示词（codex-rs/models-manager/prompt.md，Apache-2.0，
@@ -121,13 +126,6 @@ fn default_model_context_window(
         .and_then(|model| model.context_window)
 }
 
-// 反读时从 wire_api 字段反推协议；其他取值（手工改成 chat 等）无法确认，留空展示。
-fn protocol_from_wire_api(wire_api: Option<&str>) -> Option<ProviderProtocol> {
-    match wire_api? {
-        WIRE_API => Some(ProviderProtocol::OpenaiResponses),
-        _ => None,
-    }
-}
 // 思考等级：官方值域 low/medium/high/xhigh/max/ultra（config-reference，
 // 非穷举）。minimal 为 Codex 历史合法档位，保留；off（写入 "none"）
 // 无任何文档依据，不放行（用户决策，2026-09-25）。
@@ -165,6 +163,14 @@ impl AppAdapter for CodexAdapter {
         }
     }
 
+    fn reasoning_dialect(&self) -> &'static super::dialect::ReasoningDialect {
+        &super::dialect::IDENTITY_REASONING
+    }
+
+    fn protocol_dialect(&self) -> Option<&'static super::dialect::ProtocolDialect> {
+        Some(&CODEX_PROTOCOL)
+    }
+
     fn inspect(
         &self,
         env: &ToolEnv,
@@ -181,7 +187,7 @@ impl AppAdapter for CodexAdapter {
         state.default_reasoning_level = root
             .get("model_reasoning_effort")
             .and_then(TomlValue::as_str)
-            .and_then(ReasoningLevel::parse);
+            .and_then(|value| self.reasoning_dialect().parse(value));
         let model_provider = root
             .get("model_provider")
             .and_then(TomlValue::as_str)
@@ -194,8 +200,10 @@ impl AppAdapter for CodexAdapter {
         if let Some(table) = root.get("model_providers").and_then(TomlValue::as_table) {
             for (key, value) in table {
                 let base_url = value.get("base_url").and_then(TomlValue::as_str);
-                let protocol =
-                    protocol_from_wire_api(value.get("wire_api").and_then(TomlValue::as_str));
+                let protocol = value
+                    .get("wire_api")
+                    .and_then(TomlValue::as_str)
+                    .and_then(|value| CODEX_PROTOCOL.parse(value));
                 let entry = if key.starts_with(super::REINS_PREFIX) {
                     let mut entry = classify_reins_entry(key, base_url, protocol, providers);
                     let is_default = model_provider.as_deref() == Some(key.as_str());
@@ -205,10 +213,10 @@ impl AppAdapter for CodexAdapter {
                             entry.model_ids = vec![model_id.clone()];
                         }
                     }
-                    if value.get("wire_api").and_then(TomlValue::as_str) != Some(WIRE_API) {
+                    if value.get("wire_api").and_then(TomlValue::as_str) != Some(wire_api()) {
                         entry
                             .notes
-                            .push(format!("wire_api 不是 {WIRE_API}，可能已被手工修改。"));
+                            .push(format!("wire_api 不是 {}，可能已被手工修改。", wire_api()));
                     }
                     entry
                 } else {
@@ -268,7 +276,7 @@ impl AppAdapter for CodexAdapter {
                         key.starts_with(super::REINS_PREFIX)
                             && key.as_str() != registration.as_str()
                             && value.get("base_url").and_then(TomlValue::as_str).is_some()
-                            && value.get("wire_api").and_then(TomlValue::as_str) == Some(WIRE_API)
+                            && value.get("wire_api").and_then(TomlValue::as_str) == Some(wire_api())
                     })
                     .map(|(key, _)| key.clone())
                     .collect();
@@ -289,7 +297,7 @@ impl AppAdapter for CodexAdapter {
             );
             table.insert(
                 "wire_api".to_string(),
-                TomlValue::String(WIRE_API.to_string()),
+                TomlValue::String(wire_api().to_string()),
             );
             table.insert(
                 "experimental_bearer_token".to_string(),
@@ -393,7 +401,7 @@ impl AppAdapter for CodexAdapter {
                 // 只删内容仍可识别的条目：必须带 base_url 且 wire_api 是
                 // responses；用户改过的漂移配置不自动删。
                 let recognizable_now = entry.get("base_url").and_then(TomlValue::as_str).is_some()
-                    && entry.get("wire_api").and_then(TomlValue::as_str) == Some(WIRE_API);
+                    && entry.get("wire_api").and_then(TomlValue::as_str) == Some(wire_api());
                 if !recognizable_now {
                     bail!("条目 {registration} 已被手工修改，无法自动识别，请手动处理。");
                 }

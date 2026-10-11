@@ -1,7 +1,5 @@
 // Pi：$PI_CODING_AGENT_DIR/models.json + settings.json（默认 ~/.pi/agent）。
 // 多 Provider 并存：新增 reins- 条目；默认值写 settings.json。
-// models.json 的 api 取值已确认：KnownApi 含 openai-responses/
-// openai-completions/anthropic-messages（pi-ai 包 types.d.ts）。
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -9,6 +7,7 @@ use std::path::PathBuf;
 use anyhow::{Result, bail};
 use serde_json::{Map as JsonMap, Value as JsonValue};
 
+use super::dialect::{PI_AI_PROTOCOL, PI_AI_REASONING};
 use super::{
     AppAdapter, AppCapability, ToolEnv, display_path, ensure_protocol_supported, external_entry,
     pi_models_path, pi_settings_path, read_json_object, registration_key, serialize_json,
@@ -19,42 +18,6 @@ use crate::providers::types::{
 };
 
 pub(crate) struct PiAdapter;
-
-// 各协议对应的 api 取值，按 pi 命名习惯写为 kebab-case；待实现期验证。
-fn api_name(protocol: ProviderProtocol) -> &'static str {
-    match protocol {
-        ProviderProtocol::OpenaiResponses => "openai-responses",
-        ProviderProtocol::OpenaiChatCompletions => "openai-completions",
-        ProviderProtocol::AnthropicMessages => "anthropic-messages",
-    }
-}
-
-// 反读时从 models.json 的 api 字段反推协议；未知取值留空展示。
-fn protocol_from_api(api: Option<&str>) -> Option<ProviderProtocol> {
-    match api? {
-        "openai-responses" => Some(ProviderProtocol::OpenaiResponses),
-        "openai-completions" => Some(ProviderProtocol::OpenaiChatCompletions),
-        "anthropic-messages" => Some(ProviderProtocol::AnthropicMessages),
-        _ => None,
-    }
-}
-
-// Pi 的思考等级枚举首档是 "off"（pi.dev/docs/latest/settings），
-// 与归一化集合的 "none" 写法不同，单独映射。
-fn thinking_level(level: ReasoningLevel) -> &'static str {
-    match level {
-        ReasoningLevel::Off => "off",
-        _ => level.as_str(),
-    }
-}
-
-// 反读 settings.json 里的 defaultThinkingLevel：首档同样是 "off"。
-fn thinking_level_from_str(value: &str) -> Option<ReasoningLevel> {
-    if value.trim().eq_ignore_ascii_case("off") {
-        return Some(ReasoningLevel::Off);
-    }
-    ReasoningLevel::parse(value)
-}
 
 // Pi 的思考等级选择器只对 thinkingLevelMap 里显式声明的模型开放
 // xhigh/max 档（pi getSupportedThinkingLevels：值 null 禁用该档，
@@ -69,7 +32,7 @@ fn thinking_level_map(levels: &[ReasoningLevel]) -> JsonValue {
         } else {
             JsonValue::Null
         };
-        map.insert(thinking_level(*level).to_string(), value);
+        map.insert(PI_AI_REASONING.spell(*level).to_string(), value);
     }
     JsonValue::Object(map)
 }
@@ -94,8 +57,12 @@ impl AppAdapter for PiAdapter {
         }
     }
 
-    fn reasoning_effort_write(&self, level: ReasoningLevel) -> String {
-        thinking_level(level).to_string()
+    fn reasoning_dialect(&self) -> &'static super::dialect::ReasoningDialect {
+        &PI_AI_REASONING
+    }
+
+    fn protocol_dialect(&self) -> Option<&'static super::dialect::ProtocolDialect> {
+        Some(&super::dialect::PI_AI_PROTOCOL)
     }
 
     fn inspect(
@@ -118,7 +85,7 @@ impl AppAdapter for PiAdapter {
         state.default_reasoning_level = settings
             .get("defaultThinkingLevel")
             .and_then(JsonValue::as_str)
-            .and_then(thinking_level_from_str);
+            .and_then(|value| self.reasoning_dialect().parse(value));
         let default_provider = settings
             .get("defaultProvider")
             .and_then(JsonValue::as_str)
@@ -132,7 +99,10 @@ impl AppAdapter for PiAdapter {
         if let Some(table) = root.get("providers").and_then(JsonValue::as_object) {
             for (key, value) in table {
                 let base_url = value.get("baseUrl").and_then(JsonValue::as_str);
-                let protocol = protocol_from_api(value.get("api").and_then(JsonValue::as_str));
+                let protocol = value
+                    .get("api")
+                    .and_then(JsonValue::as_str)
+                    .and_then(|api| PI_AI_PROTOCOL.parse(api));
                 let entry = if key.starts_with(super::REINS_PREFIX) {
                     let mut entry = super::classify_reins_entry(key, base_url, protocol, providers);
                     if let Some(models) = value.get("models").and_then(JsonValue::as_array) {
@@ -225,7 +195,7 @@ impl AppAdapter for PiAdapter {
         );
         provider_entry.insert(
             "api".to_string(),
-            JsonValue::String(api_name(provider.protocol).to_string()),
+            JsonValue::String(PI_AI_PROTOCOL.spell(provider.protocol).to_string()),
         );
         provider_entry.insert("apiKey".to_string(), JsonValue::String(api_key.to_string()));
         provider_entry.insert("models".to_string(), JsonValue::Array(models));
@@ -254,7 +224,7 @@ impl AppAdapter for PiAdapter {
         if let Some(level) = plan.default_reasoning_level {
             settings.insert(
                 "defaultThinkingLevel".to_string(),
-                JsonValue::String(thinking_level(level).to_string()),
+                JsonValue::String(PI_AI_REASONING.spell(level).to_string()),
             );
         }
 

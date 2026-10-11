@@ -22,6 +22,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Result, bail};
 use serde_json::{Map as JsonMap, Value as JsonValue};
 
+use super::dialect::OPENCODE_PROTOCOL;
 use super::{
     AppAdapter, AppCapability, ToolEnv, ensure_protocol_supported, external_entry,
     opencode_candidate_paths, read_json_object, read_jsonc_object, registration_key,
@@ -71,46 +72,6 @@ fn effective_file<'a>(
         .rev()
         .find(|(_, root)| root.contains_key(key))
         .map(|(_, root)| root)
-}
-
-// v2 原生运行时包：OpenAI 请求格式的端点走 openai-compatible；Responses
-// 协议走 openai/responses（compatible/responses 有包解析缺陷，见文件头）；
-// Anthropic 协议端点走 anthropic（官方文档的端点代理示例即该包 +
-// settings.baseURL）；anthropic-compatible 面向第三方兼容端点，仅用于反读。
-const PKG_OPENAI_COMPATIBLE: &str = "@opencode/ai/providers/openai-compatible";
-const PKG_OPENAI_RESPONSES: &str = "@opencode/ai/providers/openai/responses";
-const PKG_OPENAI_COMPATIBLE_RESPONSES: &str = "@opencode/ai/providers/openai-compatible/responses";
-const PKG_ANTHROPIC: &str = "@opencode/ai/providers/anthropic";
-const PKG_ANTHROPIC_COMPATIBLE: &str = "@opencode/ai/providers/anthropic-compatible";
-
-// v1 遗留 npm 包名，仅用于反读识别。
-const NPM_OPENAI_COMPATIBLE: &str = "@ai-sdk/openai-compatible";
-const NPM_ANTHROPIC: &str = "@ai-sdk/anthropic";
-
-// apply 时按协议选择 v2 原生运行时包，与反读的 protocol_from_package 互为映射。
-fn runtime_package(protocol: ProviderProtocol) -> &'static str {
-    match protocol {
-        ProviderProtocol::OpenaiChatCompletions => PKG_OPENAI_COMPATIBLE,
-        ProviderProtocol::OpenaiResponses => PKG_OPENAI_RESPONSES,
-        ProviderProtocol::AnthropicMessages => PKG_ANTHROPIC,
-    }
-}
-
-// 反读时从运行时包反推协议；覆盖 v2 原生包名与 v1 遗留 npm 包名，
-// 其余包协议不确定，留空展示。
-fn protocol_from_package(package: Option<&str>) -> Option<ProviderProtocol> {
-    match package? {
-        PKG_OPENAI_COMPATIBLE | NPM_OPENAI_COMPATIBLE => {
-            Some(ProviderProtocol::OpenaiChatCompletions)
-        }
-        PKG_OPENAI_RESPONSES | PKG_OPENAI_COMPATIBLE_RESPONSES => {
-            Some(ProviderProtocol::OpenaiResponses)
-        }
-        PKG_ANTHROPIC | PKG_ANTHROPIC_COMPATIBLE | NPM_ANTHROPIC => {
-            Some(ProviderProtocol::AnthropicMessages)
-        }
-        _ => None,
-    }
 }
 
 // 思考等级：openai 系包写 settings.reasoningEffort，anthropic 包的
@@ -292,6 +253,18 @@ impl AppAdapter for OpencodeAdapter {
         }
     }
 
+    // 档位方言只覆盖 openai 系包的 settings.reasoningEffort 字符串拼写；
+    // anthropic 包的 thinking 是结构化预算阶梯（reasoning_settings），不经
+    // 此表，弹窗的「实际写入值」提示对 anthropic 协议不适用（已知限制，
+    // 见 2026-10-11 方言表决策文档）。
+    fn reasoning_dialect(&self) -> &'static super::dialect::ReasoningDialect {
+        &super::dialect::IDENTITY_REASONING
+    }
+
+    fn protocol_dialect(&self) -> Option<&'static super::dialect::ProtocolDialect> {
+        Some(&OPENCODE_PROTOCOL)
+    }
+
     fn inspect(
         &self,
         env: &ToolEnv,
@@ -373,7 +346,7 @@ impl AppAdapter for OpencodeAdapter {
                             value.get("models").and_then(JsonValue::as_object),
                         )
                     };
-                    let protocol = protocol_from_package(package);
+                    let protocol = package.and_then(|package| OPENCODE_PROTOCOL.parse(package));
                     let mut entry = entry_from_provider_value(
                         key,
                         base_url,
@@ -491,7 +464,7 @@ impl AppAdapter for OpencodeAdapter {
             );
             provider_entry.insert(
                 "package".to_string(),
-                JsonValue::String(runtime_package(provider.protocol).to_string()),
+                JsonValue::String(OPENCODE_PROTOCOL.spell(provider.protocol).to_string()),
             );
             provider_entry.insert("settings".to_string(), JsonValue::Object(settings));
             provider_entry.insert("models".to_string(), JsonValue::Object(models));
