@@ -19,9 +19,11 @@ pub(crate) enum GlobalRoot {
 }
 
 impl GlobalRoot {
-    // 解析为实际根目录：env 重定向优先，HOME 兜底。
+    // 解析为实际根目录：env 重定向优先，HOME 兜底。home 走 user_home_dir
+    // 单一口径，测试的 home 覆盖才能生效（Windows 上 dirs::home_dir 忽略
+    // HOME，直连会让真实家目录漏进测试）。
     pub(crate) fn resolve(self) -> Option<PathBuf> {
-        let home = dirs::home_dir();
+        let home = crate::support::fs::user_home_dir();
         match self {
             GlobalRoot::Home => home,
             GlobalRoot::GrokHome => {

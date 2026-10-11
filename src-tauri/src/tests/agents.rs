@@ -15,14 +15,20 @@ use crate::workspace::default_config_template;
 use crate::workspace::targets::{TargetDefaults, builtin_target_defaults, project_agent_defaults};
 use crate::workspace::types::{AgentTargetId, McpConfigType};
 
+// Windows 上 join 产出 '\'、布局字面量保留 '/',display 拼写随构造方式
+// 而异;快照断言的是「哪些路径」而非拼写,比较前统一分隔符。
+fn display(path: &Path) -> String {
+    path.display().to_string().replace('\\', "/")
+}
+
 fn render_default(item: &TargetDefaults) -> String {
     format!(
         "{}|{}|{}|{}|{:?}",
         item.id.0,
-        item.skill_dir.display(),
+        display(&item.skill_dir),
         item.config_path
             .as_ref()
-            .map(|path| path.display().to_string())
+            .map(|path| display(path))
             .unwrap_or_else(|| "-".to_string()),
         item.config_prefix,
         item.config_type
@@ -317,41 +323,35 @@ fn snapshot_app_config_paths() {
     let cases: Vec<(ProviderAppId, Vec<String>)> = vec![
         (
             ProviderAppId::Codex,
-            vec![home.join(".codex/config.toml").display().to_string()],
+            vec![display(&home.join(".codex/config.toml"))],
         ),
         (
             ProviderAppId::Claude,
-            vec![home.join(".claude/settings.json").display().to_string()],
+            vec![display(&home.join(".claude/settings.json"))],
         ),
         (
             ProviderAppId::Opencode,
             vec![
-                home.join(".config/opencode/opencode.json")
-                    .display()
-                    .to_string(),
-                home.join(".config/opencode/opencode.jsonc")
-                    .display()
-                    .to_string(),
+                display(&home.join(".config/opencode/opencode.json")),
+                display(&home.join(".config/opencode/opencode.jsonc")),
             ],
         ),
         (
             ProviderAppId::Pi,
             vec![
-                home.join(".pi/agent/models.json").display().to_string(),
-                home.join(".pi/agent/settings.json").display().to_string(),
+                display(&home.join(".pi/agent/models.json")),
+                display(&home.join(".pi/agent/settings.json")),
             ],
         ),
         (
             ProviderAppId::Grokbuild,
-            vec![home.join(".grok/config.toml").display().to_string()],
+            vec![display(&home.join(".grok/config.toml"))],
         ),
         (
             ProviderAppId::Dsh,
             vec![
-                home.join(".dsh/profiles/desktop/cordis.patch.yml")
-                    .display()
-                    .to_string(),
-                home.join(".dsh/.credentials.yaml").display().to_string(),
+                display(&home.join(".dsh/profiles/desktop/cordis.patch.yml")),
+                display(&home.join(".dsh/.credentials.yaml")),
             ],
         ),
     ];
@@ -359,7 +359,7 @@ fn snapshot_app_config_paths() {
     for (app, expected) in cases {
         let actual: Vec<String> = app_config_paths(&env, app)
             .iter()
-            .map(|path| path.display().to_string())
+            .map(|path| display(path))
             .collect();
         assert_eq!(actual, expected, "{app:?}");
     }
