@@ -36,6 +36,10 @@ _Avoid_: 索引（易与会话族索引混淆）
 同一逻辑会话的全部转录文件（root、resume 段、子代理线程），列表与时间线以族为单位聚合。
 _Avoid_: 会话组
 
+**孤儿策略（orphan policy）**：
+父链分组的族根上溯在父节点缺失时的处置语义：认领缺失父 id 自成一家（OpenCode/ZCode）、保留最后已知 id 挂靠存活祖先（Codex）；DSH 走 catalog 声明的边集、链断即隐藏，不经共享部件。由 family_index 的 `OrphanPolicy` 显式声明，读取器不得静默统一。
+_Avoid_: 兜底分组
+
 **会话身份（session identity）**：
 跨层寻址一个会话的唯一二元组（来源, source_session_id）；transcript_path 只是展示字段，不参与寻址、缓存键或前端主键。
 _Avoid_: 路径主键、transcript key
