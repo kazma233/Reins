@@ -23,14 +23,14 @@ import { extractErrorMessage } from "@shared/lib/errors";
 import { createRequestGuard } from "@shared/lib/request-guard";
 import { formatTimestamp, formatTokenCount } from "@shared/lib/format";
 import { formatSourceAppName } from "../source-app";
+import { cacheHitRate, formatCacheHitRate } from "../token-usage";
 import SessionDetailDialogs from "./SessionDetailDialogs.vue";
 import MessageTimeline from "./MessageTimeline.vue";
 import EventTimeline from "./EventTimeline.vue";
 import type {
   DeletePlan,
   SessionAgent,
-  SessionOverview,
-  SessionTokenUsage
+  SessionOverview
 } from "../types";
 import SubagentGroupDialog from "./SubagentGroupDialog.vue";
 import "./session-detail.css";
@@ -50,23 +50,6 @@ const emit = defineEmits<{
 // 详情页 token 数用缩写+千分位精确值并列,与列表缩写口径一致。
 function exactTokens(value: number): string {
   return value.toLocaleString("zh-CN");
-}
-
-// 缓存命中率 = 缓存读 / (输入 + 缓存读),与 pi 的 CH、magpie 的 hit rate 同口径。
-// 整数百分比四舍五入会把 99.6% 显示成假 100%,故除精确命中外按一位小数向下取整。
-function cacheHitRate(usage: SessionTokenUsage): string {
-  const prompt = usage.inputTokens + usage.cacheReadTokens;
-  if (prompt === 0) {
-    return "—";
-  }
-
-  const ratio = usage.cacheReadTokens / prompt;
-  if (ratio === 1) {
-    return "100%";
-  }
-
-  const percent = Math.floor(ratio * 1000) / 10;
-  return Number.isInteger(percent) ? `${percent}%` : `${percent.toFixed(1)}%`;
 }
 
 // The scroll container ref is provided by SessionWorkspace so we can attach
@@ -474,7 +457,7 @@ watch(
         <div v-if="overview.summary.tokenUsage" class="summary-grid__wide">
           <dt>Token 消耗</dt>
           <dd class="token-usage-detail">
-            <span>命中率 {{ cacheHitRate(overview.summary.tokenUsage) }}</span>
+            <span>命中率 {{ formatCacheHitRate(cacheHitRate(overview.summary.tokenUsage)) }}</span>
             <span>
               输入
               {{ formatTokenCount(overview.summary.tokenUsage.inputTokens) }}

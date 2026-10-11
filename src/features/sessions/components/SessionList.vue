@@ -3,6 +3,7 @@ import { computed, nextTick, onMounted, ref, watch } from "vue";
 import { joinClasses } from "@shared/lib/join-classes";
 import { formatTimestamp, formatTokenCount } from "@shared/lib/format";
 import { sessionIdentityKey } from "../stores/session";
+import { totalConsumedTokens } from "../token-usage";
 import type { SessionSummary } from "../types";
 import "./session-list.css";
 
@@ -96,17 +97,6 @@ onMounted(() => {
     emit("loadMore");
   }
 });
-
-// 列表只展示消耗总量：四项之和是会话经过模型的全部 token，
-// 分项明细留在详情页。
-function totalConsumedTokens(usage: NonNullable<SessionSummary["tokenUsage"]>): number {
-  return (
-    usage.inputTokens +
-    usage.outputTokens +
-    usage.cacheReadTokens +
-    usage.cacheWriteTokens
-  );
-}
 
 function handleScroll(event: Event) {
   if (

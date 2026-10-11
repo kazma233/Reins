@@ -15,11 +15,11 @@ import {
   sourceColor,
   sourceSeries,
   todaySources,
-  totalTokens,
   windowSourceSummaries,
   windowSources,
   type UsageWindowDays
 } from "./model";
+import { totalConsumedTokens } from "../sessions/token-usage";
 import "./styles.css";
 
 const {
@@ -63,7 +63,7 @@ const summaries = computed(() =>
 // 窗口内是否有任何来源产生过消耗:决定空态文案与曲线是否绘制。
 const hasWindowUsage = computed(() =>
   normalizedSources.value.some((source) =>
-    source.points.some((point) => totalTokens(point.usage) > 0)
+    source.points.some((point) => totalConsumedTokens(point.usage) > 0)
   )
 );
 
@@ -71,7 +71,7 @@ const chartSeries = computed(() =>
   normalizedSources.value
     // 窗口内无消耗的来源不画曲线:全 0 线没有信息量,tooltip 还会冒出 0 行;
     // 手动隐藏独立生效,切回有消耗的窗口时来源自动恢复
-    .filter((source) => source.points.some((point) => totalTokens(point.usage) > 0))
+    .filter((source) => source.points.some((point) => totalConsumedTokens(point.usage) > 0))
     .filter((source) => !hiddenSources.value.includes(source.sourceApp))
     .map((source) => ({
       sourceApp: source.sourceApp,

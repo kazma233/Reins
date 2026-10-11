@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { formatTokenCount } from "@shared/lib/format";
-import { formatCacheHitRate, type UsageMetrics } from "../model";
+import { formatCacheHitRate } from "../../sessions/token-usage";
+import { type UsageMetrics } from "../model";
 import "./usage-metrics-row.css";
 
 type UsageMetricsRowProps = {

@@ -4,7 +4,6 @@ import {
   buildDayAxis,
   buildHourAxis,
   computeMetrics,
-  formatCacheHitRate,
   niceCeil,
   shiftDay,
   sourceSeries,
@@ -207,14 +206,6 @@ describe("computeMetrics", () => {
     expect(metrics.peak).toBeNull();
     expect(metrics.cacheHitRate).toBeNull();
     expect(metrics.totalTokens).toBe(0);
-  });
-});
-
-describe("formatCacheHitRate", () => {
-  it("99.6% 不因四舍五入显示成假 100%", () => {
-    expect(formatCacheHitRate(0.996)).toBe("99.6%");
-    expect(formatCacheHitRate(1)).toBe("100%");
-    expect(formatCacheHitRate(null)).toBe("—");
   });
 });
 

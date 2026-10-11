@@ -1,3 +1,4 @@
+import { totalConsumedTokens } from "../sessions/token-usage";
 import type {
   SessionTokenUsage,
   SourceApp,
@@ -32,16 +33,7 @@ export function isUsageWindowDays(value: number): value is UsageWindowDays {
   return USAGE_WINDOWS.some((option) => option.days === value);
 }
 
-// 总消耗 = 四项之和:经过模型的全部 token,与会话列表的 chip 同口径。
-export function totalTokens(usage: SessionTokenUsage): number {
-  return (
-    usage.inputTokens +
-    usage.outputTokens +
-    usage.cacheReadTokens +
-    usage.cacheWriteTokens
-  );
-}
-
+// 总消耗口径见 sessions/token-usage.ts(与会话列表、详情共用同一份)。
 export function sourceColor(sourceApp: SourceApp): string {
   return SOURCE_COLORS[sourceApp] ?? "#64748b";
 }
@@ -128,7 +120,9 @@ export function localTodayDay(): string {
 }
 
 export function sourceSeries(points: UsageBucketPoint[], axis: string[]): number[] {
-  const byBucket = new Map(points.map((point) => [point.bucket, totalTokens(point.usage)]));
+  const byBucket = new Map(
+    points.map((point) => [point.bucket, totalConsumedTokens(point.usage)])
+  );
   return axis.map((bucket) => byBucket.get(bucket) ?? 0);
 }
 
@@ -149,7 +143,7 @@ export function windowSourceSummaries(
   const summaries = sources.map((source) => {
     const tokens = source.points
       .filter((point) => inAxis.has(point.bucket))
-      .reduce((sum, point) => sum + totalTokens(point.usage), 0);
+      .reduce((sum, point) => sum + totalConsumedTokens(point.usage), 0);
     return {
       sourceApp: source.sourceApp,
       color: sourceColor(source.sourceApp),
@@ -208,7 +202,7 @@ export function computeMetrics(
     for (const point of source.points) {
       bucketTotals.set(
         point.bucket,
-        (bucketTotals.get(point.bucket) ?? 0) + totalTokens(point.usage)
+        (bucketTotals.get(point.bucket) ?? 0) + totalConsumedTokens(point.usage)
       );
     }
   }
@@ -223,7 +217,12 @@ export function computeMetrics(
     peak = null;
   }
 
-  const total = input + output + cacheRead + cacheWrite;
+  const total = totalConsumedTokens({
+    inputTokens: input,
+    outputTokens: output,
+    cacheReadTokens: cacheRead,
+    cacheWriteTokens: cacheWrite,
+  });
   const prompt = input + cacheRead;
 
   return {
@@ -239,18 +238,7 @@ export function computeMetrics(
   };
 }
 
-// 与会话详情页同口径:整数百分比四舍五入会把 99.6% 显示成假 100%,
-// 除精确命中外按一位小数向下取整。
-export function formatCacheHitRate(rate: number | null): string {
-  if (rate === null) {
-    return "—";
-  }
-  if (rate === 1) {
-    return "100%";
-  }
-  const percent = Math.floor(rate * 1000) / 10;
-  return Number.isInteger(percent) ? `${percent}%` : `${percent.toFixed(1)}%`;
-}
+// 命中率格式化口径见 sessions/token-usage.ts(与会话详情共用同一份)。
 
 // y 轴量程:向上取整到 1/2/5 × 10^n 的"好读"上限,网格线落在整数刻度上。
 export function niceCeil(value: number): number {
