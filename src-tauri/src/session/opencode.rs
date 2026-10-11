@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Arc;
@@ -7,14 +7,17 @@ use anyhow::{Context, Result, bail};
 use rusqlite::{Connection, params_from_iter};
 use serde_json::{Value, json};
 
-use super::family_index::{Family, FamilyRow};
+use super::family_index::{
+    Family, FamilyRow, OrphanPolicy, ParentChainRow, group_families_by_parent_chain, member_root,
+};
 use super::family_timeline::FamilyAgentLabel;
 use super::reader_engine::{
     FamilyReader, FamilySpec, Freshness, MarkerShape, MemberTimeline, OverviewCounts, SummaryKind,
 };
+use super::tool_blocks::{self, ToolShape};
 use super::{
     ContentBlock, DeletePlanAction, SessionEvent, SessionMessage, SessionOverview, SessionSummary,
-    SessionTokenUsage, SourceApp, UsageHourBuckets, usage_stats::SqlUsageHours,
+    SessionTokenUsage, SourceApp, usage_stats::SqlUsageHours,
 };
 
 #[derive(Clone, Debug)]
@@ -33,6 +36,16 @@ pub(crate) struct OpenCodeSessionRow {
 }
 
 type OpenCodeSessionFamily = Family<OpenCodeSessionRow>;
+
+impl ParentChainRow for OpenCodeSessionRow {
+    fn chain_id(&self) -> &str {
+        &self.id
+    }
+
+    fn parent_id(&self) -> Option<&str> {
+        self.parent_id.as_deref()
+    }
+}
 
 impl FamilyRow for OpenCodeSessionRow {
     fn member_path(&self) -> std::borrow::Cow<'_, Path> {
@@ -95,7 +108,12 @@ impl FamilySpec for OpenCodeSpec {
     }
 
     fn group_families(&self, rows: Vec<OpenCodeSessionRow>) -> Result<Vec<OpenCodeSessionFamily>> {
-        Ok(build_session_families(rows))
+        // 孤儿策略与 zcode 同源:认领缺失父 id,root 回退首成员。
+        Ok(group_families_by_parent_chain(
+            rows,
+            OrphanPolicy::ClaimMissingParent,
+            member_root,
+        ))
     }
 
     // 索引失效只看 db 文件 mtime:全部行都从它 join 出来,行内时间不参与。
@@ -400,14 +418,15 @@ fn list_session_rows(scan_root: &Path) -> Result<Vec<OpenCodeSessionRow>> {
 
 // assistant 消息的 data.tokens 是每次调用的增量,按会话求和;reasoning 与
 // output 在 OpenCode 里分列存储,输出侧相加才与其他来源口径一致。SQLite 的
-// NULL 会传染加法,reasoning 缺失的行经 COALESCE 按 0 计。
+// NULL 会传染加法,reasoning 缺失的行经 COALESCE 按 0 计;拆合与钳制由
+// normalized_usage 的归一口径统一处理。
 fn session_token_usages(connection: &Connection) -> Result<HashMap<String, SessionTokenUsage>> {
     let mut statement = connection
         .prepare(
             "SELECT session_id,
                     COALESCE(SUM(json_extract(data, '$.tokens.input')), 0),
-                    COALESCE(SUM(json_extract(data, '$.tokens.output')), 0)
-                        + COALESCE(SUM(json_extract(data, '$.tokens.reasoning')), 0),
+                    COALESCE(SUM(json_extract(data, '$.tokens.output')), 0),
+                    COALESCE(SUM(json_extract(data, '$.tokens.reasoning')), 0),
                     COALESCE(SUM(json_extract(data, '$.tokens.cache.read')), 0),
                     COALESCE(SUM(json_extract(data, '$.tokens.cache.write')), 0)
              FROM session_message
@@ -419,18 +438,18 @@ fn session_token_usages(connection: &Connection) -> Result<HashMap<String, Sessi
     let rows = statement
         .query_map([], |row| {
             let session_id: String = row.get(0)?;
-            // SUM 对无匹配行为返回 NULL,按 0 处理;负值理论上不出现,钳到 0。
-            let usage_column = |index: usize| -> rusqlite::Result<u64> {
-                Ok(row.get::<_, Option<i64>>(index)?.unwrap_or_default().max(0) as u64)
+            let column = |index: usize| -> rusqlite::Result<i64> {
+                Ok(row.get::<_, Option<i64>>(index)?.unwrap_or_default())
             };
             Ok((
                 session_id,
-                SessionTokenUsage {
-                    input_tokens: usage_column(1)?,
-                    output_tokens: usage_column(2)?,
-                    cache_read_tokens: usage_column(3)?,
-                    cache_write_tokens: usage_column(4)?,
-                },
+                super::usage_stats::split_reasoning_usage(super::usage_stats::UsageColumns {
+                    input: column(1)?,
+                    output: column(2)?,
+                    reasoning: column(3)?,
+                    cache_read: column(4)?,
+                    cache_write: column(5)?,
+                }),
             ))
         })
         .context("Failed to read OpenCode token usages")?;
@@ -440,7 +459,7 @@ fn session_token_usages(connection: &Connection) -> Result<HashMap<String, Sessi
 }
 
 // 用量曲线的小时桶:assistant 消息的增量 usage 按消息时间归小时,归一口径与
-// session_token_usages 一致(output 并入 reasoning);消息时间优先
+// session_token_usages 一致(normalized_usage 单点);消息时间优先
 // data.time.created,回退 time_created 列,与消息时间线一致。db 缺失、或
 // session_message 表还没建,都表示来源不可用,返回 None。
 pub(crate) fn usage_hours() -> Result<Option<SqlUsageHours>> {
@@ -461,8 +480,8 @@ pub(crate) fn usage_hours() -> Result<Option<SqlUsageHours>> {
             "SELECT session_id,
                     COALESCE(json_extract(data, '$.time.created'), time_created),
                     COALESCE(json_extract(data, '$.tokens.input'), 0),
-                    COALESCE(json_extract(data, '$.tokens.output'), 0)
-                        + COALESCE(json_extract(data, '$.tokens.reasoning'), 0),
+                    COALESCE(json_extract(data, '$.tokens.output'), 0),
+                    COALESCE(json_extract(data, '$.tokens.reasoning'), 0),
                     COALESCE(json_extract(data, '$.tokens.cache.read'), 0),
                     COALESCE(json_extract(data, '$.tokens.cache.write'), 0)
              FROM session_message
@@ -473,98 +492,26 @@ pub(crate) fn usage_hours() -> Result<Option<SqlUsageHours>> {
     let rows = statement
         .query_map([], |row| {
             let timestamp: i64 = row.get(1)?;
-            let usage_column = |index: usize| -> rusqlite::Result<u64> {
-                Ok(row.get::<_, Option<i64>>(index)?.unwrap_or_default().max(0) as u64)
+            let column = |index: usize| -> rusqlite::Result<i64> {
+                Ok(row.get::<_, Option<i64>>(index)?.unwrap_or_default())
             };
             Ok((
                 row.get::<_, String>(0)?,
                 timestamp,
-                SessionTokenUsage {
-                    input_tokens: usage_column(2)?,
-                    output_tokens: usage_column(3)?,
-                    cache_read_tokens: usage_column(4)?,
-                    cache_write_tokens: usage_column(5)?,
-                },
+                super::usage_stats::split_reasoning_usage(super::usage_stats::UsageColumns {
+                    input: column(2)?,
+                    output: column(3)?,
+                    reasoning: column(4)?,
+                    cache_read: column(5)?,
+                    cache_write: column(6)?,
+                }),
             ))
         })
         .context("Failed to read OpenCode usage hours")?;
 
-    let today = super::usage_stats::today_prefix();
-    let mut buckets = UsageHourBuckets::new();
-    let mut sessions = std::collections::HashSet::new();
-    let mut today_sessions = std::collections::HashSet::new();
-
-    for row in rows {
-        let (session_id, timestamp, usage) = row?;
-        let hour_key = super::hour_key(timestamp);
-        if let Some(key) = &hour_key {
-            if super::usage_stats::today_hour(key, &today).is_some() {
-                today_sessions.insert(session_id.clone());
-            }
-        }
-        sessions.insert(session_id);
-        super::merge_usage_bucket(&mut buckets, hour_key, usage);
-    }
-
-    Ok(Some(SqlUsageHours {
-        buckets,
-        session_count: sessions.len(),
-        today_session_count: today_sessions.len(),
-    }))
-}
-
-// Member/family ordering and the path map live in the shared engine; this
-// only groups rows along the SQL parent_id chain and picks each family root.
-fn build_session_families(rows: Vec<OpenCodeSessionRow>) -> Vec<OpenCodeSessionFamily> {
-    let by_id = rows
-        .iter()
-        .cloned()
-        .map(|row| (row.id.clone(), row))
-        .collect::<HashMap<_, _>>();
-    let mut grouped = HashMap::<String, Vec<OpenCodeSessionRow>>::new();
-
-    for row in rows {
-        let family_root_id = root_session_id(&row, &by_id);
-        grouped.entry(family_root_id).or_default().push(row);
-    }
-
-    grouped
-        .into_iter()
-        .filter_map(|(root_id, members)| {
-            let root = members
-                .iter()
-                .find(|row| row.id == root_id)
-                .cloned()
-                .or_else(|| members.first().cloned())?;
-
-            Some(OpenCodeSessionFamily { root, members })
-        })
-        .collect()
-}
-
-fn root_session_id(
-    row: &OpenCodeSessionRow,
-    by_id: &HashMap<String, OpenCodeSessionRow>,
-) -> String {
-    let mut current_id = row.id.clone();
-    let mut parent_id = row.parent_id.clone();
-    let mut visited = HashSet::from([current_id.clone()]);
-
-    while let Some(next_parent_id) = parent_id {
-        if !visited.insert(next_parent_id.clone()) {
-            break;
-        }
-
-        let Some(parent) = by_id.get(&next_parent_id) else {
-            current_id = next_parent_id;
-            break;
-        };
-
-        current_id = parent.id.clone();
-        parent_id = parent.parent_id.clone();
-    }
-
-    current_id
+    let hours = super::usage_stats::hours_from_usage_rows(rows)
+        .context("Failed to read OpenCode usage hours")?;
+    Ok(Some(hours))
 }
 
 fn count_family_records(scan_root: &Path, member_ids: &[&str]) -> Result<(usize, usize)> {
@@ -705,7 +652,7 @@ fn assistant_message_blocks(value: &Value) -> Vec<ContentBlock> {
         let kind = super::json_string(item, &["type"]).unwrap_or_else(|| "unknown".to_string());
 
         if kind == "tool" {
-            let tool_blocks = tool_blocks(item);
+            let tool_blocks = tool_blocks::tool_blocks(item, &TOOL_SHAPE);
             if tool_blocks.is_empty() {
                 blocks.push(super::empty_tool_block("OpenCode", item));
             } else {
@@ -777,94 +724,11 @@ fn v2_event_summary(kind: &str, value: &Value) -> String {
 
 // v2 tool 块：{type,id,name,state:{status,input,content,metadata},time}。
 // id 就是调用 id（call_xxx，v1 叫 callID）；输出在 state.content 块数组里
-//（v1 是 state.output 字符串）。输入/输出拆成两条 UI 块，与前端已有的
-// function_call/function_call_output 分组契约保持一致。
-fn tool_blocks(value: &Value) -> Vec<ContentBlock> {
-    let tool_name = super::json_string(value, &["name"]);
-    let tool_call_id = super::json_string(value, &["id"]);
-    let state = value.get("state");
-    let input = state.and_then(|state| state.get("input"));
-    let output_text = state
-        .and_then(|state| state.get("content"))
-        .and_then(tool_content_text);
-    let is_error = state
-        .and_then(|state| state.get("status"))
-        .and_then(Value::as_str)
-        == Some("error");
-    let mut blocks = Vec::new();
-
-    if input.is_some_and(|item| !item.is_null()) {
-        let mut payload = value.clone();
-        // 输出内容不重复放进输入块，避免 payload 成倍变大
-        if let Some(state) = payload.get_mut("state").and_then(Value::as_object_mut) {
-            state.remove("content");
-        }
-        if let Some(input) = input {
-            if let Some(object) = payload.as_object_mut() {
-                object.insert("input".to_string(), input.clone());
-            }
-        }
-
-        blocks.push(ContentBlock {
-            kind: "function_call".to_string(),
-            text: tool_input_text(input),
-            tool_name: tool_name.clone(),
-            tool_call_id: tool_call_id.clone(),
-            is_error: None,
-            payload: Some(payload),
-        });
-    }
-
-    if let Some(output_text) = output_text {
-        let mut payload = value.clone();
-        // 输出文本提到顶层，前端 resultOutputText 直接读 payload.output
-        if let Some(object) = payload.as_object_mut() {
-            object.insert("output".to_string(), Value::String(output_text.clone()));
-            if let Some(input) = input {
-                object.insert("input".to_string(), input.clone());
-            }
-        }
-
-        blocks.push(ContentBlock {
-            kind: "function_call_output".to_string(),
-            text: Some(output_text),
-            tool_name,
-            tool_call_id,
-            is_error: is_error.then_some(true),
-            payload: Some(payload),
-        });
-    }
-
-    blocks
-}
-
-// v2 tool 输出是 state.content 块数组（通常为 {type:"text",text}），
-// 提取其中文本拼接；数组为空返回 None（running 中的工具）。
-fn tool_content_text(content: &Value) -> Option<String> {
-    let items = content.as_array()?;
-    let texts = items
-        .iter()
-        .filter_map(|item| super::json_string(item, &["text"]))
-        .collect::<Vec<_>>();
-
-    if texts.is_empty() {
-        // 非文本输出块降级为 JSON 展示
-        return (!items.is_empty())
-            .then(|| super::stringify_json(content))
-            .flatten();
-    }
-
-    Some(texts.join("\n"))
-}
-
-fn tool_input_text(input: Option<&Value>) -> Option<String> {
-    let Some(input) = input else {
-        return None;
-    };
-
-    if let Some(text) = input.as_str() {
-        return Some(text.to_string());
-    }
-
-    super::stringify_json(input)
-}
+//（v1 是 state.output 字符串）。装配体在 tool_blocks 模块,这里只声明
+// 字段差异。
+const TOOL_SHAPE: ToolShape = ToolShape {
+    tool_name_key: "name",
+    call_id_key: "id",
+    output_key: "content",
+    extract_output: tool_blocks::content_blocks_output,
+};

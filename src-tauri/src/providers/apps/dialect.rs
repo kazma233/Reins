@@ -12,7 +12,8 @@ pub(crate) struct ReasoningDialect {
     // expect 大声失败。
     pub(crate) spells: &'static [(ReasoningLevel, &'static str)],
     // 写入折叠声明：档位在该工具里折叠成另一档的拼写写入（grok 的
-    // max→xhigh），反向不闭合；roundtrip 测试按此豁免。
+    // max→xhigh），反向不闭合；roundtrip 测试按此豁免（因此仅测试读取）。
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) lossy: &'static [(ReasoningLevel, ReasoningLevel)],
 }
 

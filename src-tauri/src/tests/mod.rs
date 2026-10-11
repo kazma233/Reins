@@ -18,6 +18,7 @@ use crate::test_support::TestEnvGuard;
 
 mod agents;
 mod dsh;
+mod family_chain;
 mod grokbuild;
 mod pi;
 mod session_cache;
@@ -30,6 +31,7 @@ mod session_readers;
 mod session_sources;
 mod session_token_usage;
 mod session_usage_stats;
+mod tool_blocks;
 mod workspace_skills;
 mod zcode;
 

@@ -664,3 +664,45 @@ fn usage_stats_inner_reports_today_hours_and_today_sessions() -> Result<()> {
 
     Ok(())
 }
+
+// 口径单点:output 并入 reasoning、负值钳 0;输入列语义按来源分两个入口
+// (zcode 全口径要拆缓存读,opencode 已是不含命中的口径)。
+#[test]
+fn full_scope_usage_splits_cache_read_and_merges_reasoning() {
+    let usage = session::usage_stats::full_scope_usage(session::usage_stats::UsageColumns {
+        input: 1100,
+        output: 100,
+        reasoning: 50,
+        cache_read: 300,
+        cache_write: 20,
+    });
+    assert_eq!(usage.input_tokens, 800);
+    assert_eq!(usage.output_tokens, 150);
+    assert_eq!(usage.cache_read_tokens, 300);
+    assert_eq!(usage.cache_write_tokens, 20);
+
+    // 缓存读大于 input 时钳 0,不出现负数。
+    let clamped = session::usage_stats::full_scope_usage(session::usage_stats::UsageColumns {
+        input: 100,
+        output: 0,
+        reasoning: 0,
+        cache_read: 300,
+        cache_write: 0,
+    });
+    assert_eq!(clamped.input_tokens, 0);
+}
+
+#[test]
+fn split_reasoning_usage_keeps_input_as_is() {
+    let usage = session::usage_stats::split_reasoning_usage(session::usage_stats::UsageColumns {
+        input: 1200,
+        output: 100,
+        reasoning: 50,
+        cache_read: 500,
+        cache_write: 20,
+    });
+    // input 已不含缓存读,不重复拆。
+    assert_eq!(usage.input_tokens, 1200);
+    assert_eq!(usage.output_tokens, 150);
+    assert_eq!(usage.cache_read_tokens, 500);
+}

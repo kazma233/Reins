@@ -1,14 +1,16 @@
 //! Shared family-index engine for the session backends.
 //!
-//! Backends enumerate their own rows and group them into families — the
-//! grouping strategies genuinely differ per source app (Claude groups by the
-//! shared transcript sessionId, Codex walks the parent-thread chain, OpenCode
-//! joins on SQL parent_id), so grouping stays out. Everything downstream of
-//! grouping lives here exactly once: member and family ordering, and the
-//! id-keyed family lookup that backs session addressing for every source.
+//! Backends enumerate their own rows and group them into families. Grouping
+//! stays per-source where the row shapes genuinely differ (Claude groups by
+//! the shared transcript sessionId; dsh walks catalog-declared owner edges),
+//! while the SQL parent_id chain (OpenCode, ZCode, Codex) shares the chain
+//! walk and grouping skeleton below — sources only declare their orphan
+//! policy and root pick. Everything downstream of grouping lives here
+//! exactly once: member and family ordering, and the id-keyed family lookup
+//! that backs session addressing for every source.
 
 use std::borrow::Cow;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 /// Row contract the engine needs from a backend.
@@ -68,6 +70,97 @@ impl<Row: FamilyRow> Family<Row> {
     }
 }
 
+// ---------------------------------------------------------------------------
+// SQL 来源的父链分组(行内 parent_id 列形态:opencode / zcode / codex)
+// ---------------------------------------------------------------------------
+
+/// 分组输入的父链契约:行自身 id 与可选父 id,链上溯的最低要求。
+pub(crate) trait ParentChainRow {
+    fn chain_id(&self) -> &str;
+
+    fn parent_id(&self) -> Option<&str>;
+}
+
+/// 父链上溯时父节点缺失的处置,各来源的孤儿归属语义:
+#[derive(Clone, Copy)]
+pub(crate) enum OrphanPolicy {
+    /// 认领缺失的父 id 作为族根 id(opencode/zcode):孤儿成员自成一家,
+    /// 族内没有该 id 的行,root 挑选回退首成员。
+    ClaimMissingParent,
+    /// 保留链上最后已知 id(codex):孤儿挂靠最近的存活祖先。
+    KeepLastKnown,
+}
+
+/// 沿 parent 链上溯族根 id;环检测统一,成环按到达者收束。
+pub(crate) fn root_id_by_parent_chain<R: ParentChainRow>(
+    row: &R,
+    by_id: &HashMap<String, R>,
+    orphan: OrphanPolicy,
+) -> String {
+    let mut current_id = row.chain_id().to_string();
+    let mut parent_id = row.parent_id().map(str::to_string);
+    let mut visited = HashSet::from([current_id.clone()]);
+
+    while let Some(next_parent_id) = parent_id {
+        if !visited.insert(next_parent_id.clone()) {
+            break;
+        }
+
+        let Some(parent) = by_id.get(&next_parent_id) else {
+            if matches!(orphan, OrphanPolicy::ClaimMissingParent) {
+                current_id = next_parent_id;
+            }
+            break;
+        };
+
+        current_id = parent.chain_id().to_string();
+        parent_id = parent.parent_id().map(str::to_string);
+    }
+
+    current_id
+}
+
+/// 按 root id 分组的公共骨架;root 在成员中的挑选由来源声明
+/// (opencode/zcode 用 member_root,codex 自带续跑段年龄的确定性挑选)。
+pub(crate) fn group_families_by_parent_chain<R>(
+    rows: Vec<R>,
+    orphan: OrphanPolicy,
+    pick_root: fn(&str, &[R]) -> Option<R>,
+) -> Vec<Family<R>>
+where
+    R: ParentChainRow + Clone,
+{
+    let by_id = rows
+        .iter()
+        .cloned()
+        .map(|row| (row.chain_id().to_string(), row))
+        .collect::<HashMap<_, _>>();
+    let mut grouped = HashMap::<String, Vec<R>>::new();
+
+    for row in rows {
+        let family_root_id = root_id_by_parent_chain(&row, &by_id, orphan);
+        grouped.entry(family_root_id).or_default().push(row);
+    }
+
+    grouped
+        .into_iter()
+        .filter_map(|(root_id, members)| {
+            let root = pick_root(&root_id, &members)?;
+            Some(Family { root, members })
+        })
+        .collect()
+}
+
+/// opencode/zcode 的 root 挑选:优先族根 id 自身的行,缺失(孤儿认领了
+/// 不存在的父 id)时回退首成员。
+pub(crate) fn member_root<R: ParentChainRow + Clone>(root_id: &str, members: &[R]) -> Option<R> {
+    members
+        .iter()
+        .find(|row| row.chain_id() == root_id)
+        .cloned()
+        .or_else(|| members.first().cloned())
+}
+
 #[derive(Clone)]
 pub(crate) struct FamilyIndex<Row> {
     pub(crate) families: Vec<Family<Row>>,
@@ -76,7 +169,6 @@ pub(crate) struct FamilyIndex<Row> {
     /// 逐字一致,由 family_index 前置核验测试钉住。
     sessions_by_id: HashMap<String, usize>,
 }
-
 impl<Row: FamilyRow + Clone> FamilyIndex<Row> {
     pub(crate) fn build(families: Vec<Family<Row>>) -> Self {
         let mut families = families;

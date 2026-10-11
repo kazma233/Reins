@@ -2,8 +2,8 @@
 // 三者同源的前提是正反互逆。收编前 dsh 因缺一份覆写把 off 档的映射文案
 // 下发成 "none"（实际写 "off"），这里按适配器遍历堵住同类脱钩。
 
+use crate::providers::apps::adapter_for;
 use crate::providers::apps::dialect::PI_AI_REASONING;
-use crate::providers::apps::{AppAdapter, adapter_for};
 use crate::providers::types::{ProviderAppId, ProviderProtocol, ReasoningLevel};
 
 const APPS: [ProviderAppId; 6] = [

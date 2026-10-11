@@ -19,6 +19,7 @@ pub(crate) mod pi;
 pub(crate) mod reader_engine;
 pub(crate) mod sources;
 pub(crate) mod summary_cache;
+pub(crate) mod tool_blocks;
 pub(crate) mod usage_day_cache;
 pub(crate) mod usage_stats;
 pub(crate) mod zcode;

@@ -170,6 +170,66 @@ pub(crate) struct SqlUsageHours {
     pub(crate) today_session_count: usize,
 }
 
+// SQL 来源行级用量的原始列:各来源 SQL 只产原始列,口径统一在这里,
+// 改口径(如将来加 token 桶)只改这一处。输入列的语义因来源而异:zcode 的
+// input_tokens 是全口径(未命中 + 缓存读),opencode 的 tokens.input 已
+// 不含缓存读,因此入口分两个函数显式声明。
+pub(crate) struct UsageColumns {
+    pub(crate) input: i64,
+    pub(crate) output: i64,
+    pub(crate) reasoning: i64,
+    pub(crate) cache_read: i64,
+    pub(crate) cache_write: i64,
+}
+
+// opencode 形态:输入列已不含缓存读,只并 output + reasoning,负值钳 0。
+pub(crate) fn split_reasoning_usage(columns: UsageColumns) -> SessionTokenUsage {
+    SessionTokenUsage {
+        input_tokens: columns.input.max(0) as u64,
+        output_tokens: (columns.output + columns.reasoning).max(0) as u64,
+        cache_read_tokens: columns.cache_read.max(0) as u64,
+        cache_write_tokens: columns.cache_write.max(0) as u64,
+    }
+}
+
+// zcode 形态:输入列是全口径、含缓存读,先拆掉缓存读再走同一口径,对齐
+// SessionTokenUsage 的 input 不含命中。
+pub(crate) fn full_scope_usage(columns: UsageColumns) -> SessionTokenUsage {
+    split_reasoning_usage(UsageColumns {
+        input: columns.input - columns.cache_read,
+        ..columns
+    })
+}
+
+// SQL 来源行级用量归小时桶的公共尾部:两级会话数与桶合并。行由来源 SQL
+// 装配为 (session_id, 毫秒时间戳, 归一后用量)。
+pub(crate) fn hours_from_usage_rows(
+    rows: impl Iterator<Item = rusqlite::Result<(String, i64, SessionTokenUsage)>>,
+) -> Result<SqlUsageHours> {
+    let today = today_prefix();
+    let mut buckets = UsageHourBuckets::new();
+    let mut sessions = std::collections::HashSet::new();
+    let mut today_sessions = std::collections::HashSet::new();
+
+    for row in rows {
+        let (session_id, timestamp, usage) = row?;
+        let hour_key = hour_key(timestamp);
+        if let Some(key) = &hour_key {
+            if today_hour(key, &today).is_some() {
+                today_sessions.insert(session_id.clone());
+            }
+        }
+        sessions.insert(session_id);
+        merge_usage_bucket(&mut buckets, hour_key, usage);
+    }
+
+    Ok(SqlUsageHours {
+        buckets,
+        session_count: sessions.len(),
+        today_session_count: today_sessions.len(),
+    })
+}
+
 pub(crate) fn days_from_sql(
     source_app: SourceApp,
     collect: fn() -> Result<Option<SqlUsageHours>>,

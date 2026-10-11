@@ -134,7 +134,9 @@ pub(crate) trait AppAdapter: Sync {
     fn reasoning_dialect(&self) -> &'static ReasoningDialect;
 
     // 本工具的协议方言；配置文件里没有协议字段、语义固定的工具（Claude）
-    // 返回 None。
+    // 返回 None。roundtrip 测试经适配器遍历取用；生产路径直接引用各方言
+    // 常量。
+    #[cfg_attr(not(test), allow(dead_code))]
     fn protocol_dialect(&self) -> Option<&'static ProtocolDialect>;
 
     // 反读工具配置；providers.yaml 解析结果用于把 reins- 条目归类为

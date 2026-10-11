@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
@@ -9,7 +9,9 @@ use anyhow::{Context, Result, bail};
 use rusqlite::Connection;
 use serde_json::{Value, json};
 
-use super::family_index::{Family, FamilyRow};
+use super::family_index::{
+    Family, FamilyRow, OrphanPolicy, ParentChainRow, group_families_by_parent_chain,
+};
 use super::family_timeline::FamilyAgentLabel;
 use super::reader_engine::{
     FamilyReader, FamilySpec, MarkerShape, MemberTimeline, OverviewCounts, ReaderEngine,
@@ -35,6 +37,16 @@ pub(crate) struct CodexSessionRow {
 }
 
 type CodexSessionFamily = Family<CodexSessionRow>;
+
+impl ParentChainRow for CodexSessionRow {
+    fn chain_id(&self) -> &str {
+        &self.summary.source_session_id
+    }
+
+    fn parent_id(&self) -> Option<&str> {
+        self.parent_session_id.as_deref()
+    }
+}
 
 impl FamilyRow for CodexSessionRow {
     fn member_path(&self) -> std::borrow::Cow<'_, Path> {
@@ -91,7 +103,13 @@ impl FamilySpec for CodexSpec {
     }
 
     fn group_families(&self, rows: Vec<CodexSessionRow>) -> Result<Vec<CodexSessionFamily>> {
-        Ok(build_family_index(rows))
+        // 孤儿策略:父链中断时保留最后已知 id,孤儿挂靠最近的存活祖先
+        //(与 opencode/zcode 认领缺失 id 的语义不同,见 family_index)。
+        Ok(group_families_by_parent_chain(
+            rows,
+            OrphanPolicy::KeepLastKnown,
+            segment_age_root,
+        ))
     }
 
     fn parse_full_summary(&self, path: &Path) -> Result<SessionSummary> {
@@ -474,71 +492,29 @@ pub(crate) fn usage_hours(path: &Path) -> Result<UsageHourBuckets> {
     Ok(buckets)
 }
 
-// Member/family ordering and the id/path maps live in the shared engine; this
-// only groups rows along the parent-thread chain and picks each family root.
-fn build_family_index(rows: Vec<CodexSessionRow>) -> Vec<CodexSessionFamily> {
-    let by_id = rows
+// codex 的 root 挑选:同一 session id 可能有多个 rollout 文件（resume
+// 续跑段），members 此时还是文件枚举顺序，不能直接 find/first：root
+// 选取必须是输入顺序无关的，否则标题/路径随枚举序漂移。优先选原始段
+// （无 history_base），其余按 created_at、路径取最小保证确定。
+fn segment_age_root(root_id: &str, members: &[CodexSessionRow]) -> Option<CodexSessionRow> {
+    let by_segment_age = |row: &CodexSessionRow| {
+        (
+            row.is_resume_segment,
+            row.summary.created_at.unwrap_or(i64::MAX),
+            row.path.display().to_string(),
+        )
+    };
+    members
         .iter()
+        .filter(|row| row.summary.source_session_id == root_id)
+        .min_by_key(|row| by_segment_age(row))
         .cloned()
-        .map(|row| (row.summary.source_session_id.clone(), row))
-        .collect::<HashMap<_, _>>();
-    let mut grouped = HashMap::<String, Vec<CodexSessionRow>>::new();
-
-    for row in rows {
-        let family_root_id = root_session_id(&row, &by_id);
-        grouped.entry(family_root_id).or_default().push(row);
-    }
-
-    grouped
-        .into_iter()
-        .filter_map(|(root_id, members)| {
-            // 同一 session id 可能有多个 rollout 文件（resume 续跑段），members
-            // 此时还是文件枚举顺序，不能直接 find/first：root 选取必须是输入
-            // 顺序无关的，否则标题/路径随枚举序漂移。优先选原始段（无
-            // history_base），其余按 created_at、路径取最小保证确定。
-            let by_segment_age = |row: &CodexSessionRow| {
-                (
-                    row.is_resume_segment,
-                    row.summary.created_at.unwrap_or(i64::MAX),
-                    row.path.display().to_string(),
-                )
-            };
-            let root = members
+        .or_else(|| {
+            members
                 .iter()
-                .filter(|row| row.summary.source_session_id == root_id)
                 .min_by_key(|row| by_segment_age(row))
                 .cloned()
-                .or_else(|| {
-                    members
-                        .iter()
-                        .min_by_key(|row| by_segment_age(row))
-                        .cloned()
-                })?;
-
-            Some(CodexSessionFamily { root, members })
         })
-        .collect()
-}
-
-fn root_session_id(row: &CodexSessionRow, by_id: &HashMap<String, CodexSessionRow>) -> String {
-    let mut current_id = row.summary.source_session_id.clone();
-    let mut parent_id = row.parent_session_id.clone();
-    let mut visited = HashSet::from([current_id.clone()]);
-
-    while let Some(next_parent_id) = parent_id {
-        if !visited.insert(next_parent_id.clone()) {
-            break;
-        }
-
-        let Some(parent) = by_id.get(&next_parent_id) else {
-            break;
-        };
-
-        current_id = parent.summary.source_session_id.clone();
-        parent_id = parent.parent_session_id.clone();
-    }
-
-    current_id
 }
 
 fn family_member_display_name(row: &CodexSessionRow) -> String {

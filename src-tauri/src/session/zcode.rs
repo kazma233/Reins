@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -6,14 +6,17 @@ use anyhow::{Context, Result};
 use rusqlite::{Connection, OpenFlags, params_from_iter};
 use serde_json::{Value, json};
 
-use super::family_index::{Family, FamilyRow};
+use super::family_index::{
+    Family, FamilyRow, OrphanPolicy, ParentChainRow, group_families_by_parent_chain, member_root,
+};
 use super::family_timeline::FamilyAgentLabel;
 use super::reader_engine::{
     FamilyReader, FamilySpec, Freshness, MarkerShape, MemberTimeline, OverviewCounts, SummaryKind,
 };
+use super::tool_blocks::{self, ToolShape};
 use super::{
     ContentBlock, SessionEvent, SessionMessage, SessionSummary, SessionTokenUsage, SourceApp,
-    UsageHourBuckets, usage_stats::SqlUsageHours,
+    usage_stats::SqlUsageHours,
 };
 
 #[derive(Clone, Debug)]
@@ -32,6 +35,16 @@ pub(crate) struct ZcodeSessionRow {
 }
 
 type ZcodeSessionFamily = Family<ZcodeSessionRow>;
+
+impl ParentChainRow for ZcodeSessionRow {
+    fn chain_id(&self) -> &str {
+        &self.id
+    }
+
+    fn parent_id(&self) -> Option<&str> {
+        self.parent_id.as_deref()
+    }
+}
 
 impl FamilyRow for ZcodeSessionRow {
     fn member_path(&self) -> std::borrow::Cow<'_, Path> {
@@ -96,7 +109,12 @@ impl FamilySpec for ZcodeSpec {
     }
 
     fn group_families(&self, rows: Vec<ZcodeSessionRow>) -> Result<Vec<ZcodeSessionFamily>> {
-        Ok(build_session_families(rows))
+        // 孤儿策略与 opencode 同源:认领缺失父 id,root 回退首成员。
+        Ok(group_families_by_parent_chain(
+            rows,
+            OrphanPolicy::ClaimMissingParent,
+            member_root,
+        ))
     }
 
     // 索引失效只看 db 文件 mtime:全部行都从它 join 出来,行内时间不参与。
@@ -331,15 +349,14 @@ fn list_session_rows(scan_root: &Path) -> Result<Vec<ZcodeSessionRow>> {
 // turn_usage 表按 turn 预聚合了四类用量列,直接 SUM。其 input_tokens 是全口径
 // (未命中 + 缓存读):model_usage.raw_usage_json 实测 inputTokens = provider 的
 // input_tokens + cache_read_input_tokens,computed_total = input + output 同为全
-// 口径。这里拆掉 cache_read,对齐 SessionTokenUsage 的 input 口径(不含缓存命中)。
+// 口径。SQL 只产原始列,拆合与钳制由 normalized_usage 的归一口径统一处理。
 fn session_token_usages(connection: &Connection) -> Result<HashMap<String, SessionTokenUsage>> {
     let mut statement = connection
         .prepare(
             "SELECT session_id,
-                    COALESCE(SUM(input_tokens), 0)
-                        - COALESCE(SUM(cache_read_input_tokens), 0),
-                    COALESCE(SUM(output_tokens), 0)
-                        + COALESCE(SUM(reasoning_tokens), 0),
+                    COALESCE(SUM(input_tokens), 0),
+                    COALESCE(SUM(output_tokens), 0),
+                    COALESCE(SUM(reasoning_tokens), 0),
                     COALESCE(SUM(cache_read_input_tokens), 0),
                     COALESCE(SUM(cache_creation_input_tokens), 0)
              FROM turn_usage
@@ -350,17 +367,18 @@ fn session_token_usages(connection: &Connection) -> Result<HashMap<String, Sessi
     let rows = statement
         .query_map([], |row| {
             let session_id: String = row.get(0)?;
-            let usage_column = |index: usize| -> rusqlite::Result<u64> {
-                Ok(row.get::<_, Option<i64>>(index)?.unwrap_or_default().max(0) as u64)
+            let column = |index: usize| -> rusqlite::Result<i64> {
+                Ok(row.get::<_, Option<i64>>(index)?.unwrap_or_default())
             };
             Ok((
                 session_id,
-                SessionTokenUsage {
-                    input_tokens: usage_column(1)?,
-                    output_tokens: usage_column(2)?,
-                    cache_read_tokens: usage_column(3)?,
-                    cache_write_tokens: usage_column(4)?,
-                },
+                super::usage_stats::full_scope_usage(super::usage_stats::UsageColumns {
+                    input: column(1)?,
+                    output: column(2)?,
+                    reasoning: column(3)?,
+                    cache_read: column(4)?,
+                    cache_write: column(5)?,
+                }),
             ))
         })
         .context("Failed to read ZCode token usages")?;
@@ -370,8 +388,8 @@ fn session_token_usages(connection: &Connection) -> Result<HashMap<String, Sessi
 }
 
 // 用量曲线的小时桶:turn_usage 每 turn 预聚合且自带 started_at,归一口径与
-// session_token_usages 一致(input 拆掉 cache_read,output 并入 reasoning)。
-// db 缺失、或 turn_usage 表还没建,都表示来源不可用,返回 None。
+// session_token_usages 一致(normalized_usage 单点)。db 缺失、或 turn_usage
+// 表还没建,都表示来源不可用,返回 None。
 pub(crate) fn usage_hours() -> Result<Option<SqlUsageHours>> {
     let connection = match open_connection() {
         Ok(connection) => connection,
@@ -394,96 +412,30 @@ pub(crate) fn usage_hours() -> Result<Option<SqlUsageHours>> {
             let session_id: String = row.get(0)?;
             let started_at: i64 = row.get(1)?;
             let column = |index: usize| -> rusqlite::Result<i64> {
-                Ok(row.get::<_, Option<i64>>(index)?.unwrap_or_default().max(0))
+                Ok(row.get::<_, Option<i64>>(index)?.unwrap_or_default())
             };
             Ok((
                 session_id,
                 started_at,
-                SessionTokenUsage {
-                    input_tokens: (column(2)? - column(5)?).max(0) as u64,
-                    output_tokens: (column(3)? + column(4)?) as u64,
-                    cache_read_tokens: column(5)? as u64,
-                    cache_write_tokens: column(6)? as u64,
-                },
+                super::usage_stats::full_scope_usage(super::usage_stats::UsageColumns {
+                    input: column(2)?,
+                    output: column(3)?,
+                    reasoning: column(4)?,
+                    cache_read: column(5)?,
+                    cache_write: column(6)?,
+                }),
             ))
         })
         .context("Failed to read Zcode usage hours")?;
 
-    let today = super::usage_stats::today_prefix();
-    let mut buckets = UsageHourBuckets::new();
-    let mut sessions = std::collections::HashSet::new();
-    let mut today_sessions = std::collections::HashSet::new();
-
-    for row in rows {
-        let (session_id, started_at, usage) = row?;
-        let hour_key = super::hour_key(started_at);
-        if let Some(key) = &hour_key {
-            if super::usage_stats::today_hour(key, &today).is_some() {
-                today_sessions.insert(session_id.clone());
-            }
-        }
-        sessions.insert(session_id);
-        super::merge_usage_bucket(&mut buckets, hour_key, usage);
-    }
-
-    Ok(Some(SqlUsageHours {
-        buckets,
-        session_count: sessions.len(),
-        today_session_count: today_sessions.len(),
-    }))
+    let hours = super::usage_stats::hours_from_usage_rows(rows)
+        .context("Failed to read Zcode usage hours")?;
+    Ok(Some(hours))
 }
 
 // Member/family ordering and the path map live in the shared engine; this
-// only groups rows along the SQL parent_id chain and picks each family root.
-fn build_session_families(rows: Vec<ZcodeSessionRow>) -> Vec<ZcodeSessionFamily> {
-    let by_id = rows
-        .iter()
-        .cloned()
-        .map(|row| (row.id.clone(), row))
-        .collect::<HashMap<_, _>>();
-    let mut grouped = HashMap::<String, Vec<ZcodeSessionRow>>::new();
-
-    for row in rows {
-        let family_root_id = root_session_id(&row, &by_id);
-        grouped.entry(family_root_id).or_default().push(row);
-    }
-
-    grouped
-        .into_iter()
-        .filter_map(|(root_id, members)| {
-            let root = members
-                .iter()
-                .find(|row| row.id == root_id)
-                .cloned()
-                .or_else(|| members.first().cloned())?;
-
-            Some(ZcodeSessionFamily { root, members })
-        })
-        .collect()
-}
-
-fn root_session_id(row: &ZcodeSessionRow, by_id: &HashMap<String, ZcodeSessionRow>) -> String {
-    let mut current_id = row.id.clone();
-    let mut parent_id = row.parent_id.clone();
-    let mut visited = HashSet::from([current_id.clone()]);
-
-    while let Some(next_parent_id) = parent_id {
-        if !visited.insert(next_parent_id.clone()) {
-            break;
-        }
-
-        let Some(parent) = by_id.get(&next_parent_id) else {
-            current_id = next_parent_id;
-            break;
-        };
-
-        current_id = parent.id.clone();
-        parent_id = parent.parent_id.clone();
-    }
-
-    current_id
-}
-
+// only counts message/event rows along the same classification boundary the
+// timeline loading uses.
 fn count_family_records(scan_root: &Path, member_ids: &[&str]) -> Result<(usize, usize)> {
     let connection = open_connection_at(scan_root)?;
     let member_ids = member_ids
@@ -642,7 +594,7 @@ fn assistant_message_blocks(parts: &[Value]) -> Vec<ContentBlock> {
     for part in parts {
         match super::json_string(part, &["type"]).as_deref() {
             Some("tool") => {
-                let tool_blocks = tool_blocks(part);
+                let tool_blocks = tool_blocks::tool_blocks(part, &TOOL_SHAPE);
                 if tool_blocks.is_empty() {
                     blocks.push(super::empty_tool_block("ZCode", part));
                 } else {
@@ -681,80 +633,14 @@ fn assistant_message_blocks(parts: &[Value]) -> Vec<ContentBlock> {
     blocks
 }
 
-// zcode tool part:{type,callID,tool,state:{status,input,output}};input 是参数
-// 对象或字符串,output 是字符串。与 OpenCode v2 的 tool 块同构,输入/输出
-// 拆成两条 UI 块,保持与 function_call/function_call_output 的前端契约一致。
-fn tool_blocks(value: &Value) -> Vec<ContentBlock> {
-    let tool_name = super::json_string(value, &["tool"]);
-    let tool_call_id = super::json_string(value, &["callID"]);
-    let state = value.get("state");
-    let input = state.and_then(|state| state.get("input"));
-    let output_text = state
-        .and_then(|state| state.get("output"))
-        .and_then(Value::as_str)
-        .map(str::to_string);
-    let is_error = state
-        .and_then(|state| state.get("status"))
-        .and_then(Value::as_str)
-        == Some("error");
-    let mut blocks = Vec::new();
-
-    if input.is_some_and(|item| !item.is_null()) {
-        let mut payload = value.clone();
-        // 输出内容不重复放进输入块，避免 payload 成倍变大
-        if let Some(state) = payload.get_mut("state").and_then(Value::as_object_mut) {
-            state.remove("output");
-        }
-        if let Some(input) = input {
-            if let Some(object) = payload.as_object_mut() {
-                object.insert("input".to_string(), input.clone());
-            }
-        }
-
-        blocks.push(ContentBlock {
-            kind: "function_call".to_string(),
-            text: tool_input_text(input),
-            tool_name: tool_name.clone(),
-            tool_call_id: tool_call_id.clone(),
-            is_error: None,
-            payload: Some(payload),
-        });
-    }
-
-    if let Some(output_text) = output_text {
-        let mut payload = value.clone();
-        // 输出文本提到顶层，前端 resultOutputText 直接读 payload.output
-        if let Some(object) = payload.as_object_mut() {
-            object.insert("output".to_string(), Value::String(output_text.clone()));
-            if let Some(input) = input {
-                object.insert("input".to_string(), input.clone());
-            }
-        }
-
-        blocks.push(ContentBlock {
-            kind: "function_call_output".to_string(),
-            text: Some(output_text),
-            tool_name,
-            tool_call_id,
-            is_error: is_error.then_some(true),
-            payload: Some(payload),
-        });
-    }
-
-    blocks
-}
-
-fn tool_input_text(input: Option<&Value>) -> Option<String> {
-    let Some(input) = input else {
-        return None;
-    };
-
-    if let Some(text) = input.as_str() {
-        return Some(text.to_string());
-    }
-
-    super::stringify_json(input)
-}
+// zcode tool part 的形态:{type,callID,tool,state:{status,input,output}};
+// 装配体在 tool_blocks 模块,这里只声明字段差异。
+const TOOL_SHAPE: ToolShape = ToolShape {
+    tool_name_key: "tool",
+    call_id_key: "callID",
+    output_key: "output",
+    extract_output: tool_blocks::text_output,
+};
 
 // 非 timeline 语义的消息(todo_reminder、timeline_event 等)转事件;正文不
 // 在 message.data 里而在 part 表,summary 与 payload 都要借 part 文本补全。
