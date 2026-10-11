@@ -313,7 +313,9 @@ fn pi_active_branch_and_events_follow_the_last_entry_chain() -> Result<()> {
                 .as_ref()
                 .is_some_and(|payload| payload.get("retainedTail").is_some())
     }));
-    assert_eq!(detail.source_paths, vec![path.display().to_string()]);
+    // source_paths 来自目录扫描(Windows 反斜杠),按路径语义比较而非拼写。
+    assert_eq!(detail.source_paths.len(), 1);
+    assert_eq!(Path::new(&detail.source_paths[0]), path.as_path());
     assert!(
         detail
             .events

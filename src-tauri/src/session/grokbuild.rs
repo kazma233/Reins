@@ -939,17 +939,23 @@ pub(crate) fn delete_plan(overview: &SessionOverview) -> Result<Vec<DeletePlanAc
     }];
 
     // sourcePaths 指向各会话目录内的文件,取父目录去重(首见顺序)即成员
-    // 会话目录;再排除 root 自己的目录。
+    // 会话目录;再排除 root 自己的目录。成员路径来自目录扫描,Windows 上
+    // 是反斜杠,推导走 Path 而非 "/" 字符串切分。
     let mut session_dirs = Vec::<String>::new();
     for path in &overview.source_paths {
-        if let Some((dir, _)) = path.rsplit_once('/') {
-            if !session_dirs.iter().any(|seen| seen == dir) {
-                session_dirs.push(dir.to_string());
+        if let Some(parent) = Path::new(path).parent() {
+            let dir = parent.display().to_string();
+            if !session_dirs.iter().any(|seen| seen == &dir) {
+                session_dirs.push(dir);
             }
         }
     }
     for dir in session_dirs {
-        if !dir.ends_with(&format!("/{root_id}")) {
+        let is_root_dir = Path::new(&dir)
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name == root_id);
+        if !is_root_dir {
             actions.push(DeletePlanAction::RemoveDirectory { path: dir });
         }
     }

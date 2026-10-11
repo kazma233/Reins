@@ -242,9 +242,14 @@ pub(crate) fn delete_plan(overview: &SessionOverview) -> Result<Vec<DeletePlanAc
         .collect::<Vec<_>>();
 
     // subagent 转录的同名 .meta.json 元数据只在路径形态上可推导,与执行侧
-    // "存在才删"的差别由用户在确认框看到的是完整意图保证。
+    // "存在才删"的差别由用户在确认框看到的是完整意图保证。成员路径来自
+    // 目录扫描,Windows 上是反斜杠,判定走 Path 组件而非 "/" 字符串匹配。
     for path in &overview.source_paths {
-        if path.contains("/subagents/") && path.ends_with(".jsonl") {
+        let as_path = Path::new(path);
+        let in_subagents = as_path
+            .components()
+            .any(|component| component.as_os_str() == "subagents");
+        if in_subagents && as_path.extension().is_some_and(|ext| ext == "jsonl") {
             actions.push(DeletePlanAction::RemoveFile {
                 path: format!("{}.meta.json", path.strip_suffix(".jsonl").unwrap_or(path)),
             });

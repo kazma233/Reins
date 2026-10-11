@@ -5,6 +5,27 @@ use crate::session::model::DeletePlanAction;
 // 删除预演是前端确认框的新契约:动作序列(含顺序)必须与迁移前的
 // deleteCommandPreview 输出一致,这里逐来源钉住。
 
+// 路径动作来自目录扫描(Windows 反斜杠),期望值由夹具 join 构造(拼写随
+// 构造方式);断言的是动作序列本身,比较前统一分隔符。
+fn display(path: &Path) -> String {
+    path.display().to_string().replace('\\', "/")
+}
+
+fn normalized(actions: Vec<DeletePlanAction>) -> Vec<DeletePlanAction> {
+    actions
+        .into_iter()
+        .map(|action| match action {
+            DeletePlanAction::RemoveFile { path } => DeletePlanAction::RemoveFile {
+                path: path.replace('\\', "/"),
+            },
+            DeletePlanAction::RemoveDirectory { path } => DeletePlanAction::RemoveDirectory {
+                path: path.replace('\\', "/"),
+            },
+            other => other,
+        })
+        .collect()
+}
+
 #[test]
 fn claude_code_delete_plan_lists_members_meta_then_sidecars() -> Result<()> {
     let temp_home = env::temp_dir().join(format!("reins-test-{}", Uuid::new_v4()));
@@ -42,16 +63,16 @@ fn claude_code_delete_plan_lists_members_meta_then_sidecars() -> Result<()> {
 
     assert!(plan.supported);
     assert_eq!(
-        plan.actions,
+        normalized(plan.actions),
         vec![
             DeletePlanAction::RemoveFile {
-                path: root_path.display().to_string()
+                path: display(&root_path)
             },
             DeletePlanAction::RemoveFile {
-                path: child_path.display().to_string()
+                path: display(&child_path)
             },
             DeletePlanAction::RemoveFile {
-                path: child_path.with_extension("meta.json").display().to_string()
+                path: display(&child_path.with_extension("meta.json"))
             },
             DeletePlanAction::RemoveDirectory {
                 path: format!("~/.claude/projects/{root_id}")
@@ -178,14 +199,13 @@ fn grokbuild_delete_plan_mixes_cli_dirs_and_sqlite() -> Result<()> {
     let plan = session::delete::get_delete_plan_inner(SourceApp::GrokBuild, "grok-parent")?;
 
     // sourcePaths 来自 canonicalize 后的索引扫描,期望值同样走 canonicalize。
-    let child_dir =
-        support::fs::canonicalize(&temp_home.join(".grok/sessions/not-a-cwd/grok-child"))?
-            .display()
-            .to_string();
+    let child_dir = display(&support::fs::canonicalize(
+        &temp_home.join(".grok/sessions/not-a-cwd/grok-child"),
+    )?);
 
     assert!(plan.supported);
     assert_eq!(
-        plan.actions,
+        normalized(plan.actions),
         vec![
             DeletePlanAction::RunCli {
                 program: "grok".to_string(),
@@ -225,9 +245,9 @@ fn pi_delete_plan_removes_the_transcript_file() -> Result<()> {
 
     assert!(plan.supported);
     assert_eq!(
-        plan.actions,
+        normalized(plan.actions),
         vec![DeletePlanAction::RemoveFile {
-            path: selected.display().to_string()
+            path: display(&selected)
         }]
     );
 
