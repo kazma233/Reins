@@ -187,36 +187,14 @@
   实际所在」，判定与文案收成纯函数 `skillDirLink.ts`。
 - 提交：`8040f20`（后端）、`bb06ab0`（前端）。
 
-## 待立项：测试隔离去进程环境依赖（2026-10-12 定性完成）
+## 已取消立项：测试隔离去进程环境依赖
 
-- 域：session / providers / workspace 的测试面；强度：**Worth exploring（无用户可见故障；收益是结构清晰与运行时灵活度）**
-- **定性结论：零顺序依赖**。三组实测（全量 `cargo test`，含 bin 产物）：
-  | 条件 | 结果 |
-  | --- | --- |
-  | 有锁 + 并行（现状） | 442 passed，约 1.2s |
-  | 去锁 + 并行 | **87 failed / 355 passed** |
-  | 去锁 + **串行**（`--test-threads=1`） | **442 passed / 0 failed** |
-- **受控实验**（单跑一个本来会通过的测试，同时在另一线程反复覆写 `HOME`/`REINS_TEST_HOME`）：
-  该测试**失败**；单独跑通过。因此 87 个失败全部是**并发改写进程环境量**导致，每个失败
-  测试各自单独跑都过，不存在顺序依赖。
-- 机制：持 `TestEnvGuard` 的测试都会改同一组进程级变量（`HOME` / `REINS_TEST_HOME` / `PATH` /
-  `PI_CODING_AGENT_SESSION_DIR` / 5 个工具 home 变量），而
-  `support/fs.rs::user_home_dir()` 在测试构建下**优先读 `REINS_TEST_HOME` 环境变量**（不是
-  `home_override` 静态），所以任一测试的 `set_home` 会立刻改变其它在跑测试眼中的 home。
-  锁做的正是「让环境量在单个测试执行期间稳定」。
-- **两次测量方法错误已修正**（记下来避免再犯）：
-  - 上一版写的「82」来自 `cargo test --lib`，而 `--lib` **不构建 bin 产物**（`session_delete`
-    的假 CLI 来自 bin，`fake_cli_source` 注释已说明项目脚本须用全量 `cargo test`）。全量下是 87。
-  - 上一版写的「4 个顺序依赖测试」是同一错误的产物：`--lib` 下假 CLI 定位不到，装 CLI 那步失败；
-    全量 + 串行则全绿。
-- 要删这把锁，需要替换的东西（它们是同一个包的不同面）：
-  1. 测试对进程环境变量的覆写 → 改成构造注入；
-  2. `user_home_dir()` 的测试分支读环境变量 → 改成只认 override 静态或注入值；
-  3. `TestEnvGuard` 的「改环境 + Drop 还原」协议整体退役。
-- 已有正确形态可照抄：`ReaderEngine::new(root, store_dir)` 与 `*_at` 构造器
-  （`codex::engine_at` 等），`tests/session_engine.rs` 明说「不碰进程 env、不持全局锁」；C4 已把 pi 迁成同形。
-- 状态：**待你决定是否投入**。它的收益不是速度（全套 1.2s 已经很快），而是「测试不再靠改
-  进程环境来隔离」；不做也不会出错，套件目前可靠。
+- 结论：**决定不做**。详见 `decisions/2026-10-12-test-env-lock-is-by-design.md`。
+- 摘要：去锁并行 87 failed、去锁串行 442 passed，即零顺序依赖、失败全部是并发争用；
+  而争用来自 `env::set_var` 的进程级作用域与各域夹具需要不同值这一事实。
+  收益约 0.6s 墙钟，无用户可见故障，与「只在存在真实契约时增加抽象」冲突。
+- 该决定与 `archive/2026-08-18-session-tests-windows-home-leak.md` 的原结论一致
+  （「`env::set_var` 是进程级全局，测试间必须继续持 `test_env_lock` 串行」）。
 
 ## 小项（不单独立项，顺手做）
 

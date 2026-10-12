@@ -38,6 +38,12 @@ const TOOL_HOME_VARS: [&str; 5] = [
     "DSH_HOME",
 ];
 
+/// 测试用的进程环境量守卫：改环境、Drop 时还原，并在持有期间串行。
+///
+/// 串行**是设计而非待清理的债**：`env::set_var` 的作用域是进程，而各域夹具需要
+/// 不同的临时 home，并行必然互相踩。改为「让测试不依赖进程环境」需要重做四个域的
+/// 隔离机制，收益仅约 0.6s 墙钟；取舍与实测见
+/// `aidocs/decisions/2026-10-12-test-env-lock-is-by-design.md`。
 pub(crate) struct TestEnvGuard {
     original_home: Option<String>,
     original_reins_test_home: Option<std::ffi::OsString>,
