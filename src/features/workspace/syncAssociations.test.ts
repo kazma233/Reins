@@ -8,7 +8,6 @@ import {
   hasUnmanagedSkillLinks,
   isSelectableSyncTarget,
   pendingSkillLinkCleanupCount,
-  skillDirOwnerLabel,
   skillLinkSourceLabel,
   skillLinkSourcePath,
   skillLinkStateInfo,
@@ -114,13 +113,9 @@ describe("skill link association presentation", () => {
     // 断链：canonicalize 失败时后端回落为解析出的原路径，仍有值。
     const broken = makeTarget({ id: "broken", skillDirLinkTarget: "/gone/skills" });
     expect(isSelectableSyncTarget(broken)).toBe(false);
-    // 叫不出属主：没有归属文案，但目的地字段仍有值，界面照旧显示它。
-    expect(skillDirOwnerLabel(broken)).toBeNull();
+    // 界面只显示链接目的地（属主名字那一层翻译已去掉）。
     expect(broken.skillDirLinkTarget).toBe("/gone/skills");
-    expect(skillDirOwnerLabel(makeTarget({ id: "inherited", linkedTargetId: "plain" }))).toBe(
-      "内容属 plain",
-    );
-    expect(skillDirOwnerLabel(makeTarget({ id: "plain" }))).toBeNull();
+    expect(makeTarget({ id: "plain" }).skillDirLinkTarget).toBeUndefined();
   });
 
   it("preselects selectable targets already linked to the current source", () => {

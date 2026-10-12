@@ -8,7 +8,6 @@ import {
   hasUnmanagedSkillLinks,
   isSelectableSyncTarget,
   skillDirIsAlias,
-  skillDirOwnerLabel,
   skillLinkSourceLabel,
   skillLinkSourcePath,
   skillLinkStateInfo,
@@ -103,10 +102,8 @@ const groups = computed(() => groupSyncTargets(props.targets));
               </span>
             </span>
             <span class="manager-sync-target-row__path">{{ target.skillDir }}</span>
-            <span v-if="skillDirOwnerLabel(target)" class="manager-sync-target-row__link">
-              {{ skillDirOwnerLabel(target) }}
-            </span>
-            <!-- 链接指向的原始目的地：让用户知道这个别名到底挂在哪儿。 -->
+            <!-- 落点是软链接时，链接指向的原始目的地：这一行本身就说明它挂在
+                 哪儿，不再另起一行写属主名字。 -->
             <span v-if="target.skillDirLinkTarget" class="manager-sync-target-row__link">
               {{ target.skillDirLinkTarget }}
             </span>

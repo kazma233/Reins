@@ -4,9 +4,7 @@ import type { WorkspaceInspection } from "./generated/WorkspaceInspection";
 import type { SkillDirLinkView } from "./generated/SkillDirLinkView";
 
 export type SkillDirLinkLookup = {
-  // 属主地址（叫不出属主时为空）。
-  note: string | null;
-  // 链接指向的原始目的地：显示给用户的是「这个链接指向哪里」。
+  // 链接指向的原始目的地：界面显示的就是「这个链接挂在哪」。
   place: string;
 };
 
@@ -28,18 +26,15 @@ export function buildSkillDirLinkMap(
   return map;
 }
 
-// 落点归属：属主地址与链接的原始目的地分开给，界面各自成行——属主回答「内容归
-// 谁」，目的地回答「这个链接指向哪里」。不再合成一句话，也不再省略目的地。
+// 落点归属只给链接目的地：它就是「这个别名挂在哪儿」的答案，属主名字是多余的
+// 一层翻译（要看属主，目的地路径里已经写着）。
 export function skillDirLinkLookup(
   map: Map<string, SkillDirLinkView>,
   targetId: string,
 ): SkillDirLinkLookup | null {
   const link = map.get(targetId);
   if (!link) return null;
-  return {
-    note: link.linkedTargetId ? `内容属 ${link.linkedTargetId}` : null,
-    place: link.linkTarget,
-  };
+  return { place: link.linkTarget };
 }
 
 // 面板里按 target 地址取一次的便捷封装。
