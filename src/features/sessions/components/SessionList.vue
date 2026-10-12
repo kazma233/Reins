@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, ref, watch } from "vue";
+import { computed, nextTick, ref, watch } from "vue";
 import { joinClasses } from "@shared/lib/join-classes";
 import { formatTimestamp, formatTokenCount } from "@shared/lib/format";
+import { useInfiniteScroll } from "@shared/lib/infinite-scroll";
 import { sessionIdentityKey } from "../stores/session";
 import { totalConsumedTokens } from "../token-usage";
 import type { SessionSummary } from "../types";
@@ -18,7 +19,8 @@ type SessionListProps = {
   hasMore: boolean;
   query: string;
   queryKey: string;
-  resultKey: string;
+  // 状态机的最近成功请求 key;null 表示还没有成功加载过。
+  resultKey: string | null;
   reverse: boolean;
 };
 
@@ -52,68 +54,28 @@ watch(
   }
 );
 
-// Auto-load more when the list is shorter than the viewport.
-watch(
-  () => [
-    props.hasMore,
-    props.loading,
-    props.loadingMore,
-    props.queryKey,
-    props.reverse,
-    props.sessions.length,
-    props.sourceKey
-  ],
-  () => {
-    const listElement = listRef.value;
-    if (
-      !listElement ||
-      props.loading ||
-      props.loadingMore ||
-      !props.hasMore ||
-      // 错误未清除前不再自动加载，否则失败会立刻触发下一轮请求。
-      props.loadMoreError
-    ) {
-      return;
-    }
-    if (listElement.scrollHeight <= listElement.clientHeight + 32) {
-      emit("loadMore");
-    }
-  }
-);
-
-onMounted(() => {
-  // Trigger the initial auto-load check after mount.
-  const listElement = listRef.value;
-  if (
-    !listElement ||
-    props.loading ||
-    props.loadingMore ||
-    !props.hasMore ||
-    props.loadMoreError
-  ) {
-    return;
-  }
-  if (listElement.scrollHeight <= listElement.clientHeight + 32) {
-    emit("loadMore");
-  }
+// 滚动加载 + 视口补拉:四条件门与距离判定统一在 infinite-scroll 助手,
+// 收编前这份门在 watch / mounted / 滚动回调里逐字重复三次。
+useInfiniteScroll({
+  getElement: () => listRef.value,
+  canLoadMore: () =>
+    !props.loading &&
+    !props.loadingMore &&
+    props.hasMore &&
+    // 错误未清除前不再自动加载，否则失败会立刻触发下一轮请求。
+    !props.loadMoreError,
+  onLoadMore: () => emit("loadMore"),
+  autoFillDeps: [
+    () => props.loading,
+    () => props.loadingMore,
+    () => props.hasMore,
+    () => props.loadMoreError,
+    () => props.sessions.length,
+    () => props.queryKey,
+    () => props.reverse,
+    () => props.sourceKey
+  ]
 });
-
-function handleScroll(event: Event) {
-  if (
-    props.loading ||
-    props.loadingMore ||
-    !props.hasMore ||
-    props.loadMoreError
-  ) {
-    return;
-  }
-  const listElement = event.currentTarget as HTMLDivElement;
-  const remainingDistance =
-    listElement.scrollHeight - listElement.scrollTop - listElement.clientHeight;
-  if (remainingDistance < 240) {
-    emit("loadMore");
-  }
-}
 
 function handleQueryInput(event: Event) {
   emit("queryChange", (event.target as HTMLInputElement).value);
@@ -170,7 +132,6 @@ function handleReverseClick() {
       ref="listRef"
       :aria-busy="loading || loadingMore"
       class="session-list"
-      @scroll="handleScroll"
     >
       <template v-if="showSkeletonRows">
         <div

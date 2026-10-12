@@ -13,9 +13,10 @@ import {
 import SessionDetail from "./components/SessionDetail.vue";
 import SessionList from "./components/SessionList.vue";
 import SourceSwitcher from "./components/SourceSwitcher.vue";
+import { createPagedList, type PagedResult } from "./composables/createPagedList";
 import { sessionIdentityKey, useSessionStore } from "./stores/session";
 import { ALL_SOURCES, isSourceApp, type SourceSelection } from "./source-app";
-import type { SessionPage, SourceStatus } from "./types";
+import type { SessionPage, SessionSummary, SourceStatus } from "./types";
 import { extractErrorMessage } from "@shared/lib/errors";
 import { createRequestGuard } from "@shared/lib/request-guard";
 import AppLoadError from "@shared/ui/AppLoadError.vue";
@@ -39,9 +40,6 @@ const {
 // --- local UI state ---
 
 const sessionTotalCount = ref(0);
-const nextSessionOffset = ref(0);
-const hasMoreSessions = ref(false);
-const loadingMoreSessions = ref(false);
 const refreshing = ref(false);
 const detailReloadToken = ref(0);
 const sessionQuery = ref("");
@@ -49,7 +47,6 @@ const debouncedSessionQuery = refDebounced(
   sessionQuery,
   SESSION_QUERY_DEBOUNCE_MS
 );
-const sessionListResultKey = ref("");
 const reverseSessions = ref(false);
 // 错误态常驻在各自出错区域，直到重试成功或下一次加载开始。
 const sourceError = ref<string | null>(null);
@@ -68,14 +65,12 @@ const contentPanelRef = ref<HTMLElement | null>(null);
 // forward the current value, not the reactive ref.
 provide("sessionScrollContainer", contentPanelRef);
 
-// Race-condition guards for the session list and detail loaders.
-const sessionListRequestKeyRef = ref("");
-const sessionListRequestVersionRef = ref(0);
+// 详情流的竞态守卫;列表流的竞态由 createPagedList 的请求 key 承担。
 const detailRequestGuard = createRequestGuard();
 // 请求 key 只能区分同一实例内的新旧请求，卸载后仍需阻止在途响应写回 store。
-let listRequestCancelled = false;
+let unmounted = false;
 onUnmounted(() => {
-  listRequestCancelled = true;
+  unmounted = true;
 });
 
 const selectedSummary = computed(() => {
@@ -104,15 +99,6 @@ const selectedSummary = computed(() => {
   return retainedMatches ? retainedSummary : null;
 });
 
-function nextSessionListRequestKey(
-  source: SourceSelection,
-  query: string,
-  reverse: boolean
-): string {
-  sessionListRequestVersionRef.value += 1;
-  return `${source}::${query}::${reverse ? "desc" : "asc"}::${sessionListRequestVersionRef.value}`;
-}
-
 function clearSelectedSession(options?: { invalidateDetailRequest?: boolean }) {
   if (options?.invalidateDetailRequest) {
     detailRequestGuard.invalidate();
@@ -123,12 +109,57 @@ function clearSelectedSession(options?: { invalidateDetailRequest?: boolean }) {
   sessionStore.setLoadingDetail(false);
 }
 
-function applySessionPage(nextPage: SessionPage) {
-  sessionStore.setSessions(nextPage.sessions);
-  sessionTotalCount.value = nextPage.totalCount;
-  nextSessionOffset.value = nextPage.nextOffset ?? nextPage.sessions.length;
-  hasMoreSessions.value = nextPage.hasMore;
-}
+// --- session list: shared paged machine ---
+// 数据落点是 pinia store(列表与选中摘要共用),加载位 / 竞态 / offset
+// 推进由 createPagedList 承担;refresh 是接管式操作,经 invalidate +
+// currentRequestKey 自查 stale。
+
+const sessionList = createPagedList<SessionSummary>({
+  requestKey: () =>
+    unmounted
+      ? null
+      : `${selectedSource.value}::${debouncedSessionQuery.value}::${reverseSessions.value ? "desc" : "asc"}`,
+  fetchPage: (offset) =>
+    listSessions(selectedSource.value, {
+      offset,
+      limit: SESSION_PAGE_SIZE,
+      query: debouncedSessionQuery.value,
+      reverse: reverseSessions.value,
+      refresh: false
+    }).then((nextPage: SessionPage) => ({
+      items: nextPage.sessions,
+      nextOffset: nextPage.nextOffset ?? offset + nextPage.sessions.length,
+      hasMore: nextPage.hasMore,
+      totalCount: nextPage.totalCount
+    })),
+  apply: (result: PagedResult<SessionSummary>, mode) => {
+    if (mode === "replace") {
+      sessionStore.setSessions(result.items);
+    } else {
+      sessionStore.appendSessions(result.items);
+    }
+    sessionTotalCount.value = result.totalCount ?? result.items.length;
+  },
+  onError: (error, mode) => {
+    if (mode === "replace") {
+      listError.value = extractErrorMessage(error, "加载会话列表失败。");
+    } else {
+      loadMoreError.value = extractErrorMessage(error, "加载更多会话失败。");
+    }
+  }
+});
+
+// 模板沿用既有变量名;来源是状态机。
+const hasMoreSessions = sessionList.hasMore;
+const loadingMoreSessions = sessionList.loadingMore;
+const sessionListResultKey = sessionList.resultKey;
+
+// store 的 loadingSessions 是既有展示面(与 sessions 同居),由状态机单向同步。
+watch(
+  sessionList.loading,
+  (value) => sessionStore.setLoadingSessions(value),
+  { immediate: true }
+);
 
 // --- bootstrap: detect sources on mount ---
 
@@ -156,45 +187,10 @@ onMounted(async () => {
 // --- load sessions when source / query / order changes ---
 
 async function reloadSessionList() {
-  const source = selectedSource.value;
-  const query = debouncedSessionQuery.value;
-  const reverse = reverseSessions.value;
-  const requestKey = nextSessionListRequestKey(source, query, reverse);
-  sessionListRequestKeyRef.value = requestKey;
-
-  const isStale = () =>
-    listRequestCancelled || sessionListRequestKeyRef.value !== requestKey;
-
-  sessionStore.setLoadingSessions(true);
-  loadingMoreSessions.value = false;
+  // 与收编前一致:重拉开始即清两个错误区,并复位可能在途的追加位。
   listError.value = null;
   loadMoreError.value = null;
-
-  try {
-    const nextPage = await listSessions(source, {
-      offset: 0,
-      limit: SESSION_PAGE_SIZE,
-      query,
-      reverse,
-      refresh: false
-    });
-
-    if (isStale()) {
-      return;
-    }
-
-    applySessionPage(nextPage);
-    sessionListResultKey.value = requestKey;
-  } catch (error) {
-    if (isStale()) {
-      return;
-    }
-    listError.value = extractErrorMessage(error, "加载会话列表失败。");
-  } finally {
-    if (!isStale()) {
-      sessionStore.setLoadingSessions(false);
-    }
-  }
+  await sessionList.replace();
 }
 
 watch(
@@ -296,52 +292,12 @@ function retryLoadDetail() {
   detailReloadToken.value += 1;
 }
 
-async function handleLoadMoreSessions() {
-  if (loadingSessions.value || loadingMoreSessions.value || !hasMoreSessions.value) {
+function handleLoadMoreSessions() {
+  if (!sessionList.canLoadMore.value) {
     return;
   }
-
-  const sourceAtRequest = selectedSource.value;
-  const offsetAtRequest = nextSessionOffset.value;
-  const queryAtRequest = debouncedSessionQuery.value;
-  const reverseAtRequest = reverseSessions.value;
-  const requestKey = sessionListRequestKeyRef.value;
-
-  if (!requestKey) {
-    return;
-  }
-
   loadMoreError.value = null;
-  loadingMoreSessions.value = true;
-
-  try {
-    const nextPage = await listSessions(sourceAtRequest, {
-      offset: offsetAtRequest,
-      limit: SESSION_PAGE_SIZE,
-      query: queryAtRequest,
-      reverse: reverseAtRequest,
-      refresh: false
-    });
-
-    if (sessionListRequestKeyRef.value !== requestKey) {
-      return;
-    }
-
-    sessionStore.appendSessions(nextPage.sessions);
-    sessionTotalCount.value = nextPage.totalCount;
-    nextSessionOffset.value =
-      nextPage.nextOffset ?? offsetAtRequest + nextPage.sessions.length;
-    hasMoreSessions.value = nextPage.hasMore;
-  } catch (error) {
-    if (sessionListRequestKeyRef.value !== requestKey) {
-      return;
-    }
-    loadMoreError.value = extractErrorMessage(error, "加载更多会话失败。");
-  } finally {
-    if (sessionListRequestKeyRef.value === requestKey) {
-      loadingMoreSessions.value = false;
-    }
-  }
+  void sessionList.loadMore();
 }
 
 async function handleRefresh() {
@@ -349,33 +305,28 @@ async function handleRefresh() {
     return;
   }
 
-  const sourceAtRequest = selectedSource.value;
-  const queryAtRequest = debouncedSessionQuery.value;
-  const reverseAtRequest = reverseSessions.value;
-  const requestKey = nextSessionListRequestKey(
-    sourceAtRequest,
-    queryAtRequest,
-    reverseAtRequest
-  );
-  sessionListRequestKeyRef.value = requestKey;
+  // 接管式刷新:作废状态机的在途请求,后续用同一 key 空间自查 stale。
+  sessionList.invalidate();
+  const requestKey = sessionList.currentRequestKey();
+  const isStale = () => sessionList.currentRequestKey() !== requestKey;
 
   refreshing.value = true;
-  sessionStore.setLoadingSessions(true);
-  loadingMoreSessions.value = false;
+  sessionList.loading.value = true;
+  sessionList.loadingMore.value = false;
   listError.value = null;
   loadMoreError.value = null;
   detailRequestGuard.invalidate();
   detailReloadToken.value += 1;
 
   try {
-    const result = await refreshSessions(sourceAtRequest, {
+    const result = await refreshSessions(selectedSource.value, {
       offset: 0,
       limit: SESSION_PAGE_SIZE,
-      query: queryAtRequest,
-      reverse: reverseAtRequest
+      query: debouncedSessionQuery.value,
+      reverse: reverseSessions.value
     });
 
-    if (sessionListRequestKeyRef.value !== requestKey) {
+    if (isStale()) {
       return;
     }
 
@@ -383,21 +334,25 @@ async function handleRefresh() {
 
     // 后端合并视图返回 null，映射回前端的"全部"。
     const nextSelection: SourceSelection = result.selectedSource ?? ALL_SOURCES;
-    if (nextSelection !== sourceAtRequest) {
+    if (nextSelection !== selectedSource.value) {
       sessionStore.setSelectedSource(nextSelection);
       return;
     }
 
-    applySessionPage(result.page);
-    sessionListResultKey.value = requestKey;
+    sessionStore.setSessions(result.page.sessions);
+    sessionTotalCount.value = result.page.totalCount;
+    sessionList.nextOffset.value =
+      result.page.nextOffset ?? result.page.sessions.length;
+    sessionList.hasMore.value = result.page.hasMore;
+    sessionList.resultKey.value = requestKey;
   } catch (error) {
-    if (sessionListRequestKeyRef.value !== requestKey) {
+    if (isStale()) {
       return;
     }
     listError.value = extractErrorMessage(error, "刷新会话失败。");
   } finally {
-    if (sessionListRequestKeyRef.value === requestKey) {
-      sessionStore.setLoadingSessions(false);
+    if (!isStale()) {
+      sessionList.loading.value = false;
     }
     refreshing.value = false;
   }

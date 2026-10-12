@@ -4,12 +4,6 @@ import type {
   SessionMessage
 } from "../types";
 
-// --- scroll helpers ---
-
-export function isNearBottom(element: HTMLElement, threshold = 240): boolean {
-  return element.scrollHeight - element.scrollTop - element.clientHeight <= threshold;
-}
-
 // --- payload / search helpers ---
 
 export function renderPayload(value: unknown): string | null {

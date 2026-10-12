@@ -10,7 +10,6 @@ import {
   emptyMessageText,
   formatVisibleEventLabel,
   formatVisibleMessageLabel,
-  isNearBottom,
   normalizeFilterValue,
   prepareTimelineEvent
 } from "../composables/session-detail-helpers";
@@ -20,6 +19,7 @@ import {
   type TimelineItem
 } from "../timeline-group";
 import { extractErrorMessage } from "@shared/lib/errors";
+import { useInfiniteScroll } from "@shared/lib/infinite-scroll";
 import { createRequestGuard } from "@shared/lib/request-guard";
 import { formatTimestamp, formatTokenCount } from "@shared/lib/format";
 import { formatSourceAppName } from "../source-app";
@@ -78,6 +78,7 @@ const {
   loadingMore: messagesLoadingMore,
   error: messageError,
   nextOffset: nextMessageOffset,
+  canLoadMore: canLoadMoreMessages,
   loadMore: loadMoreMessages
 } = messagesLoader;
 const {
@@ -86,6 +87,7 @@ const {
   loadingMore: eventsLoadingMore,
   error: eventError,
   nextOffset: nextEventOffset,
+  canLoadMore: canLoadMoreEvents,
   loadMore: loadMoreEvents
 } = eventsLoader;
 
@@ -262,25 +264,18 @@ const timelineFilterPlaceholder = computed(() =>
 
 // --- auto-load more when the timeline needs more data ---
 
+// 时间线加载门(未就绪 / 无更多 / 加载中)由 loader 的 canLoadMore 统一
+// 表达;这里只声明 tab 侧的加载策略。
 watch(
   [
     activeDetail,
     timelineTab,
-    messagesLoading,
-    messagesLoadingMore,
-    nextMessageOffset,
+    canLoadMoreMessages,
     normalizedTimelineFilter,
     () => visibleItems.value.length
   ],
   () => {
-    const detail = activeDetail.value;
-    if (
-      !detail ||
-      timelineTab.value !== "messages" ||
-      messagesLoading.value ||
-      messagesLoadingMore.value ||
-      nextMessageOffset.value === null
-    ) {
+    if (timelineTab.value !== "messages" || !canLoadMoreMessages.value) {
       return;
     }
     if (visibleItems.value.length > 0) {
@@ -294,27 +289,17 @@ watch(
   [
     activeDetail,
     timelineTab,
-    eventsLoading,
-    eventsLoadingMore,
-    nextEventOffset,
+    canLoadMoreEvents,
     normalizedTimelineFilter,
     () => events.value.length,
     () => filteredEvents.value.length
   ],
   () => {
-    const detail = activeDetail.value;
-    if (
-      !detail ||
-      timelineTab.value !== "events" ||
-      eventsLoading.value ||
-      eventsLoadingMore.value ||
-      nextEventOffset.value === null
-    ) {
+    if (timelineTab.value !== "events" || !canLoadMoreEvents.value) {
       return;
     }
 
-    const needsInitialEventPage =
-      events.value.length === 0 && nextEventOffset.value === 0;
+    const needsInitialEventPage = events.value.length === 0;
     const needsMoreEventsForFilter =
       filteredEvents.value.length === 0 &&
       normalizedTimelineFilter.value.length > 0;
@@ -328,44 +313,20 @@ watch(
 
 // --- scroll-driven load more ---
 
-function handleScrollLoadMore() {
-  const element = scrollContainer.value;
-  if (!element || !isNearBottom(element)) {
-    return;
-  }
-
-  if (timelineTab.value === "messages") {
-    if (
-      nextMessageOffset.value !== null &&
-      !messagesLoading.value &&
-      !messagesLoadingMore.value
-    ) {
+useInfiniteScroll({
+  getElement: () => scrollContainer.value,
+  canLoadMore: () =>
+    timelineTab.value === "messages"
+      ? canLoadMoreMessages.value
+      : canLoadMoreEvents.value,
+  onLoadMore: () => {
+    if (timelineTab.value === "messages") {
       void loadMoreMessages();
+    } else {
+      void loadMoreEvents();
     }
-    return;
   }
-
-  if (
-    nextEventOffset.value !== null &&
-    !eventsLoading.value &&
-    !eventsLoadingMore.value
-  ) {
-    void loadMoreEvents();
-  }
-}
-
-watch(
-  () => scrollContainer.value,
-  (element, _oldElement, onCleanup) => {
-    if (!element) {
-      return;
-    }
-    const onScroll = () => handleScrollLoadMore();
-    element.addEventListener("scroll", onScroll, { passive: true });
-    onCleanup(() => element.removeEventListener("scroll", onScroll));
-  },
-  { immediate: true }
-);
+});
 </script>
 
 <template>

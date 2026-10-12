@@ -1,7 +1,8 @@
-import { computed, ref, watch, type Ref } from "vue";
+import { computed, ref, watch, type ComputedRef, type Ref } from "vue";
 import { getSessionEvents, getSessionMessages } from "../api";
 import { extractErrorMessage } from "@shared/lib/errors";
 import { createKeyGuard } from "@shared/lib/request-guard";
+import { createPagedList, type PagedList } from "./createPagedList";
 import { sessionIdentityKey } from "../stores/session";
 import type {
   SessionEvent,
@@ -13,87 +14,80 @@ import type {
 export const DETAIL_PAGE_SIZE = 80;
 
 // messages/events 的加载流程完全同构,收敛成一个 loader,避免双份状态机漂移。
+// 状态机本体在 createPagedList,这里只补时间线的数据落点(items ref)与
+// 单一错误位。
 export type TimelineLoader<T> = {
   items: Ref<T[]>;
   loading: Ref<boolean>;
   loadingMore: Ref<boolean>;
   error: Ref<string | null>;
   nextOffset: Ref<number | null>;
+  canLoadMore: ComputedRef<boolean>;
   loadMore: () => Promise<void>;
+  prime: () => void;
   reset: () => void;
 };
 
-type TimelinePage<T> = { items: T[]; nextOffset: number | null };
-
 function createTimelineLoader<T>(
   overviewRef: Ref<SessionOverview | null>,
-  requestGuard: { capture: () => string | null; isCurrent: (key: string) => boolean },
-  fetchPage: (
-    overview: SessionOverview,
-    offset: number
-  ) => Promise<TimelinePage<T>>,
+  requestKey: () => string | null,
+  fetchPage: (overview: SessionOverview, offset: number) => Promise<{ items: T[]; nextOffset: number | null }>,
   fallbackError: string
 ): TimelineLoader<T> {
   const items = ref<T[]>([]) as Ref<T[]>;
-  const loading = ref(false);
-  const loadingMore = ref(false);
   const error = ref<string | null>(null);
-  const nextOffset = ref<number | null>(null);
+
+  const list: PagedList = createPagedList<T>({
+    requestKey,
+    fetchPage: async (offset) => {
+      const overview = overviewRef.value;
+      // requestKey 非 null 即意味着 overview 存在;二者在同一同步段读取。
+      if (!overview) {
+        throw new Error("时间线加载缺少会话详情。");
+      }
+      const loaded = await fetchPage(overview, offset);
+      // 时间线的「还有更多」就是 nextOffset 未尽。
+      return {
+        items: loaded.items,
+        nextOffset: loaded.nextOffset,
+        hasMore: loaded.nextOffset !== null
+      };
+    },
+    apply: (result, mode) => {
+      items.value =
+        mode === "replace" ? result.items : [...items.value, ...result.items];
+    },
+    onError: (loadError) => {
+      error.value = extractErrorMessage(loadError, fallbackError);
+    },
+    isEmpty: () => items.value.length === 0
+  });
 
   async function loadMore(): Promise<void> {
-    const currentOverview = overviewRef.value;
-    if (
-      !currentOverview ||
-      loading.value ||
-      loadingMore.value ||
-      nextOffset.value === null
-    ) {
-      return;
+    // 与收编前一致:真正开始加载时才清错误,gate 未放行不动它。
+    if (list.canLoadMore.value) {
+      error.value = null;
     }
-
-    const requestKey = requestGuard.capture();
-    if (requestKey === null) {
-      return;
-    }
-
-    // offset 0 且列表为空即首屏加载:整页替换而非追加
-    const initialLoad = nextOffset.value === 0 && items.value.length === 0;
-    if (initialLoad) {
-      loading.value = true;
-    } else {
-      loadingMore.value = true;
-    }
-    error.value = null;
-
-    try {
-      const page = await fetchPage(currentOverview, nextOffset.value);
-      if (!requestGuard.isCurrent(requestKey)) {
-        return;
-      }
-      items.value = initialLoad ? page.items : [...items.value, ...page.items];
-      nextOffset.value = page.nextOffset;
-    } catch (loadError) {
-      if (!requestGuard.isCurrent(requestKey)) {
-        return;
-      }
-      error.value = extractErrorMessage(loadError, fallbackError);
-    } finally {
-      if (requestGuard.isCurrent(requestKey)) {
-        loading.value = false;
-        loadingMore.value = false;
-      }
-    }
+    await list.loadMore();
   }
 
-  function reset() {
+  function reset(): void {
+    list.reset();
     items.value = [];
-    loading.value = false;
-    loadingMore.value = false;
     error.value = null;
-    nextOffset.value = null;
   }
 
-  return { items, loading, loadingMore, error, nextOffset, loadMore, reset };
+  return {
+    items,
+    loading: list.loading,
+    loadingMore: list.loadingMore,
+    error,
+    nextOffset: list.nextOffset,
+    canLoadMore: list.canLoadMore,
+    loadMore,
+    prime: list.prime,
+    reset
+  };
 }
 
 export type SessionTimelineState = {
@@ -121,7 +115,7 @@ export function useSessionTimeline(
 
   const messagesLoader = createTimelineLoader<SessionMessage>(
     overview,
-    requestGuard,
+    () => detailKey.value,
     async (currentOverview, offset) => {
       const bundle = await getSessionMessages(
         currentOverview.summary.sourceApp,
@@ -138,7 +132,7 @@ export function useSessionTimeline(
 
   const eventsLoader = createTimelineLoader<SessionEvent>(
     overview,
-    requestGuard,
+    () => detailKey.value,
     async (currentOverview, offset) => {
       const page = await getSessionEvents(
         currentOverview.summary.sourceApp,
@@ -154,10 +148,10 @@ export function useSessionTimeline(
   );
 
   // overview 变化:两个 loader 全部重置,消息首页立即加载;
-  // raw 页懒加载,首页消息结束(成功或失败)后才置 0 允许拉取。
+  // raw 页懒加载,首页消息结束(成功或失败)后才置就绪允许拉取。
   watch(
     overview,
-    currentOverview => {
+    (currentOverview) => {
       messagesLoader.reset();
       eventsLoader.reset();
       if (!currentOverview || !detailKey.value) {
@@ -165,10 +159,10 @@ export function useSessionTimeline(
       }
 
       const activeDetailKey = detailKey.value;
-      messagesLoader.nextOffset.value = 0;
+      messagesLoader.prime();
       void messagesLoader.loadMore().then(() => {
         if (requestGuard.isCurrent(activeDetailKey)) {
-          eventsLoader.nextOffset.value = 0;
+          eventsLoader.prime();
         }
       });
     },
