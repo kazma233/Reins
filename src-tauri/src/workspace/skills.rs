@@ -21,7 +21,9 @@ use super::skill_install::{
     InstallItem, ManagedTarget, SelectedSkill, SkillInstall, managed_targets, resolve_ids,
 };
 // 路径规范化只有一份实现：链接归属分类与安装侧的比较必须同口径。
-pub(super) use super::skill_install::{normalize_link_path, relative_to_source_root};
+pub(super) use super::skill_install::{
+    normalize_link_path, normalize_own_dir, relative_to_source_root,
+};
 use super::targets::read_skill_dir_link;
 use super::types::*;
 use super::{
@@ -115,26 +117,27 @@ pub(super) fn build_sync_target_options_with_sources(
         .map(|(reference, target)| (reference, target.skill_dir.as_path()))
         .collect();
 
-    // Map each managed skill_dir (canonicalized) back to its target id, so a
-    // directory link can be resolved to "which managed target it points at".
+    // 受管落点 → target id。归属比较必须按「链接自身路径」算：对目录链接
+    // canonicalize 会解析到另一端，别名就会与它的目标撞进同一个 key。
     let mut dir_to_target: HashMap<PathBuf, String> = HashMap::new();
     for (reference, skill_dir) in &flat {
-        let canonical = skill_dir
-            .canonicalize()
-            .unwrap_or_else(|_| skill_dir.to_path_buf());
         dir_to_target
-            .entry(canonical)
+            .entry(normalize_own_dir(skill_dir))
             .or_insert_with(|| reference.composite_id());
     }
 
     let mut options = Vec::with_capacity(flat.len());
     for (reference, skill_dir) in flat {
-        // Resolve a directory-link target only if it points at another managed
-        // target; links to external directories stay selectable.
-        let linked_target_id =
-            read_skill_dir_link(skill_dir)?.and_then(|linked| dir_to_target.get(&linked).cloned());
-        // 整目录继承另一个受管 target 时，不重复报告同一批物理链接。
-        let links = if linked_target_id.is_some() {
+        // 落点是软链接时：能对上受管 target 就给出它的 id（命名归属），对不上
+        // 就把链接解出的真实目录带出去——界面的「内容属谁 / 文件在哪」都靠这两个
+        // 值，不再由前端猜。
+        let skill_dir_link = read_skill_dir_link(skill_dir)?;
+        let linked_target_id = skill_dir_link
+            .as_ref()
+            .and_then(|linked| dir_to_target.get(linked).cloned());
+        let skill_dir_link_target = skill_dir_link.as_ref().map(|linked| display_path(linked));
+        // 内容属于链接另一端时，那一批物理链接不该算成本 target 自己的安装记录。
+        let links = if skill_dir_link.is_some() {
             Vec::new()
         } else {
             scan_target_skill_links(skill_dir, sources)?
@@ -154,6 +157,7 @@ pub(super) fn build_sync_target_options_with_sources(
             label: id,
             skill_dir: display_path(skill_dir),
             linked_target_id,
+            skill_dir_link_target,
             links,
         });
     }
@@ -297,8 +301,8 @@ pub(crate) fn sync_source_to_targets_inner(
         );
     }
 
-    // 3. 参与分发的目标：不存在/禁用是警告，整目录继承是静默跳过——这条
-    //    规则由安装面统一判定，同步与冲突预演不会分叉。
+    // 3. 参与分发的目标。两种情况都产出提示而不是静默：正常界面已经把它们标成
+    //    不可勾并说明原因，能走到这里说明是客户端直接调用（或界面过期快照）。
     let mut warnings = Vec::new();
     let mut participating = Vec::new();
     for target in resolve_ids(&config, &input.target_ids)? {
@@ -308,7 +312,10 @@ pub(crate) fn sync_source_to_targets_inner(
             Some(TargetSkip::Missing) => {
                 warnings.push(format!("{}，已跳过。", target_unavailable(&target.id)))
             }
-            Some(TargetSkip::LinkedDir) => {}
+            Some(TargetSkip::LinkedDir) => warnings.push(format!(
+                "{} 的 skills 目录是软链接，内容由链接另一端负责，已跳过。",
+                target.id
+            )),
         }
     }
     let targets: Vec<&ManagedTarget<'_>> = participating.iter().collect();
@@ -867,9 +874,25 @@ pub(crate) fn remove_target_skill_link_inner(
 
     let destination = PathBuf::from(destination_path);
     // 链接归属校验与删除都在安装面：真实目录/文件一律拒绝。
-    SkillInstall::new(&target.skill_dir)
-        .remove_at(target_id, &target.skill_dir, &destination)
-        .map(|item| item.to_sync_item())
+    let removed = SkillInstall::new(&target.skill_dir).remove_at(
+        target_id,
+        &target.skill_dir,
+        &destination,
+    )?;
+
+    // 落点是软链接时，删掉的是链接另一端目录里的条目，而这条记录挂着本 target
+    // 的名字。穿链接本身是正常语义，但称呼必须说清，否则「删了自己的」这个印象
+    // 是错的。
+    let Some(linked) = read_skill_dir_link(&target.skill_dir)? else {
+        return Ok(removed.to_sync_item());
+    };
+    let mut item = removed;
+    let note = format!("实际删除的是 {} 里的条目", display_path(&linked));
+    item.detail = Some(match item.detail.take() {
+        Some(detail) => format!("{detail}；{note}"),
+        None => note,
+    });
+    Ok(item.to_sync_item())
 }
 
 // ---------------------------------------------------------------------------

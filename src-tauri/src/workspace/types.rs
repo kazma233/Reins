@@ -710,8 +710,9 @@ impl ResolvedManagerConfig {
         global.chain(project).collect()
     }
 
-    // 该 target 是否参与分发。判定只有这一处——skill 安装、MCP 分发、状态展示
-    // 要的是同一个答案，调用方只决定「跳过时怎么表现」（报错 / warning / 静默）。
+    // 该 target 是否参与技能分发。判定只有这一处；调用方只决定「跳过时怎么表现」
+    // （报错 / warning / 静默）。MCP 分发与状态展示不经过它——那条链路问的是
+    // config_path 而不是 skill_dir。
     //
     // 为什么放在寻址层而不是安装面：它回答的是「这个地址可用吗」，
     // 是对 TargetRef 的补充，而不是技能安装的私有规则。
@@ -851,10 +852,14 @@ pub(crate) struct SyncTargetOption {
     pub(crate) agent_id: String,
     pub(crate) label: String,
     pub(crate) skill_dir: String,
-    // When the skill_dir is a symlink that points at another managed target's
-    // skill_dir, this holds that target's id so the UI can disable & hint.
+    // 落点是软链接时，它指向哪个受管 target（命名归属）。链接的另一端不是受管
+    // target 时为 None，此时只有 skill_dir_link_target 能说明内容属于谁。
     #[ts(optional = nullable)]
     pub(crate) linked_target_id: Option<String>,
+    // 落点是软链接时，链接解出来的真实目录：前端用它说明「内容属谁」并展示文件
+    // 实际所在位置。不是链接时为 None。
+    #[ts(optional = nullable)]
+    pub(crate) skill_dir_link_target: Option<String>,
     // 真实 target 目录中扫描到的目录链接。整目录继承的 target 不重复
     // 列出关联，以免把同一批物理链接误认为多份安装。
     pub(crate) links: Vec<SkillLinkAssociation>,

@@ -172,6 +172,12 @@ fn sync_target_options_do_not_duplicate_managed_directory_inheritance() -> Resul
     create_directory_symlink(&source_root.join("alpha"), &owner_skill_dir.join("alpha"))?;
     create_directory_symlink(&owner_skill_dir, &replica_skill_dir)?;
 
+    // macOS 上 /var 是 /private/var 的软链接：链接解出的路径是 canonical 形态。
+    let expected_link_target = display_path(
+        &owner_skill_dir
+            .canonicalize()
+            .unwrap_or_else(|_| owner_skill_dir.clone()),
+    );
     let config = resolved_config(vec![
         resolved_target("owner", owner_skill_dir),
         resolved_target("replica", replica_skill_dir),
@@ -189,7 +195,73 @@ fn sync_target_options_do_not_duplicate_managed_directory_inheritance() -> Resul
 
     assert_eq!(owner.links.len(), 1);
     assert_eq!(replica.linked_target_id.as_deref(), Some("owner"));
+    assert_eq!(
+        replica.skill_dir_link_target.as_deref(),
+        Some(expected_link_target.as_str())
+    );
     assert!(replica.links.is_empty());
+
+    Ok(())
+}
+
+// 链接另一端不是受管 target（外部目录或断链）时，命名归属为空，但「落点是别名」
+// 这件事必须带给界面——否则前端会保持可勾，勾了之后后端静默跳过（用户可见的
+// 静默失效）。这里锁住归属字段仍然有值。
+#[test]
+fn sync_target_options_report_alias_skill_dir_without_named_owner() -> Result<()> {
+    let root = TestDir::new("sync-target-external-alias")?;
+    let external_skill_dir = root.path().join("external").join("skills");
+    let alias_skill_dir = root.path().join("project").join("skills");
+    let broken_skill_dir = root.path().join("broken").join("skills");
+    fs::create_dir_all(&external_skill_dir)?;
+    fs::create_dir_all(alias_skill_dir.parent().expect("alias parent"))?;
+    fs::create_dir_all(broken_skill_dir.parent().expect("broken parent"))?;
+    create_directory_symlink(&external_skill_dir, &alias_skill_dir)?;
+    create_directory_symlink(&root.path().join("gone"), &broken_skill_dir)?;
+
+    let plain_skill_dir = root.path().join("plain").join("skills");
+    fs::create_dir_all(&plain_skill_dir)?;
+
+    let config = resolved_config(vec![
+        resolved_target("plain", plain_skill_dir.clone()),
+        resolved_target("alias", alias_skill_dir),
+        resolved_target("broken", broken_skill_dir),
+    ]);
+    let options = build_sync_target_options_with_sources(
+        &config,
+        &[link_source("local", root.path().join("source"), &[])],
+    )?;
+    let by_id = |id: &str| {
+        options
+            .iter()
+            .find(|target| target.id == id)
+            .expect("target 应在列表里")
+    };
+
+    // 普通落点：没有归属，也就没有被跳过的理由。
+    assert!(by_id("plain").skill_dir_link_target.is_none());
+    assert!(by_id("plain").linked_target_id.is_none());
+
+    // 外部目录：叫不出名字，但归属字段有值（界面据此禁用并说明内容在哪）。
+    let alias = by_id("alias");
+    assert!(alias.linked_target_id.is_none());
+    assert_eq!(
+        alias.skill_dir_link_target.as_deref(),
+        Some(
+            external_skill_dir
+                .canonicalize()
+                .unwrap_or(external_skill_dir.clone())
+                .display()
+                .to_string()
+                .as_str()
+        )
+    );
+
+    // 断链：canonicalize 失败，回落到解析出的原路径，同样有值。
+    assert_eq!(
+        by_id("broken").skill_dir_link_target.as_deref(),
+        Some(root.path().join("gone").display().to_string().as_str())
+    );
 
     Ok(())
 }

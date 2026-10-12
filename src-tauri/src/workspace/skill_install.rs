@@ -581,6 +581,20 @@ pub(super) fn normalize_link_path(path: &Path) -> PathBuf {
     path.to_path_buf()
 }
 
+// 同上，但用于「这个目录是不是我的」这类归属比较：只规范化**父目录**，
+// 最后一段保留原样。对一个目录链接调用 canonicalize 会解析到链接的另一端，
+// 于是「别名目录」与「被指向的目录」会都等于目标目录 —— 别名会认成自己的
+// 目标（此前 `linked_target_id` 就是这么算出「继承自自己」的）。
+pub(super) fn normalize_own_dir(path: &Path) -> PathBuf {
+    let Some(parent) = path.parent() else {
+        return normalize_link_path(path);
+    };
+    let Some(name) = path.file_name() else {
+        return normalize_link_path(path);
+    };
+    normalize_link_path(parent).join(name)
+}
+
 pub(super) fn relative_to_source_root(path: &Path, source_root: &Path) -> Option<PathBuf> {
     #[cfg(not(windows))]
     {
@@ -841,6 +855,42 @@ mod tests {
                 .expect("claude 应在枚举里")
                 .skip,
             Some(TargetSkip::LinkedDir)
+        );
+
+        Ok(())
+    }
+
+    // 别名落点的归属比较：一个目录链接不能与它指向的目录认成同一个落点、
+    // 更不能认成自己。normalize_link_path 会解析链接（用于判断「内容去哪了」），
+    // 归属比较必须走 normalize_own_dir（最后一段保留原样）。
+    #[test]
+    fn own_dir_normalization_keeps_alias_distinct_from_its_target() -> Result<()> {
+        let root = TestDir::new("install-alias-ownership")?;
+        let owner_skill_dir = root.path().join("owner/skills");
+        fs::create_dir_all(&owner_skill_dir)?;
+        let alias_skill_dir = root.path().join("project/skills");
+        fs::create_dir_all(alias_skill_dir.parent().expect("parent"))?;
+        create_directory_symlink(&owner_skill_dir, &alias_skill_dir)?;
+
+        assert_ne!(
+            normalize_own_dir(&alias_skill_dir),
+            normalize_own_dir(&owner_skill_dir),
+            "别名与它的目标必须是两个落点"
+        );
+        // 父目录被规范化（macOS 上 /var → /private/var），最后一段保留原样。
+        assert_eq!(
+            normalize_own_dir(&alias_skill_dir),
+            alias_skill_dir
+                .parent()
+                .expect("parent")
+                .canonicalize()?
+                .join("skills")
+        );
+
+        // 对照：穿链接的规范化仍然把两者解析到同一处（内容确实在同一处）。
+        assert_eq!(
+            normalize_link_path(&alias_skill_dir.canonicalize()?),
+            normalize_link_path(&owner_skill_dir)
         );
 
         Ok(())
