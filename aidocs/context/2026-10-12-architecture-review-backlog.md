@@ -44,6 +44,25 @@
 ### 4. C4 · pi 的手搓缓存机械迁引擎部件
 
 - 域：session；强度：Strong
+- **2026-10-12 调查后的范围修正**（实施前必读）：
+  - **迁移形态已有现成答案**：引擎侧 `FamilyReader`（`reader_engine.rs:656-701`）就是
+    「按 root 解析 + 每实例缓存」的形态——`root: fn() -> Result<PathBuf>` + `slot:
+    Mutex<Option<(PathBuf, Arc<ReaderEngine>)>>`，**换根即整实例重建**（有直测
+    `family_reader_rebuilds_engine_when_root_changes`）。5 家已经这么做了；只有 pi
+    与 grokbuild 是 unit struct。pi 照抄即可，不必新设计。三个部件都能对上号：
+    `DualHalfCache`（时间线）、`CachedIndex`+`Freshness`（索引，`Freshness::Fingerprint`
+    变体就是给指纹口径准备的）、`SummaryMemCache`（三级摘要，连 SQLite 持久层都已
+    有实例级 `SummaryDb::at(dir)`，pi 现在还在调模块级全局连接）。
+  - **性能收益是假的**：全套测试 1.18–1.24s，会话域 129 个测试共占约 0.45s。原先写的
+    「解掉 TestEnvGuard 后 session 域测试才可能并行」不成立——最多省 0.45s。
+  - **真实收益是正确性，且范围比原描述大**：实测把 `TestEnvGuard` 的串行锁去掉后
+    **82 个测试失败**（359 passed），分布跨 6 个域：`tests::pi` 18、`providers::tests`
+    17、`tests::grokbuild` 12、`tests::session_*` 26、`session::summary_cache` 2、
+    各 1 个 reader/engine。也就是说这 82 个测试**靠串行锁才能过**，它们事实上共享
+    进程级可变状态。pi 的静态缓存只是其中一处，单迁移 pi 解决不了这 82 个。
+  - 因此建议拆成两项：**C4 保持原意**（pi 迁引擎部件、删约 100 行重复机械，一次可
+    验证的改动）；另立一项「测试隔离去进程环境依赖」（根因是进程 HOME 与环境变量
+    作为隔离手段，涉及 providers / session / grokbuild / pi 四域的构造方式）。
 - 问题：pi 保留约 100 行私房机械（3 个 static + 锁助手 `pi.rs:54-72`、index 缓存 + 指纹 `228-284`、三级摘要回填 `340-373`），引擎里已有同构部件（`reader_engine.rs:286-342` SummaryMemCache、`358-361` CachedIndex）；指纹函数与 `dsh.rs:823-837` 逐字孪生。pi 测试还被进程 HOME + 全局锁钉死（18 处 TestEnvGuard），不能并行。
 - 方向：把 `DualHalfCache` 的借用模式推广到指纹目录缓存与 SummaryMemCache，pi 按实例持有部件；HOME 重开语义逐字保留。
 - ADR：构成对 `2026-10-08-reader-engine.md` 决策 6「pi 摘要缓存保持现状」的修订，应记录而非默默改。
