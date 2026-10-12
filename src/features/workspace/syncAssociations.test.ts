@@ -114,7 +114,7 @@ describe("skill link association presentation", () => {
     // 断链：canonicalize 失败时后端回落为解析出的原路径，仍有值。
     const broken = makeTarget({ id: "broken", skillDirLinkTarget: "/gone/skills" });
     expect(isSelectableSyncTarget(broken)).toBe(false);
-    expect(skillDirOwnerLabel(broken)).toBe("内容属链接指向的目录");
+    expect(skillDirOwnerLabel(broken)).toBe("内容在 /gone/skills");
     expect(skillDirOwnerLabel(makeTarget({ id: "inherited", linkedTargetId: "plain" }))).toBe(
       "内容属 plain",
     );

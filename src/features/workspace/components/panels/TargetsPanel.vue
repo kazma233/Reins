@@ -131,7 +131,7 @@ const configProjects = computed(() => configDocument.value?.config?.projects ?? 
                     <!-- 落点是软链接：这个目录不归它，内容在别处。 -->
                     <span v-if="skillDirLink(target.id)" class="manager-target-row__link">
                       <span class="manager-target-row__pill pill--info">软链接</span>
-                      {{ skillDirLink(target.id)?.note }} · {{ skillDirLink(target.id)?.place }}
+                      {{ skillDirLink(target.id)?.note }}
                     </span>
                     <span v-if="target.configPath"><strong>mcp</strong><span>{{ target.configPath }} ({{ target.mcpConfigPrefix }})</span></span>
                   </div>
@@ -197,8 +197,7 @@ const configProjects = computed(() => configDocument.value?.config?.projects ?? 
                           class="manager-target-row__link"
                         >
                           <span class="manager-target-row__pill pill--info">软链接</span>
-                          {{ skillDirLink(`${project.id}:${target.id}`)?.note }} ·
-                          {{ skillDirLink(`${project.id}:${target.id}`)?.place }}
+                          {{ skillDirLink(`${project.id}:${target.id}`)?.note }}
                         </span>
                         <span v-if="target.configPath"><strong>mcp</strong><span>{{ target.configPath }} ({{ target.mcpConfigPrefix }})</span></span>
                       </div>

@@ -896,6 +896,74 @@ mod tests {
         Ok(())
     }
 
+    // 项目级落点指向全局 target 的目录时，属主必须报完整地址：只报 agent 名
+    // 的话，跨项目就看不出它属于哪个 target（`claude` 到底指哪个）。
+    #[test]
+    fn alias_owner_is_reported_as_full_address() -> Result<()> {
+        let root = TestDir::new("install-alias-owner-address")?;
+        let global_skill_dir = root.path().join("global/skills");
+        let project_skill_dir = root.path().join("project/skills");
+        fs::create_dir_all(&global_skill_dir)?;
+        fs::create_dir_all(project_skill_dir.parent().expect("parent"))?;
+        create_directory_symlink(&global_skill_dir, &project_skill_dir)?;
+
+        let mut config = config_with(vec![target("claude", global_skill_dir.clone())]);
+        config.projects.insert(
+            "my-app".to_string(),
+            crate::workspace::types::ResolvedProjectConfig {
+                id: "my-app".to_string(),
+                project_path: root.path().join("project"),
+                agents: [(
+                    AgentTargetId("claude".to_string()),
+                    target("claude", project_skill_dir.clone()),
+                )]
+                .into_iter()
+                .collect(),
+            },
+        );
+
+        let links = config.skill_dir_links()?;
+        let project = links
+            .iter()
+            .find(|link| link.id == "my-app:claude")
+            .expect("项目级落点应在表里");
+
+        assert!(project.is_alias());
+        assert_eq!(
+            project.linked_target_id.as_deref(),
+            Some("claude"),
+            "全局 target 的地址就是它的 id"
+        );
+
+        // 反向：全局落点是链接、指向项目级目录时，属主报的是复合地址。
+        let mut reversed = config_with(vec![target("claude", project_skill_dir.clone())]);
+        reversed.projects.insert(
+            "my-app".to_string(),
+            crate::workspace::types::ResolvedProjectConfig {
+                id: "my-app".to_string(),
+                project_path: root.path().join("project"),
+                agents: [(
+                    AgentTargetId("codex".to_string()),
+                    target("codex", global_skill_dir),
+                )]
+                .into_iter()
+                .collect(),
+            },
+        );
+        let links = reversed.skill_dir_links()?;
+        let global = links
+            .iter()
+            .find(|link| link.id == "claude")
+            .expect("全局落点应在表里");
+        assert_eq!(
+            global.linked_target_id.as_deref(),
+            Some("my-app:codex"),
+            "属主是项目级 target 时要报复合地址"
+        );
+
+        Ok(())
+    }
+
     // 指向别的来源的链接不属于本来源：卸载不动它。
     #[test]
     fn remove_installed_keeps_other_source_links() -> Result<()> {

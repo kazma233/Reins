@@ -106,11 +106,6 @@ const groups = computed(() => groupSyncTargets(props.targets));
             <span v-if="skillDirOwnerLabel(target)" class="manager-sync-target-row__link">
               {{ skillDirOwnerLabel(target) }}
             </span>
-            <!-- 落点是软链接时，文件实际在链接另一端：地址也给出来，
-                 否则用户会以为路径就是内容所在。 -->
-            <span v-if="target.skillDirLinkTarget" class="manager-sync-target-row__link">
-              {{ target.skillDirLinkTarget }}
-            </span>
           </span>
         </label>
 
