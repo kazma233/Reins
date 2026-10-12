@@ -2207,6 +2207,46 @@ fn dsh_remove_rejects_modified_entry() -> Result<()> {
     Ok(())
 }
 
+// 移除策略同型守卫:五个带注册键的适配器,无条目语义必须一致——remove 报
+// 「没有可识别」、remove_external 报「没有外部条目」。可识别删除与「已被
+// 手工修改」拒绝由各家专项用例覆盖;claude 没有注册键(契约是 base_url
+// 归属校验),不在这张表里。
+#[test]
+fn removal_no_entry_policy_is_uniform_across_entry_bearing_adapters() -> Result<()> {
+    for app in [
+        ProviderAppId::Codex,
+        ProviderAppId::Opencode,
+        ProviderAppId::Pi,
+        ProviderAppId::Grokbuild,
+        ProviderAppId::Dsh,
+    ] {
+        // dsh 的路由只认 chat 协议(pi-ai 同源),其余四家走 responses。
+        let protocol = if app == ProviderAppId::Dsh {
+            ProviderProtocol::OpenaiChatCompletions
+        } else {
+            ProviderProtocol::OpenaiResponses
+        };
+        let isolated = Isolated::new()?;
+        isolated.seed_provider("p1", protocol, "https://p1.test/v1")?;
+        isolated.apply("p1", app, &["model-a"], "model-a", None)?;
+        isolated.remove_from("p1", app)?;
+
+        let error = isolated
+            .remove_from("p1", app)
+            .expect_err("再次移除应报无条目");
+        assert!(error.to_string().contains("没有可识别"), "{app:?}: {error}");
+
+        let error = isolated
+            .remove_external(app, "vendor-gw")
+            .expect_err("无外部条目应报错");
+        assert!(
+            error.to_string().contains("没有外部条目"),
+            "{app:?}: {error}"
+        );
+    }
+    Ok(())
+}
+
 #[test]
 fn dsh_remove_external_clears_entry_and_default() -> Result<()> {
     let isolated = Isolated::new()?;
