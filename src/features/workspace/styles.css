@@ -854,6 +854,12 @@
   color: #b45309;
 }
 
+/* 落点是软链接：中性提示，不是错误也不是状态开关。 */
+.pill--info {
+  background: #eff6ff;
+  color: #2563eb;
+}
+
 /* --- sync columns --- */
 
 .manager-sync-columns {
@@ -1096,6 +1102,13 @@
   font-weight: 500;
   line-height: 1.5;
   white-space: nowrap;
+}
+
+.manager-target-row__link {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--color-text-muted);
 }
 
 .manager-target-row__meta {

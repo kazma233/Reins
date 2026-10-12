@@ -11,6 +11,7 @@ import { useTargetMutations } from "../../composables/useTargetMutations";
 import { useWorkspaceState } from "../../composables/useWorkspaceState";
 import { useWorkspaceStore } from "../../stores/workspace";
 import { formatTargetLabel } from "../../model";
+import { useSkillDirLinks } from "../../skillDirLink";
 
 const store = useWorkspaceStore();
 const { configDocument, loadingInspection, runningAction, loadError, retryWorkspaceState } =
@@ -46,6 +47,10 @@ const {
   closeProjectDeleteDialog,
   handleConfirmDeleteProject,
 } = useProjectMutations();
+
+// 落点归属来自 inspection（探测结果），config 只回显配置：两者按 id 对齐，
+// 全局用 agent id、项目级用 `project:agent`。
+const skillDirLink = useSkillDirLinks(() => store.inspection);
 
 const configTargets = computed(() => configDocument.value?.config?.targets ?? []);
 const configProjects = computed(() => configDocument.value?.config?.projects ?? []);
@@ -119,7 +124,15 @@ const configProjects = computed(() => configDocument.value?.config?.projects ?? 
                   </template>
 
                   <div class="manager-target-row__meta manager-target-row__meta--paths">
-                    <span><strong>skill</strong><span>{{ target.skillDir }}</span></span>
+                    <span>
+                      <strong>skill</strong>
+                      <span>{{ target.skillDir }}</span>
+                    </span>
+                    <!-- 落点是软链接：这个目录不归它，内容在别处。 -->
+                    <span v-if="skillDirLink(target.id)" class="manager-target-row__link">
+                      <span class="manager-target-row__pill pill--info">软链接</span>
+                      {{ skillDirLink(target.id)?.note }} · {{ skillDirLink(target.id)?.place }}
+                    </span>
                     <span v-if="target.configPath"><strong>mcp</strong><span>{{ target.configPath }} ({{ target.mcpConfigPrefix }})</span></span>
                   </div>
                 </AppCard>
@@ -175,7 +188,18 @@ const configProjects = computed(() => configDocument.value?.config?.projects ?? 
                         </span>
                       </div>
                       <div class="manager-project-target-path__items">
-                        <span><strong>skill</strong><span>{{ target.skillDir }}</span></span>
+                        <span>
+                          <strong>skill</strong>
+                          <span>{{ target.skillDir }}</span>
+                        </span>
+                        <span
+                          v-if="skillDirLink(`${project.id}:${target.id}`)"
+                          class="manager-target-row__link"
+                        >
+                          <span class="manager-target-row__pill pill--info">软链接</span>
+                          {{ skillDirLink(`${project.id}:${target.id}`)?.note }} ·
+                          {{ skillDirLink(`${project.id}:${target.id}`)?.place }}
+                        </span>
                         <span v-if="target.configPath"><strong>mcp</strong><span>{{ target.configPath }} ({{ target.mcpConfigPrefix }})</span></span>
                       </div>
                     </div>
