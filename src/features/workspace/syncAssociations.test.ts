@@ -27,7 +27,6 @@ function makeTarget(overrides: Partial<SyncTargetOption> & { id: string }): Sync
   return {
     label: overrides.id,
     skillDir: `/targets/${overrides.id}`,
-    enabled: true,
     links: [],
     ...overrides,
   };
@@ -102,10 +101,9 @@ describe("skill link association presentation", () => {
     expect(hasCurrentSourceSkillLinks(links)).toBe(false);
   });
 
-  it("marks disabled and inherited targets as unselectable", () => {
-    expect(isSelectableSyncTarget(makeTarget({ id: "enabled" }))).toBe(true);
-    expect(isSelectableSyncTarget(makeTarget({ id: "disabled", enabled: false }))).toBe(false);
-    expect(isSelectableSyncTarget(makeTarget({ id: "inherited", linkedTargetId: "enabled" }))).toBe(false);
+  it("marks inherited targets as unselectable", () => {
+    expect(isSelectableSyncTarget(makeTarget({ id: "plain" }))).toBe(true);
+    expect(isSelectableSyncTarget(makeTarget({ id: "inherited", linkedTargetId: "plain" }))).toBe(false);
   });
 
   it("preselects selectable targets already linked to the current source", () => {
@@ -118,7 +116,6 @@ describe("skill link association presentation", () => {
       makeTarget({ id: "other-source", links: [makeLink("linked", ["source-b"])] }),
       makeTarget({ id: "unmanaged", links: [makeLink("unmanaged")] }),
       makeTarget({ id: "empty" }),
-      makeTarget({ id: "disabled", enabled: false, links: [makeLink("linked", ["source-a"])] }),
       makeTarget({ id: "inherited", linkedTargetId: "linked", links: [makeLink("linked", ["source-a"])] }),
     ];
 

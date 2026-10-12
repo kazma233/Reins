@@ -151,7 +151,6 @@ pub(crate) struct WorkspaceConfigView {
 #[ts(export, export_to = "../../src/features/workspace/generated/")]
 pub(crate) struct TargetConfigView {
     pub(crate) id: AgentTargetId,
-    pub(crate) enabled: bool,
     pub(crate) skill_dir: String,
     pub(crate) config_path: Option<String>,
     pub(crate) mcp_config_prefix: String,
@@ -181,7 +180,6 @@ pub(crate) struct McpFormatExample {
 pub(crate) struct TargetPreset {
     pub(crate) target_id: AgentTargetId,
     pub(crate) label: String,
-    pub(crate) enabled: bool,
     pub(crate) skill_dir: String,
     pub(crate) config_path: Option<String>,
     pub(crate) mcp_config_prefix: String,
@@ -227,7 +225,6 @@ pub(crate) enum SkillSourceConfigView {
 #[ts(export, export_to = "../../src/features/workspace/generated/")]
 pub(crate) struct McpConfigView {
     pub(crate) name: String,
-    pub(crate) enabled: bool,
     pub(crate) transport: McpTransport,
     // i64/u64 travel as JSON numbers over invoke; pin them to `number` instead
     // of ts-rs' default bigint mapping.
@@ -308,7 +305,6 @@ pub(crate) struct ProjectInspection {
 #[ts(export, export_to = "../../src/features/workspace/generated/")]
 pub(crate) struct TargetInspection {
     pub(crate) id: AgentTargetId,
-    pub(crate) enabled: bool,
     pub(crate) skill_dir: PathInspection,
     pub(crate) config_path: Option<PathInspection>,
 }
@@ -326,7 +322,6 @@ pub(crate) struct PathInspection {
 #[ts(export, export_to = "../../src/features/workspace/generated/")]
 pub(crate) struct McpInspection {
     pub(crate) name: String,
-    pub(crate) enabled: bool,
     pub(crate) targets: Vec<McpTargetInspection>,
 }
 
@@ -491,19 +486,18 @@ pub(super) struct RawManagerConfig {
 pub(super) struct RawProjectConfig {
     pub(super) path: String,
     #[serde(default)]
+    // 值是没有字段的占位对象：agent 的启用状态已废弃，只剩「属于该项目」
+    // 这一条事实；`{}` 在 YAML 里可写，外部编辑时也能照抄这个形状。
     pub(super) agents: BTreeMap<String, RawProjectAgentConfig>,
 }
 
+// 空占位：保留具名类型是为了序列化出 `{}`（而不是 `null`），同时让旧配置里
+// 遗留的 enabled 键被自然忽略。
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
-pub(super) struct RawProjectAgentConfig {
-    #[serde(default = "super::default_true")]
-    pub(super) enabled: bool,
-}
+pub(super) struct RawProjectAgentConfig {}
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub(super) struct RawTargetConfig {
-    #[serde(default = "super::default_true")]
-    pub(super) enabled: bool,
     pub(super) skill_dir: String,
     #[serde(default)]
     pub(super) mcp: RawTargetMcpConfig,
@@ -547,8 +541,6 @@ pub(super) enum RawSkillSourceDefinition {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub(crate) struct RawMcpConfig {
     pub(crate) name: String,
-    #[serde(default = "super::default_true")]
-    pub(crate) enabled: bool,
     pub(crate) transport: McpTransport,
     pub(crate) created_at: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -567,7 +559,6 @@ pub(crate) struct RawMcpConfig {
 #[derive(Clone, Debug)]
 pub(crate) struct RawTargetInput {
     pub(crate) target_id: String,
-    pub(crate) enabled: bool,
     pub(crate) skill_dir: String,
     pub(crate) config_path: Option<String>,
 }
@@ -590,7 +581,6 @@ pub(super) struct ResolvedProjectConfig {
 #[derive(Clone, Debug)]
 pub(super) struct ResolvedTargetConfig {
     pub(super) id: AgentTargetId,
-    pub(super) enabled: bool,
     pub(super) is_project: bool,
     pub(super) skill_dir: PathBuf,
     pub(super) config_path: Option<PathBuf>,
@@ -616,7 +606,6 @@ pub(super) enum ResolvedSkillSourceDefinition {
 #[derive(Clone, Debug)]
 pub(super) struct ResolvedMcpConfig {
     pub(super) name: String,
-    pub(super) enabled: bool,
     pub(super) transport: McpTransport,
     pub(super) created_at: Option<i64>,
     pub(super) homepage: Option<String>,
@@ -689,7 +678,6 @@ pub(crate) struct SyncTargetOption {
     pub(crate) id: String,
     pub(crate) label: String,
     pub(crate) skill_dir: String,
-    pub(crate) enabled: bool,
     // When the skill_dir is a symlink that points at another managed target's
     // skill_dir, this holds that target's id so the UI can disable & hint.
     #[ts(optional = nullable)]

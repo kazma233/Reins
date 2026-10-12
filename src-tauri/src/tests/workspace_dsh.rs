@@ -13,7 +13,7 @@ fn dsh_fixture(
     timeout: Option<u64>,
     name: &str,
 ) -> Result<WorkspaceConfigStore> {
-    let store = WorkspaceConfigStore::at(root.path());
+    let store = WorkspaceConfigStore::at(root.path()).with_env(Environment::from_env());
     let config = json!({
         "targets": {
             "dsh": {"skill_dir": "dsh/skills", "mcp": {"config_path": "dsh/cordis.patch.yml", "config_type": "dsh"}}
@@ -35,7 +35,7 @@ fn dsh_remote_fixture(
     headers: serde_json::Value,
     name: &str,
 ) -> Result<WorkspaceConfigStore> {
-    let store = WorkspaceConfigStore::at(root.path());
+    let store = WorkspaceConfigStore::at(root.path()).with_env(Environment::from_env());
     let config = json!({
         "targets": {
             "dsh": {"skill_dir": "dsh/skills", "mcp": {"config_path": "dsh/cordis.patch.yml", "config_type": "dsh"}}
@@ -90,7 +90,7 @@ fn dsh_defaults_preset_and_prefix_relaxation() -> Result<()> {
     // 读 ambient HOME 断言默认值,必须持全局锁防并行测试翻转 env。
     let _guard = TestEnvGuard::lock();
     let home = home_dir().ok_or_else(|| anyhow!("测试环境缺少 HOME"))?;
-    let preset = target_presets_inner()
+    let preset = target_presets_inner(&Environment::from_env())
         .into_iter()
         .find(|preset| preset.target_id.as_str() == "dsh")
         .ok_or_else(|| anyhow!("缺少 dsh 预设"))?;
@@ -119,6 +119,7 @@ fn dsh_defaults_preset_and_prefix_relaxation() -> Result<()> {
     let config = parse_manager_config(
         "targets:\n  dsh:\n    skill_dir: dsh/skills\n    mcp:\n      config_path: dsh/cordis.patch.yml\n",
         &path,
+        &Environment::default(),
     )?;
     let target = resolve_target_from_id(&config, "dsh").unwrap();
     assert_eq!(target.mcp_config_type, McpConfigType::Dsh);
@@ -126,6 +127,7 @@ fn dsh_defaults_preset_and_prefix_relaxation() -> Result<()> {
     assert!(parse_manager_config(
         "targets:\n  other:\n    skill_dir: x/skills\n    mcp:\n      config_path: x/config.json\n",
         &path,
+        &Environment::default(),
     )
     .is_err());
     Ok(())
@@ -152,14 +154,13 @@ fn dsh_create_target_accepts_config_path_without_prefix() -> Result<()> {
     // 不持锁存在与并行 env 测试的 TOCTOU 窗口。
     let _guard = TestEnvGuard::lock();
     let root = TestDir::new("dsh-create-target")?;
-    let store = WorkspaceConfigStore::at(root.path());
+    let store = WorkspaceConfigStore::at(root.path()).with_env(Environment::from_env());
     fs::write(store.config_path(), "{}\n")?;
 
     create_workspace_target_inner(
         &store,
         RawTargetInput {
             target_id: "dsh".to_string(),
-            enabled: true,
             skill_dir: "dsh/skills".to_string(),
             config_path: Some("dsh/cordis.patch.yml".to_string()),
         },
@@ -239,7 +240,9 @@ fn dsh_apply_creates_patch_file_and_preview_matches() -> Result<()> {
 
     let config = store.parse()?;
     let target = resolve_target_from_id(&config, "dsh").unwrap();
-    assert!(read_existing_mcp_entries(target, &path)?.contains_key("probe"));
+    assert!(
+        read_existing_mcp_entries(target, &path, &Environment::default())?.contains_key("probe")
+    );
 
     // preview 展示的操作与落盘内容一致：用户看到的就是将要写入的。
     assert_eq!(preview_ops, ops);
@@ -339,7 +342,6 @@ fn dsh_apply_merges_into_existing_file_and_preserves_user_entries() -> Result<()
         "probe",
         RawMcpConfig {
             name: "probe".to_string(),
-            enabled: true,
             transport: McpTransport::Stdio,
             created_at: None,
             homepage: None,
@@ -433,7 +435,7 @@ fn dsh_server_name_sanitization() -> Result<()> {
     let config = store.parse()?;
     let target = resolve_target_from_id(&config, "dsh").unwrap();
     assert_eq!(
-        read_existing_mcp_entries(target, &path)?
+        read_existing_mcp_entries(target, &path, &Environment::default())?
             .keys()
             .collect::<Vec<_>>(),
         vec!["my-probe-v2---"],
@@ -509,7 +511,7 @@ fn dsh_http_transport_writes_streamable_http_entry() -> Result<()> {
     // 读回：inspect 归类与反显按 serverName 建键，远端的 url/headers 完整可读。
     let parsed = store.parse()?;
     let target = resolve_target_from_id(&parsed, "dsh").unwrap();
-    let entries = read_existing_mcp_entries(target, &path)?;
+    let entries = read_existing_mcp_entries(target, &path, &Environment::default())?;
     let read_back = entries
         .get("probe")
         .ok_or_else(|| anyhow!("读取应包含 probe"))?;
@@ -633,7 +635,7 @@ fn dsh_malformed_files_are_rejected_without_writing() -> Result<()> {
         assert!(apply_mcp_to_target_inner(&store, "probe", "dsh").is_err());
         let config = store.parse()?;
         let target = resolve_target_from_id(&config, "dsh").unwrap();
-        assert!(read_existing_mcp_entries(target, &path).is_err());
+        assert!(read_existing_mcp_entries(target, &path, &Environment::default()).is_err());
         assert!(remove_mcp_from_target_inner(&store, "probe", "dsh").is_err());
         assert_eq!(fs::read_to_string(&path)?, content);
     }

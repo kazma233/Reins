@@ -68,8 +68,6 @@ const confirmLabel = computed(() => (props.form.originalName ? "保存" : "添�
         />
       </label>
 
-      <AppCheckbox v-model="form.enabled">启用</AppCheckbox>
-
       <label class="manager-field">
         <span>主页</span>
         <small class="manager-field__hint">选填。用于记录作者主页、项目地址或文档地址，不参与连接。</small>

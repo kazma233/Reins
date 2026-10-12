@@ -54,6 +54,18 @@ _Avoid_: 命令预览（指渲染层格式化后的字符串）
 接受 skills 与 MCP 分发的一份工具配置，分全局与项目两级。
 _Avoid_: agent（太泛）、容器
 
+**环境重定向（env redirect）**：
+工具官方支持的全局目录重定位（如 `CODEX_HOME`、`CLAUDE_CONFIG_DIR`、`GROK_HOME`、`PI_CODING_AGENT_DIR`、`DSH_HOME`）。认哪个变量、默认目录是什么由 `agents.rs` 清单的 `GlobalRoot` 持有，解析统一走 `support::fs::env_home_dir`；不随重定向搬移的落点在清单里以 `~/` 前缀显式标注。域内自己再拼一份 `~/.codex` 之类的路径视为重复定义。
+_Avoid_: 路径助手（指各域自带的路径拼接函数）
+
+**安装面（install surface）**：
+「把一个 skill 装进一个 target」的物理语义：目标是否参与分发、目录链接落在哪、落点当前是什么（未安装 / 已指向本 skill / 指向同来源别的 skill / 指向别处 / 真实文件目录）、装与卸的结果。安装、冲突预演、链接枚举、按来源卸载四条路径都经 `workspace/skill_install.rs`，判定只此一份。
+_Avoid_: 链接工具函数（指各调用方自带的路径比较与 skip 判断）
+
+**启停（enable/disable）**：
+已废弃的概念。target 与 MCP 条目都没有开关：配置在盘上就是生效的，不需要分发就不写进该 target 的配置；旧 config.yaml 里的 `enabled` 键被忽略且不再写回。
+_Avoid_: 停用目标、禁用 MCP（指旧版本里的开关语义）
+
 **技能源（skill source）**：
 workspace 管理的 skill 来源（git 或本地目录），负责发现、同步、导入与分发。
 _Avoid_: skill 仓库

@@ -28,13 +28,22 @@ impl Drop for TestDir {
     }
 }
 
+// 会被 workspace/providers 路径解析读取的重定向变量：guard 统一接管，
+// 避免真实环境里的变量漏进测试（断言 home 兜底路径时尤其致命）。
+const TOOL_HOME_VARS: [&str; 5] = [
+    "GROK_HOME",
+    "PI_CODING_AGENT_DIR",
+    "CODEX_HOME",
+    "CLAUDE_CONFIG_DIR",
+    "DSH_HOME",
+];
+
 pub(crate) struct TestEnvGuard {
-    original_grok_home: Option<std::ffi::OsString>,
     original_home: Option<String>,
     original_reins_test_home: Option<std::ffi::OsString>,
     original_path: Option<String>,
-    original_pi_agent_dir: Option<String>,
     original_pi_session_dir: Option<String>,
+    original_tool_home_vars: Vec<(&'static str, Option<std::ffi::OsString>)>,
     _guard: MutexGuard<'static, ()>,
 }
 
@@ -45,12 +54,14 @@ impl TestEnvGuard {
             .unwrap_or_else(|poisoned| poisoned.into_inner());
 
         Self {
-            original_grok_home: env::var_os("GROK_HOME"),
             original_home: env::var("HOME").ok(),
             original_reins_test_home: env::var_os("REINS_TEST_HOME"),
             original_path: env::var("PATH").ok(),
-            original_pi_agent_dir: env::var("PI_CODING_AGENT_DIR").ok(),
             original_pi_session_dir: env::var("PI_CODING_AGENT_SESSION_DIR").ok(),
+            original_tool_home_vars: TOOL_HOME_VARS
+                .iter()
+                .map(|name| (*name, env::var_os(name)))
+                .collect(),
             _guard: guard,
         }
     }
@@ -60,8 +71,11 @@ impl TestEnvGuard {
         // The override isolates the Rust backends on every platform; HOME also
         // redirects child processes (opencode CLI, git) on Unix. Windows
         // ignores HOME in dirs::home_dir(), so the env var below carries the
-        // temp home into test child processes (see user_home_dir).
-        unsafe { env::remove_var("GROK_HOME") };
+        // temp home into test child processes (see user_home_dir). 工具重定向
+        // 变量一并清空：home 兜底的断言不该被真实环境里的重定向影响。
+        for name in TOOL_HOME_VARS {
+            unsafe { env::remove_var(name) };
+        }
         unsafe { env::set_var("HOME", temp_home) };
         unsafe { env::set_var("REINS_TEST_HOME", temp_home) };
         crate::support::fs::set_home_override(Some(temp_home.to_path_buf()));
@@ -77,9 +91,11 @@ impl Drop for TestEnvGuard {
     fn drop(&mut self) {
         crate::support::fs::set_home_override(None);
 
-        match &self.original_grok_home {
-            Some(path) => unsafe { env::set_var("GROK_HOME", path) },
-            None => unsafe { env::remove_var("GROK_HOME") },
+        for (name, original) in &self.original_tool_home_vars {
+            match original {
+                Some(value) => unsafe { env::set_var(name, value) },
+                None => unsafe { env::remove_var(name) },
+            }
         }
         match &self.original_home {
             Some(home) => unsafe { env::set_var("HOME", home) },
@@ -94,11 +110,6 @@ impl Drop for TestEnvGuard {
         match &self.original_path {
             Some(path) => unsafe { env::set_var("PATH", path) },
             None => unsafe { env::remove_var("PATH") },
-        }
-
-        match &self.original_pi_agent_dir {
-            Some(path) => unsafe { env::set_var("PI_CODING_AGENT_DIR", path) },
-            None => unsafe { env::remove_var("PI_CODING_AGENT_DIR") },
         }
 
         match &self.original_pi_session_dir {

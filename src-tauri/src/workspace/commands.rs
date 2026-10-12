@@ -5,6 +5,7 @@ use tauri::async_runtime;
 
 use crate::logger;
 use crate::state::skill_discovery::SkillDiscoveryState;
+use crate::support::environment::Environment;
 
 use super::{
     BatchGitSkillImportInput, BatchGitSkillImportResult, McpTargetMutationResult,
@@ -28,7 +29,7 @@ use super::{
 
 #[tauri::command]
 pub(crate) async fn get_target_presets() -> std::result::Result<Vec<super::TargetPreset>, String> {
-    run_blocking(|| Ok(super::targets::target_presets_inner())).await
+    run_blocking(|| Ok(super::targets::target_presets_inner(&environment()))).await
 }
 
 #[tauri::command]
@@ -173,7 +174,6 @@ pub(crate) async fn import_batch_git_skills(
 pub(crate) async fn create_workspace_target(
     store: tauri::State<'_, WorkspaceConfigStore>,
     target_id: String,
-    enabled: bool,
     skill_dir: String,
     config_path: Option<String>,
 ) -> std::result::Result<WorkspaceTargetMutationResult, String> {
@@ -184,7 +184,6 @@ pub(crate) async fn create_workspace_target(
             &store,
             RawTargetInput {
                 target_id,
-                enabled,
                 skill_dir,
                 config_path,
             },
@@ -198,7 +197,6 @@ pub(crate) async fn update_workspace_target(
     store: tauri::State<'_, WorkspaceConfigStore>,
     current_target_id: String,
     target_id: String,
-    enabled: bool,
     skill_dir: String,
     config_path: Option<String>,
 ) -> std::result::Result<WorkspaceTargetMutationResult, String> {
@@ -212,7 +210,6 @@ pub(crate) async fn update_workspace_target(
             &current_target_id,
             RawTargetInput {
                 target_id,
-                enabled,
                 skill_dir,
                 config_path,
             },
@@ -235,7 +232,6 @@ pub(crate) async fn delete_workspace_target(
 pub(crate) async fn create_workspace_mcp(
     store: tauri::State<'_, WorkspaceConfigStore>,
     name: String,
-    enabled: bool,
     transport: McpTransport,
     homepage: Option<String>,
     command: Option<String>,
@@ -254,7 +250,6 @@ pub(crate) async fn create_workspace_mcp(
             &store,
             RawMcpConfig {
                 name,
-                enabled,
                 transport,
                 created_at: Some(super::current_timestamp_ms()),
                 homepage,
@@ -275,7 +270,6 @@ pub(crate) async fn update_workspace_mcp(
     store: tauri::State<'_, WorkspaceConfigStore>,
     server_name: String,
     name: String,
-    enabled: bool,
     transport: McpTransport,
     homepage: Option<String>,
     command: Option<String>,
@@ -295,7 +289,6 @@ pub(crate) async fn update_workspace_mcp(
             &server_name,
             RawMcpConfig {
                 name,
-                enabled,
                 transport,
                 created_at: None,
                 homepage,
@@ -449,6 +442,11 @@ pub(crate) async fn update_skill_source(
 ) -> std::result::Result<WorkspaceState, String> {
     let store = store.inner().clone();
     run_blocking(move || update_skill_source_inner(&store, input)).await
+}
+
+// 命令层读进程环境的唯一入口：环境视图注入给各处默认路径解析。
+fn environment() -> Environment {
+    Environment::from_env()
 }
 
 async fn run_blocking<T, F>(operation: F) -> std::result::Result<T, String>

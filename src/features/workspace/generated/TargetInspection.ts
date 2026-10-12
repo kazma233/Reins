@@ -2,4 +2,4 @@
 import type { AgentTargetId } from "./AgentTargetId";
 import type { PathInspection } from "./PathInspection";
 
-export type TargetInspection = { id: AgentTargetId, enabled: boolean, skillDir: PathInspection, configPath: PathInspection | null, };
+export type TargetInspection = { id: AgentTargetId, skillDir: PathInspection, configPath: PathInspection | null, };

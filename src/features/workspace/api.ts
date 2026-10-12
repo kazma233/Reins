@@ -21,14 +21,12 @@ import type {
 
 type WorkspaceTargetPayload = {
   targetId: string;
-  enabled: boolean;
   skillDir: string;
   configPath?: string | null;
 };
 
 type WorkspaceMcpPayload = {
   name: string;
-  enabled?: boolean;
   transport: McpTransport;
   homepage?: string | null;
   command?: string | null;
@@ -49,7 +47,6 @@ type SkillSourceMutationInput = {
 function buildWorkspaceMcpPayload(payload: WorkspaceMcpPayload) {
   return {
     name: payload.name,
-    enabled: payload.enabled ?? true,
     transport: payload.transport,
     homepage: payload.homepage ?? null,
     command: payload.command ?? null,
@@ -64,7 +61,6 @@ function buildWorkspaceMcpPayload(payload: WorkspaceMcpPayload) {
 function buildWorkspaceTargetPayload(payload: WorkspaceTargetPayload) {
   return {
     targetId: payload.targetId,
-    enabled: payload.enabled,
     skillDir: payload.skillDir,
     configPath: payload.configPath ?? null,
   };

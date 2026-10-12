@@ -24,7 +24,7 @@ use serde_json::{Map as JsonMap, Value as JsonValue};
 
 use super::dialect::OPENCODE_PROTOCOL;
 use super::{
-    AppAdapter, AppCapability, ToolEnv, ensure_protocol_supported, external_entry,
+    AppAdapter, AppCapability, Environment, ensure_protocol_supported, external_entry,
     opencode_candidate_paths, read_json_object, read_jsonc_object, registration_key,
     serialize_json,
 };
@@ -233,7 +233,7 @@ impl AppAdapter for OpencodeAdapter {
         ProviderAppId::Opencode
     }
 
-    fn config_paths(&self, _env: &ToolEnv) -> Result<Vec<PathBuf>> {
+    fn config_paths(&self, _env: &Environment) -> Result<Vec<PathBuf>> {
         opencode_candidate_paths()
     }
 
@@ -267,7 +267,7 @@ impl AppAdapter for OpencodeAdapter {
 
     fn inspect(
         &self,
-        env: &ToolEnv,
+        env: &Environment,
         providers: &BTreeMap<String, ResolvedProvider>,
     ) -> Result<ProviderAppState> {
         let _ = env;
@@ -370,7 +370,7 @@ impl AppAdapter for OpencodeAdapter {
 
     fn apply(
         &self,
-        env: &ToolEnv,
+        env: &Environment,
         provider: &ResolvedProvider,
         plan: &ApplyProviderInput,
         api_key: &str,
@@ -510,7 +510,7 @@ impl AppAdapter for OpencodeAdapter {
 
     fn remove(
         &self,
-        env: &ToolEnv,
+        env: &Environment,
         provider_id: &str,
         provider: Option<&ResolvedProvider>,
     ) -> Result<Vec<(PathBuf, String)>> {
@@ -563,7 +563,11 @@ impl AppAdapter for OpencodeAdapter {
         Ok(outputs)
     }
 
-    fn remove_external(&self, env: &ToolEnv, entry_key: &str) -> Result<Vec<(PathBuf, String)>> {
+    fn remove_external(
+        &self,
+        env: &Environment,
+        entry_key: &str,
+    ) -> Result<Vec<(PathBuf, String)>> {
         let _ = env;
         let files = load_config_files()?;
         let mut outputs = Vec::new();

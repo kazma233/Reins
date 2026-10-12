@@ -99,12 +99,12 @@ const groups = computed<SyncTargetGroup[]>(() => {
         class="manager-sync-target-entry"
       >
         <label
-          :class="`manager-sync-target-row${busy || !target.enabled || target.linkedTargetId ? ' manager-sync-target-row--disabled' : ''}`"
+          :class="`manager-sync-target-row${busy || target.linkedTargetId ? ' manager-sync-target-row--disabled' : ''}`"
         >
           <input
             type="checkbox"
             :checked="selectedTargetIds.has(target.id)"
-            :disabled="busy || !target.enabled || Boolean(target.linkedTargetId)"
+            :disabled="busy || Boolean(target.linkedTargetId)"
             @change="$emit('toggleTarget', target.id)"
           />
           <span class="manager-sync-target-row__body">
@@ -129,9 +129,6 @@ const groups = computed<SyncTargetGroup[]>(() => {
             <span v-if="target.linkedTargetId" class="manager-sync-target-row__link">
               继承自 {{ target.linkedTargetId }}
             </span>
-          </span>
-          <span :class="`manager-sync-target-row__pill ${target.enabled ? 'pill--on' : 'pill--off'}`">
-            {{ target.enabled ? "启用" : "禁用" }}
           </span>
         </label>
 

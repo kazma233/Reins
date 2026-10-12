@@ -8,7 +8,11 @@ use anyhow::Result;
 use serde_json::{Value as JsonValue, json};
 use toml::Value as TomlValue;
 
-use crate::providers::apps::{MASKED_KEY, ToolEnv, registration_key};
+use crate::providers::apps::codex::CATALOG_FILE_NAME;
+use crate::providers::apps::{
+    MASKED_KEY, claude_settings_path, codex_config_path, codex_home_dir, grok_config_path,
+    opencode_candidate_paths, pi_models_path, pi_settings_path, registration_key,
+};
 use crate::providers::commands::{
     app_state_inner, apply_provider_inner, delete_provider_inner, preview_apply_inner,
     providers_state_inner, remove_external_entry_inner, remove_provider_from_app_inner,
@@ -18,6 +22,7 @@ use crate::providers::types::{
     ApplyProviderInput, ProviderAppEntryStatus, ProviderAppId, ProviderModelInput,
     ProviderProtocol, ProviderUpsertInput, ProviderWriteMode, ReasoningLevel,
 };
+use crate::support::environment::Environment;
 use crate::test_support::{TestDir, TestEnvGuard};
 
 struct Isolated {
@@ -26,7 +31,7 @@ struct Isolated {
     _data_dir: TestDir,
     _home_dir: TestDir,
     store: ProviderConfigStore,
-    env: ToolEnv,
+    env: Environment,
 }
 
 impl Isolated {
@@ -41,7 +46,9 @@ impl Isolated {
             _data_dir: data_dir,
             _home_dir: home_dir,
             store: ProviderConfigStore::at(data_path),
-            env: ToolEnv::default(),
+            // 环境视图从 guard 设好的临时 home 派生：与生产同一条读取路径，
+            // 但不依赖真实 HOME（重定向变量已被 guard 清空）。
+            env: Environment::from_env(),
         })
     }
     fn seed_provider(&self, id: &str, protocol: ProviderProtocol, base_url: &str) -> Result<()> {
@@ -175,60 +182,6 @@ fn read_text(path: &Path) -> String {
     fs::read_to_string(path).unwrap_or_default()
 }
 
-fn codex_path() -> PathBuf {
-    // home override 已生效；直接拼相对路径避免再解析一次。
-    crate::support::fs::user_home_dir()
-        .unwrap()
-        .join(".codex")
-        .join("config.toml")
-}
-
-fn claude_path() -> PathBuf {
-    crate::support::fs::user_home_dir()
-        .unwrap()
-        .join(".claude")
-        .join("settings.json")
-}
-
-fn opencode_path() -> PathBuf {
-    crate::support::fs::user_home_dir()
-        .unwrap()
-        .join(".config")
-        .join("opencode")
-        .join("opencode.json")
-}
-
-fn opencode_jsonc_path() -> PathBuf {
-    opencode_path().with_file_name("opencode.jsonc")
-}
-
-fn codex_catalog_path() -> PathBuf {
-    codex_path().with_file_name("reins-models.json")
-}
-
-fn pi_models_path() -> PathBuf {
-    crate::support::fs::user_home_dir()
-        .unwrap()
-        .join(".pi")
-        .join("agent")
-        .join("models.json")
-}
-
-fn pi_settings_path() -> PathBuf {
-    crate::support::fs::user_home_dir()
-        .unwrap()
-        .join(".pi")
-        .join("agent")
-        .join("settings.json")
-}
-
-fn grok_path() -> PathBuf {
-    crate::support::fs::user_home_dir()
-        .unwrap()
-        .join(".grok")
-        .join("config.toml")
-}
-
 fn yaml_get<'a>(value: &'a serde_yaml::Value, path: &[&str]) -> Option<&'a serde_yaml::Value> {
     let mut current = value;
     for segment in path {
@@ -254,7 +207,7 @@ fn codex_apply_writes_entry_and_pointer() -> Result<()> {
         Some(ReasoningLevel::Medium),
     )?;
 
-    let content = read_text(&codex_path());
+    let content = read_text(&codex_config_path(&isolated.env)?);
     assert!(content.contains("model_provider = \"reins-p1\""));
     assert!(content.contains("model = \"model-a\""));
     assert!(content.contains("model_reasoning_effort = \"medium\""));
@@ -304,13 +257,17 @@ fn codex_apply_is_idempotent_and_replaces_previous_platform() -> Result<()> {
     isolated.seed_model("p2", "model-b")?;
 
     isolated.apply("p1", ProviderAppId::Codex, &["model-a"], "model-a", None)?;
-    let first = read_text(&codex_path());
+    let first = read_text(&codex_config_path(&isolated.env)?);
     isolated.apply("p1", ProviderAppId::Codex, &["model-a"], "model-a", None)?;
-    assert_eq!(first, read_text(&codex_path()), "重复应用不应产生变更");
+    assert_eq!(
+        first,
+        read_text(&codex_config_path(&isolated.env)?),
+        "重复应用不应产生变更"
+    );
 
     // 替换语义：应用 p2 后 p1 的条目和指针都应消失。
     isolated.apply("p2", ProviderAppId::Codex, &["model-b"], "model-b", None)?;
-    let content = read_text(&codex_path());
+    let content = read_text(&codex_config_path(&isolated.env)?);
     assert!(!content.contains("reins-p1"));
     assert!(content.contains("model_provider = \"reins-p2\""));
     Ok(())
@@ -329,7 +286,7 @@ fn codex_remove_cleans_pointer_and_rejects_modified_entry() -> Result<()> {
     )?;
 
     isolated.remove_from("p1", ProviderAppId::Codex)?;
-    let content = read_text(&codex_path());
+    let content = read_text(&codex_config_path(&isolated.env)?);
     assert!(!content.contains("reins-p1"));
     assert!(!content.contains("model_provider ="));
     assert!(!content.contains("model_reasoning_effort"));
@@ -337,7 +294,7 @@ fn codex_remove_cleans_pointer_and_rejects_modified_entry() -> Result<()> {
 
     // 漂移配置（手工删掉 wire_api）不应被自动删。
     isolated.apply("p1", ProviderAppId::Codex, &["model-a"], "model-a", None)?;
-    let path = codex_path();
+    let path = codex_config_path(&isolated.env)?;
     let edited = read_text(&path).replace("wire_api = \"responses\"", "# removed");
     fs::write(&path, edited)?;
     assert!(isolated.remove_from("p1", ProviderAppId::Codex).is_err());
@@ -360,10 +317,12 @@ fn codex_reapply_keeps_reasoning_effort_but_switch_clears_it() -> Result<()> {
         Some(ReasoningLevel::High),
     )?;
     isolated.apply("p1", ProviderAppId::Codex, &["model-a"], "model-a", None)?;
-    assert!(read_text(&codex_path()).contains("model_reasoning_effort = \"high\""));
+    assert!(
+        read_text(&codex_config_path(&isolated.env)?).contains("model_reasoning_effort = \"high\"")
+    );
 
     isolated.apply("p2", ProviderAppId::Codex, &["model-a"], "model-a", None)?;
-    assert!(!read_text(&codex_path()).contains("model_reasoning_effort"));
+    assert!(!read_text(&codex_config_path(&isolated.env)?).contains("model_reasoning_effort"));
     Ok(())
 }
 
@@ -375,7 +334,9 @@ fn codex_apply_writes_and_clears_model_context_window() -> Result<()> {
     isolated.seed_model("p1", "model-a")?;
 
     isolated.apply("p1", ProviderAppId::Codex, &["model-a"], "model-a", None)?;
-    assert!(read_text(&codex_path()).contains("model_context_window = 200000"));
+    assert!(
+        read_text(&codex_config_path(&isolated.env)?).contains("model_context_window = 200000")
+    );
 
     // 元数据清空后替换应用不再写该键，避免残留旧窗口。
     isolated.store.upsert(ProviderUpsertInput {
@@ -396,7 +357,7 @@ fn codex_apply_writes_and_clears_model_context_window() -> Result<()> {
         }],
     })?;
     isolated.apply("p1", ProviderAppId::Codex, &["model-a"], "model-a", None)?;
-    assert!(!read_text(&codex_path()).contains("model_context_window"));
+    assert!(!read_text(&codex_config_path(&isolated.env)?).contains("model_context_window"));
     Ok(())
 }
 
@@ -408,7 +369,7 @@ fn codex_remove_clears_model_context_window() -> Result<()> {
     isolated.apply("p1", ProviderAppId::Codex, &["model-a"], "model-a", None)?;
 
     isolated.remove_from("p1", ProviderAppId::Codex)?;
-    assert!(!read_text(&codex_path()).contains("model_context_window"));
+    assert!(!read_text(&codex_config_path(&isolated.env)?).contains("model_context_window"));
     Ok(())
 }
 
@@ -427,8 +388,8 @@ fn codex_apply_writes_model_catalog_and_remove_clears_pointer() -> Result<()> {
         "model-a",
         Some(ReasoningLevel::High),
     )?;
-    let config: TomlValue = toml::from_str(&read_text(&codex_path()))?;
-    let catalog_path = codex_catalog_path();
+    let config: TomlValue = toml::from_str(&read_text(&codex_config_path(&isolated.env)?))?;
+    let catalog_path = codex_home_dir(&isolated.env)?.join(CATALOG_FILE_NAME);
     assert_eq!(
         config.get("model_catalog_json").and_then(TomlValue::as_str),
         Some(catalog_path.display().to_string().as_str())
@@ -456,7 +417,7 @@ fn codex_apply_writes_model_catalog_and_remove_clears_pointer() -> Result<()> {
 
     // 移除平台：指针随条目清掉；目录文件不再被引用，留在原地无害。
     isolated.remove_from("p1", ProviderAppId::Codex)?;
-    assert!(!read_text(&codex_path()).contains("model_catalog_json"));
+    assert!(!read_text(&codex_config_path(&isolated.env)?).contains("model_catalog_json"));
     assert!(catalog_path.exists());
     Ok(())
 }
@@ -468,7 +429,7 @@ fn codex_remove_keeps_user_model_catalog_json() -> Result<()> {
     isolated.seed_model("p1", "model-a")?;
     isolated.apply("p1", ProviderAppId::Codex, &["model-a"], "model-a", None)?;
 
-    let path = codex_path();
+    let path = codex_config_path(&isolated.env)?;
     let mut edited: TomlValue = toml::from_str(&read_text(&path))?;
     edited.as_table_mut().unwrap().insert(
         "model_catalog_json".to_string(),
@@ -477,7 +438,7 @@ fn codex_remove_keeps_user_model_catalog_json() -> Result<()> {
     fs::write(&path, toml::to_string(&edited)?)?;
 
     isolated.remove_from("p1", ProviderAppId::Codex)?;
-    let after: TomlValue = toml::from_str(&read_text(&codex_path()))?;
+    let after: TomlValue = toml::from_str(&read_text(&codex_config_path(&isolated.env)?))?;
     assert_eq!(
         after.get("model_catalog_json").and_then(TomlValue::as_str),
         Some("C:/custom/models.json")
@@ -502,12 +463,14 @@ fn claude_apply_writes_context_and_output_env_and_remove_clears_them() -> Result
     )?;
 
     isolated.apply("agg", ProviderAppId::Claude, &["model-a"], "model-a", None)?;
-    let applied: JsonValue = serde_json::from_str(&read_text(&claude_path()))?;
+    let applied: JsonValue =
+        serde_json::from_str(&read_text(&claude_settings_path(&isolated.env)?))?;
     assert_eq!(applied["env"]["CLAUDE_CODE_MAX_CONTEXT_TOKENS"], "200000");
     assert_eq!(applied["env"]["CLAUDE_CODE_MAX_OUTPUT_TOKENS"], "64000");
 
     isolated.remove_from("agg", ProviderAppId::Claude)?;
-    let removed: JsonValue = serde_json::from_str(&read_text(&claude_path()))?;
+    let removed: JsonValue =
+        serde_json::from_str(&read_text(&claude_settings_path(&isolated.env)?))?;
     assert!(removed.get("env").is_none());
     Ok(())
 }
@@ -515,7 +478,7 @@ fn claude_apply_writes_context_and_output_env_and_remove_clears_them() -> Result
 #[test]
 fn claude_apply_preserves_keys_and_remove_matches_base_url() -> Result<()> {
     let isolated = Isolated::new()?;
-    let path = claude_path();
+    let path = claude_settings_path(&isolated.env)?;
     fs::create_dir_all(path.parent().unwrap())?;
     fs::write(&path, json!({"theme": "dark"}).to_string())?;
     isolated.seed_provider(
@@ -551,7 +514,7 @@ fn claude_apply_preserves_keys_and_remove_matches_base_url() -> Result<()> {
 #[test]
 fn claude_remove_refuses_mismatched_or_orphaned_base_url() -> Result<()> {
     let isolated = Isolated::new()?;
-    let path = claude_path();
+    let path = claude_settings_path(&isolated.env)?;
     fs::create_dir_all(path.parent().unwrap())?;
     fs::write(
         &path,
@@ -579,7 +542,7 @@ fn claude_remove_refuses_mismatched_or_orphaned_base_url() -> Result<()> {
 #[test]
 fn claude_external_base_url_shows_as_external() -> Result<()> {
     let isolated = Isolated::new()?;
-    let path = claude_path();
+    let path = claude_settings_path(&isolated.env)?;
     fs::create_dir_all(path.parent().unwrap())?;
     fs::write(
         &path,
@@ -601,7 +564,7 @@ fn claude_external_base_url_shows_as_external() -> Result<()> {
 #[test]
 fn claude_apply_cleans_legacy_api_key_and_notes_it() -> Result<()> {
     let isolated = Isolated::new()?;
-    let path = claude_path();
+    let path = claude_settings_path(&isolated.env)?;
     fs::create_dir_all(path.parent().unwrap())?;
     fs::write(
         &path,
@@ -654,9 +617,10 @@ fn claude_honors_claude_config_dir() -> Result<()> {
         "https://agg.test/api",
     )?;
     let custom_dir = TestDir::new("claude-config-dir")?;
-    let env = ToolEnv {
+    // 只覆盖被检验的字段，其余保持夹具环境（home 仍是临时目录）
+    let env = Environment {
         claude_config_dir: Some(custom_dir.path().to_path_buf()),
-        ..ToolEnv::default()
+        ..isolated.env.clone()
     };
 
     apply_provider_inner(
@@ -669,7 +633,7 @@ fn claude_honors_claude_config_dir() -> Result<()> {
     let applied: JsonValue = serde_json::from_str(&read_text(&settings))?;
     assert_eq!(applied["env"]["ANTHROPIC_BASE_URL"], "https://agg.test/api");
     // 默认路径不受影响：未在 ~/.claude 下创建文件。
-    assert!(!claude_path().exists());
+    assert!(!claude_settings_path(&isolated.env)?.exists());
     Ok(())
 }
 
@@ -680,7 +644,7 @@ fn claude_honors_claude_config_dir() -> Result<()> {
 #[test]
 fn opencode_apply_adds_entry_and_remove_clears_default_model() -> Result<()> {
     let isolated = Isolated::new()?;
-    let path = opencode_path();
+    let path = opencode_candidate_paths()?[0].clone();
     fs::create_dir_all(path.parent().unwrap())?;
     fs::write(
         &path,
@@ -729,7 +693,7 @@ fn opencode_apply_adds_entry_and_remove_clears_default_model() -> Result<()> {
 #[test]
 fn opencode_apply_anthropic_uses_native_anthropic_package() -> Result<()> {
     let isolated = Isolated::new()?;
-    let path = opencode_path();
+    let path = opencode_candidate_paths()?[0].clone();
     fs::create_dir_all(path.parent().unwrap())?;
     fs::write(&path, json!({}).to_string())?;
     isolated.seed_provider_with_models(
@@ -764,7 +728,7 @@ fn opencode_apply_anthropic_uses_native_anthropic_package() -> Result<()> {
 #[test]
 fn opencode_reapply_keeps_reasoning_settings() -> Result<()> {
     let isolated = Isolated::new()?;
-    let path = opencode_path();
+    let path = opencode_candidate_paths()?[0].clone();
     fs::create_dir_all(path.parent().unwrap())?;
     fs::write(&path, json!({}).to_string())?;
     isolated.seed_provider_with_models(
@@ -803,7 +767,7 @@ fn opencode_reapply_keeps_reasoning_settings() -> Result<()> {
 #[test]
 fn opencode_reads_back_thinking_budget_level() -> Result<()> {
     let isolated = Isolated::new()?;
-    let path = opencode_path();
+    let path = opencode_candidate_paths()?[0].clone();
     fs::create_dir_all(path.parent().unwrap())?;
     fs::write(&path, json!({}).to_string())?;
     isolated.seed_provider_with_models(
@@ -841,7 +805,7 @@ fn opencode_reads_back_thinking_budget_level() -> Result<()> {
 #[test]
 fn opencode_apply_responses_uses_openai_responses_package() -> Result<()> {
     let isolated = Isolated::new()?;
-    let path = opencode_path();
+    let path = opencode_candidate_paths()?[0].clone();
     fs::create_dir_all(path.parent().unwrap())?;
     fs::write(&path, json!({}).to_string())?;
     isolated.seed_provider_with_models(
@@ -877,7 +841,7 @@ fn opencode_apply_responses_uses_openai_responses_package() -> Result<()> {
 #[test]
 fn opencode_apply_writes_model_limit_and_capabilities() -> Result<()> {
     let isolated = Isolated::new()?;
-    let path = opencode_path();
+    let path = opencode_candidate_paths()?[0].clone();
     fs::create_dir_all(path.parent().unwrap())?;
     fs::write(&path, json!({}).to_string())?;
     isolated.seed_provider_with_models(
@@ -903,7 +867,7 @@ fn opencode_apply_writes_model_limit_and_capabilities() -> Result<()> {
 #[test]
 fn opencode_apply_omits_incomplete_limit_and_narrows_modalities() -> Result<()> {
     let isolated = Isolated::new()?;
-    let path = opencode_path();
+    let path = opencode_candidate_paths()?[0].clone();
     fs::create_dir_all(path.parent().unwrap())?;
     fs::write(&path, json!({}).to_string())?;
     isolated.store.upsert(ProviderUpsertInput {
@@ -938,7 +902,7 @@ fn opencode_apply_omits_incomplete_limit_and_narrows_modalities() -> Result<()> 
 #[test]
 fn opencode_apply_writes_reasoning_effort_or_thinking_budget() -> Result<()> {
     let isolated = Isolated::new()?;
-    let path = opencode_path();
+    let path = opencode_candidate_paths()?[0].clone();
     fs::create_dir_all(path.parent().unwrap())?;
     fs::write(&path, json!({}).to_string())?;
 
@@ -999,7 +963,7 @@ fn opencode_apply_writes_reasoning_effort_or_thinking_budget() -> Result<()> {
 #[test]
 fn opencode_inspect_reads_both_v1_and_v2_nodes() -> Result<()> {
     let isolated = Isolated::new()?;
-    let path = opencode_path();
+    let path = opencode_candidate_paths()?[0].clone();
     fs::create_dir_all(path.parent().unwrap())?;
     fs::write(
         &path,
@@ -1051,7 +1015,7 @@ fn opencode_inspect_reads_both_v1_and_v2_nodes() -> Result<()> {
 #[test]
 fn opencode_reads_and_writes_jsonc_when_only_jsonc_exists() -> Result<()> {
     let isolated = Isolated::new()?;
-    let jsonc = opencode_jsonc_path();
+    let jsonc = opencode_candidate_paths()?[1].clone();
     fs::create_dir_all(jsonc.parent().unwrap())?;
     fs::write(
         &jsonc,
@@ -1074,7 +1038,7 @@ fn opencode_reads_and_writes_jsonc_when_only_jsonc_exists() -> Result<()> {
     assert_eq!(written["model"], "reins-p1/model-a");
     assert!(written["providers"]["reins-p1"].is_object());
     // 未另建 opencode.json。
-    assert!(!opencode_path().exists());
+    assert!(!opencode_candidate_paths()?[0].clone().exists());
     Ok(())
 }
 
@@ -1088,7 +1052,7 @@ fn opencode_jsonc_takes_precedence_and_apply_migrates_registration() -> Result<(
     isolated.apply("p1", ProviderAppId::Opencode, &["model-a"], "model-a", None)?;
 
     // 用户随后创建了 opencode.jsonc（只定义 providers 键）。
-    let jsonc = opencode_jsonc_path();
+    let jsonc = opencode_candidate_paths()?[1].clone();
     fs::write(
         &jsonc,
         json!({"providers": {"manual": {
@@ -1120,7 +1084,8 @@ fn opencode_jsonc_takes_precedence_and_apply_migrates_registration() -> Result<(
 
     // 再次应用：写入 .jsonc，.json 里的旧键清掉。
     isolated.apply("p1", ProviderAppId::Opencode, &["model-a"], "model-a", None)?;
-    let json_root: JsonValue = serde_json::from_str(&read_text(&opencode_path()))?;
+    let json_root: JsonValue =
+        serde_json::from_str(&read_text(&opencode_candidate_paths()?[0].clone()))?;
     let jsonc_root: JsonValue = serde_json::from_str(&read_text(&jsonc))?;
     assert!(
         json_root
@@ -1160,21 +1125,21 @@ fn pi_apply_writes_models_and_settings_then_remove_clears_defaults() -> Result<(
         "model-a",
         Some(ReasoningLevel::Low),
     )?;
-    let models: JsonValue = serde_json::from_str(&read_text(&pi_models_path()))?;
+    let models: JsonValue = serde_json::from_str(&read_text(&pi_models_path(&isolated.env)?))?;
     assert_eq!(
         models["providers"]["reins-p1"]["baseUrl"],
         "https://p1.test/v1"
     );
     assert_eq!(models["providers"]["reins-p1"]["apiKey"], "sk-test-secret");
-    let settings: JsonValue = serde_json::from_str(&read_text(&pi_settings_path()))?;
+    let settings: JsonValue = serde_json::from_str(&read_text(&pi_settings_path(&isolated.env)?))?;
     assert_eq!(settings["defaultProvider"], "reins-p1");
     assert_eq!(settings["defaultThinkingLevel"], "low");
 
     // 默认 Provider 仍指向 → 随移除清掉默认三元组。
     isolated.remove_from("p1", ProviderAppId::Pi)?;
-    let models: JsonValue = serde_json::from_str(&read_text(&pi_models_path()))?;
+    let models: JsonValue = serde_json::from_str(&read_text(&pi_models_path(&isolated.env)?))?;
     assert!(models["providers"].get("reins-p1").is_none());
-    let settings: JsonValue = serde_json::from_str(&read_text(&pi_settings_path()))?;
+    let settings: JsonValue = serde_json::from_str(&read_text(&pi_settings_path(&isolated.env)?))?;
     assert!(settings.get("defaultProvider").is_none());
     assert!(settings.get("defaultModel").is_none());
     assert!(settings.get("defaultThinkingLevel").is_none());
@@ -1194,7 +1159,7 @@ fn pi_off_level_writes_off() -> Result<()> {
         "model-a",
         Some(ReasoningLevel::Off),
     )?;
-    let settings: JsonValue = serde_json::from_str(&read_text(&pi_settings_path()))?;
+    let settings: JsonValue = serde_json::from_str(&read_text(&pi_settings_path(&isolated.env)?))?;
     assert_eq!(settings["defaultThinkingLevel"], "off");
 
     // 反读要把 "off" 还原成 off，否则应用弹窗预选不出来。
@@ -1255,7 +1220,7 @@ fn pi_apply_writes_thinking_level_map_from_model_levels() -> Result<()> {
         "model-levels",
         None,
     )?;
-    let models: JsonValue = serde_json::from_str(&read_text(&pi_models_path()))?;
+    let models: JsonValue = serde_json::from_str(&read_text(&pi_models_path(&isolated.env)?))?;
     let entries = models["providers"]["reins-p1"]["models"]
         .as_array()
         .expect("models array");
@@ -1305,7 +1270,7 @@ fn grok_anthropic_apply_uses_extra_headers_and_remove_clears_default() -> Result
         "model-a",
         None,
     )?;
-    let content = read_text(&grok_path());
+    let content = read_text(&grok_config_path(&isolated.env)?);
     assert!(content.contains("[model_providers.reins-p1]"));
     assert!(content.contains("api_backend = \"messages\""));
     // base_url 已带 /v1 时原样写入，不重复追加。
@@ -1317,7 +1282,7 @@ fn grok_anthropic_apply_uses_extra_headers_and_remove_clears_default() -> Result
     assert!(content.contains("default = \"reins-p1--model-a\""));
 
     // 默认模型仍引用该平台 → 随移除清掉 models.default。
-    let path = grok_path();
+    let path = grok_config_path(&isolated.env)?;
     isolated.remove_from("p1", ProviderAppId::Grokbuild)?;
     let content = read_text(&path);
     assert!(!content.contains("reins-p1"));
@@ -1350,11 +1315,11 @@ fn grok_reapply_switches_default_and_keeps_other_provider() -> Result<()> {
 
     isolated.apply("p1", ProviderAppId::Grokbuild, &["m1"], "m1", None)?;
     isolated.apply("p2", ProviderAppId::Grokbuild, &["m3"], "m3", None)?;
-    assert!(read_text(&grok_path()).contains("default = \"reins-p2--m3\""));
+    assert!(read_text(&grok_config_path(&isolated.env)?).contains("default = \"reins-p2--m3\""));
 
     // 重新应用 p1 并把默认模型换成自己的另一个模型。
     isolated.apply("p1", ProviderAppId::Grokbuild, &["m1", "m2"], "m2", None)?;
-    let content = read_text(&grok_path());
+    let content = read_text(&grok_config_path(&isolated.env)?);
     assert!(content.contains("default = \"reins-p1--m2\""));
     assert!(content.contains("[model_providers.reins-p2]"));
     assert!(content.contains("reins-p2--m3"));
@@ -1395,7 +1360,7 @@ fn grok_max_reasoning_writes_xhigh() -> Result<()> {
         "model-a",
         Some(ReasoningLevel::Max),
     )?;
-    let content = read_text(&grok_path());
+    let content = read_text(&grok_config_path(&isolated.env)?);
     assert!(content.contains("default_reasoning_effort = \"xhigh\""));
     Ok(())
 }
@@ -1416,7 +1381,7 @@ fn grok_apply_writes_context_window_and_reasoning_support() -> Result<()> {
         "model-a",
         Some(ReasoningLevel::High),
     )?;
-    let content = read_text(&grok_path());
+    let content = read_text(&grok_config_path(&isolated.env)?);
     assert!(content.contains("context_window = 200000"));
     assert!(content.contains("supports_reasoning_effort = true"));
     assert!(content.contains("default_reasoning_effort = \"high\""));
@@ -1461,7 +1426,7 @@ fn grok_apply_omits_absent_model_metadata() -> Result<()> {
         "model-a",
         None,
     )?;
-    let content = read_text(&grok_path());
+    let content = read_text(&grok_config_path(&isolated.env)?);
     assert!(!content.contains("context_window"));
     assert!(!content.contains("supports_reasoning_effort"));
     assert!(!content.contains("max_completion_tokens"));
@@ -1590,7 +1555,7 @@ fn grok_anthropic_base_url_gets_v1_suffix_and_inspect_stays_applied() -> Result<
         "model-a",
         None,
     )?;
-    let content = read_text(&grok_path());
+    let content = read_text(&grok_config_path(&isolated.env)?);
     assert!(content.contains("base_url = \"https://p1.test/anthropic/v1\""));
 
     let state = isolated.state()?;
@@ -2164,9 +2129,9 @@ fn dsh_honors_dsh_home() -> Result<()> {
         vec!["model-a".to_string()],
     )?;
     let custom_dir = TestDir::new("dsh-home")?;
-    let env = ToolEnv {
+    let env = Environment {
         dsh_home: Some(custom_dir.path().to_path_buf()),
-        ..ToolEnv::default()
+        ..isolated.env.clone()
     };
 
     apply_provider_inner(
@@ -2298,7 +2263,10 @@ fn preview_masks_key_and_does_not_write() -> Result<()> {
         .join("\n");
     assert!(rendered.contains(MASKED_KEY));
     assert!(!rendered.contains("sk-test-secret"));
-    assert!(!codex_path().exists(), "预览不应写文件");
+    assert!(
+        !codex_config_path(&isolated.env)?.exists(),
+        "预览不应写文件"
+    );
 
     // 缺 Key 时预览直接报错。
     isolated.clear_key("p1")?;
@@ -2321,7 +2289,7 @@ fn preview_after_apply_masks_secret_in_old_file() -> Result<()> {
     isolated.seed_model("p1", "model-a")?;
 
     isolated.apply("p1", ProviderAppId::Codex, &["model-a"], "model-a", None)?;
-    let raw = std::fs::read_to_string(codex_path())?;
+    let raw = std::fs::read_to_string(codex_config_path(&isolated.env)?)?;
     assert!(raw.contains("sk-test-secret"), "apply 应写入真实密钥");
 
     let preview = preview_apply_inner(
@@ -2377,7 +2345,7 @@ fn registration_key_uses_reins_prefix() -> Result<()> {
 #[test]
 fn codex_remove_external_clears_active_provider() -> Result<()> {
     let isolated = Isolated::new()?;
-    let path = codex_path();
+    let path = codex_config_path(&isolated.env)?;
     fs::create_dir_all(path.parent().unwrap())?;
     fs::write(
         &path,
@@ -2400,7 +2368,7 @@ fn codex_remove_external_clears_active_provider() -> Result<()> {
 #[test]
 fn opencode_remove_external_clears_default_model() -> Result<()> {
     let isolated = Isolated::new()?;
-    let path = opencode_path();
+    let path = opencode_candidate_paths()?[0].clone();
     fs::create_dir_all(path.parent().unwrap())?;
     fs::write(
         &path,
@@ -2428,8 +2396,8 @@ fn opencode_remove_external_clears_default_model() -> Result<()> {
 #[test]
 fn pi_remove_external_clears_default_provider() -> Result<()> {
     let isolated = Isolated::new()?;
-    let models = pi_models_path();
-    let settings = pi_settings_path();
+    let models = pi_models_path(&isolated.env)?;
+    let settings = pi_settings_path(&isolated.env)?;
     fs::create_dir_all(models.parent().unwrap())?;
     fs::write(
         &models,
@@ -2462,7 +2430,7 @@ fn pi_remove_external_clears_default_provider() -> Result<()> {
 #[test]
 fn grok_remove_external_removes_models_and_clears_default() -> Result<()> {
     let isolated = Isolated::new()?;
-    let path = grok_path();
+    let path = grok_config_path(&isolated.env)?;
     fs::create_dir_all(path.parent().unwrap())?;
     fs::write(
         &path,
@@ -2498,7 +2466,7 @@ fn grok_standalone_model_entry_shows_as_external() -> Result<()> {
         ProviderProtocol::OpenaiResponses,
         "https://gw.test/v1",
     )?;
-    let path = grok_path();
+    let path = grok_config_path(&isolated.env)?;
     fs::create_dir_all(path.parent().unwrap())?;
     fs::write(
         &path,
@@ -2541,7 +2509,7 @@ fn grok_standalone_model_entry_shows_as_external() -> Result<()> {
 #[test]
 fn grok_model_mounted_on_provider_is_not_listed_separately() -> Result<()> {
     let isolated = Isolated::new()?;
-    let path = grok_path();
+    let path = grok_config_path(&isolated.env)?;
     fs::create_dir_all(path.parent().unwrap())?;
     fs::write(
         &path,
@@ -2566,7 +2534,7 @@ fn grok_model_mounted_on_provider_is_not_listed_separately() -> Result<()> {
 #[test]
 fn grok_remove_external_removes_standalone_model_and_clears_default() -> Result<()> {
     let isolated = Isolated::new()?;
-    let path = grok_path();
+    let path = grok_config_path(&isolated.env)?;
     fs::create_dir_all(path.parent().unwrap())?;
     fs::write(
         &path,

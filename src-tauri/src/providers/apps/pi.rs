@@ -9,8 +9,9 @@ use serde_json::{Map as JsonMap, Value as JsonValue};
 
 use super::dialect::{PI_AI_PROTOCOL, PI_AI_REASONING};
 use super::{
-    AppAdapter, AppCapability, ToolEnv, display_path, ensure_protocol_supported, external_entry,
-    pi_models_path, pi_settings_path, read_json_object, registration_key, serialize_json,
+    AppAdapter, AppCapability, Environment, display_path, ensure_protocol_supported,
+    external_entry, pi_models_path, pi_settings_path, read_json_object, registration_key,
+    serialize_json,
 };
 use crate::providers::types::{
     ApplyProviderInput, ProviderAppId, ProviderAppState, ProviderProtocol, ReasoningLevel,
@@ -42,7 +43,7 @@ impl AppAdapter for PiAdapter {
         ProviderAppId::Pi
     }
 
-    fn config_paths(&self, env: &ToolEnv) -> Result<Vec<PathBuf>> {
+    fn config_paths(&self, env: &Environment) -> Result<Vec<PathBuf>> {
         Ok(vec![pi_models_path(env)?, pi_settings_path(env)?])
     }
 
@@ -67,7 +68,7 @@ impl AppAdapter for PiAdapter {
 
     fn inspect(
         &self,
-        env: &ToolEnv,
+        env: &Environment,
         providers: &BTreeMap<String, ResolvedProvider>,
     ) -> Result<ProviderAppState> {
         let models_path = pi_models_path(env)?;
@@ -133,7 +134,7 @@ impl AppAdapter for PiAdapter {
 
     fn apply(
         &self,
-        env: &ToolEnv,
+        env: &Environment,
         provider: &ResolvedProvider,
         plan: &ApplyProviderInput,
         api_key: &str,
@@ -236,7 +237,7 @@ impl AppAdapter for PiAdapter {
 
     fn remove(
         &self,
-        env: &ToolEnv,
+        env: &Environment,
         provider_id: &str,
         provider: Option<&ResolvedProvider>,
     ) -> Result<Vec<(PathBuf, String)>> {
@@ -282,7 +283,11 @@ impl AppAdapter for PiAdapter {
         Ok(files)
     }
 
-    fn remove_external(&self, env: &ToolEnv, entry_key: &str) -> Result<Vec<(PathBuf, String)>> {
+    fn remove_external(
+        &self,
+        env: &Environment,
+        entry_key: &str,
+    ) -> Result<Vec<(PathBuf, String)>> {
         let models_path = pi_models_path(env)?;
         let settings_path = pi_settings_path(env)?;
         if !models_path.exists() {

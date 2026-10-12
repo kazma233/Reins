@@ -14,6 +14,7 @@ use super::WorkspaceConfigStore;
 use super::display_path;
 use super::normalize_target_id;
 use super::types::*;
+use crate::support::environment::{Environment, manifest_path};
 
 // ---------------------------------------------------------------------------
 // Directory-link skill_dir detection (project targets linked to another agent)
@@ -112,13 +113,14 @@ pub(crate) fn create_workspace_target_inner(
         // 想要 MCP,避免默认值诱发校验噪音);用户显式提供 config_path 时
         // 从 defaults 取同工具的 configPrefix,与解析侧同口径。
         let target_id = normalize_target_id(&input.target_id)?;
-        let config_type = builtin_create_config_type(&target_id)?;
+        let env = store.env();
+        let config_type = builtin_create_config_type(&target_id, env)?;
         let defaults_prefix = input
             .config_path
             .as_deref()
             .filter(|path| !path.trim().is_empty())
             .and_then(|_| {
-                builtin_target_defaults_map()
+                builtin_target_defaults_map(env)
                     .get(&target_id)
                     .map(|defaults| defaults.config_prefix.to_string())
             });
@@ -127,6 +129,7 @@ pub(crate) fn create_workspace_target_inner(
             Some(config_type),
             defaults_prefix,
             config.config_path(),
+            env,
         )?;
 
         if raw_config.targets.contains_key(target_id.as_str()) {
@@ -171,8 +174,13 @@ pub(crate) fn update_workspace_target_inner(
             .targets
             .get(current_target_id.as_str())
             .and_then(|target| target.mcp.config_type);
-        let (next_target_id, next_target) =
-            normalize_raw_target_input(input, stored_config_type, stored, config.config_path())?;
+        let (next_target_id, next_target) = normalize_raw_target_input(
+            input,
+            stored_config_type,
+            stored,
+            config.config_path(),
+            store.env(),
+        )?;
 
         if next_target_id != current_target_id
             && raw_config.targets.contains_key(next_target_id.as_str())
@@ -233,7 +241,7 @@ pub(crate) fn create_workspace_project_inner(
         let mut agents = BTreeMap::new();
         for agent_name in &input.agents {
             let id = normalize_target_id(agent_name)?;
-            agents.insert(id.0, RawProjectAgentConfig { enabled: true });
+            agents.insert(id.0, RawProjectAgentConfig {});
         }
         raw_config.projects.insert(
             project_id.clone(),
@@ -266,7 +274,7 @@ pub(crate) fn update_workspace_project_inner(
         let mut agents = BTreeMap::new();
         for agent_name in &input.agents {
             let id = normalize_target_id(agent_name)?;
-            agents.insert(id.0, RawProjectAgentConfig { enabled: true });
+            agents.insert(id.0, RawProjectAgentConfig {});
         }
         raw_config.projects.insert(
             original_id.clone(),
@@ -314,6 +322,7 @@ fn normalize_raw_target_input(
     // 客户端不再传,有效值由调用方按场景选好传入。
     persisted_config_prefix: Option<String>,
     _config_path: &Path,
+    env: &Environment,
 ) -> Result<(AgentTargetId, RawTargetConfig)> {
     let target_id = normalize_target_id(&input.target_id)?;
     let skill_dir = normalize_target_skill_dir(&input.skill_dir)?;
@@ -333,7 +342,7 @@ fn normalize_raw_target_input(
     // 校验用的有效类型与解析侧同口径：存量值优先，其次内置 defaults。
     let effective_config_type = persisted_config_type
         .or_else(|| {
-            builtin_target_defaults_map()
+            builtin_target_defaults_map(env)
                 .get(&target_id)
                 .map(|defaults| defaults.config_type)
         })
@@ -359,7 +368,6 @@ fn normalize_raw_target_input(
     Ok((
         target_id,
         RawTargetConfig {
-            enabled: input.enabled,
             skill_dir,
             mcp: RawTargetMcpConfig {
                 config_path: normalized_config_path,
@@ -382,8 +390,11 @@ fn normalize_target_skill_dir(value: &str) -> Result<String> {
 
 // create 只允许为内置工具建 target，并从同一份 defaults 派生 MCP 格式；
 // 存量自定义 target 不迁移，照常解析、渲染、编辑、删除（update 不走此校验）。
-fn builtin_create_config_type(target_id: &AgentTargetId) -> Result<McpConfigType> {
-    builtin_target_defaults_map()
+fn builtin_create_config_type(
+    target_id: &AgentTargetId,
+    env: &Environment,
+) -> Result<McpConfigType> {
+    builtin_target_defaults_map(env)
         .get(target_id)
         .map(|defaults| defaults.config_type)
         .ok_or_else(|| {
@@ -427,8 +438,8 @@ fn grokbuild_home_uses_environment_before_home_default() {
     );
 }
 
-pub(crate) fn target_presets_inner() -> Vec<TargetPreset> {
-    let defaults = builtin_target_defaults_map();
+pub(crate) fn target_presets_inner(env: &Environment) -> Vec<TargetPreset> {
+    let defaults = builtin_target_defaults_map(env);
     crate::agents::AGENTS
         .iter()
         .filter_map(|spec| {
@@ -437,7 +448,6 @@ pub(crate) fn target_presets_inner() -> Vec<TargetPreset> {
             Some(TargetPreset {
                 target_id: defaults.id.clone(),
                 label: spec.label.to_string(),
-                enabled: true,
                 skill_dir: display_path(&defaults.skill_dir),
                 config_path: defaults.config_path.as_deref().map(display_path),
                 mcp_config_prefix: defaults.config_prefix.to_string(),
@@ -446,25 +456,20 @@ pub(crate) fn target_presets_inner() -> Vec<TargetPreset> {
         .collect()
 }
 
-// 全局 defaults 从 agents 清单派生：路径 = GlobalRoot 解析结果 + spec 的
+// 全局 defaults 从 agents 清单派生：路径 = 环境解析出的 GlobalRoot + spec 的
 // 相对布局；根目录解析失败（无 HOME）时 skill_dir 落空串、config_path 落
 // None，与逐条手写时代的口径一致。
-pub(crate) fn builtin_target_defaults() -> Vec<TargetDefaults> {
+pub(crate) fn builtin_target_defaults(env: &Environment) -> Vec<TargetDefaults> {
     crate::agents::AGENTS
         .iter()
         .filter_map(|spec| {
             let target_id = spec.target_id?;
-            let root = spec.global.root.resolve();
+            let root = spec.global.root.resolve(env);
+            let resolve_path = |path: &str| manifest_path(env, root.clone(), path);
             Some(TargetDefaults {
                 id: AgentTargetId(target_id.to_string()),
-                skill_dir: root
-                    .as_ref()
-                    .map(|base| base.join(spec.global.skill_dir))
-                    .unwrap_or_default(),
-                config_path: spec
-                    .global
-                    .mcp_config_path
-                    .and_then(|rel| root.as_ref().map(|base| base.join(rel))),
+                skill_dir: resolve_path(spec.global.skill_dir).unwrap_or_default(),
+                config_path: spec.global.mcp_config_path.and_then(resolve_path),
                 config_prefix: spec.mcp.prefix,
                 config_type: spec.mcp.config_type,
             })
@@ -472,8 +477,13 @@ pub(crate) fn builtin_target_defaults() -> Vec<TargetDefaults> {
         .collect()
 }
 
-pub(super) fn builtin_target_defaults_map() -> HashMap<AgentTargetId, TargetDefaults> {
-    builtin_target_defaults()
+// 清单路径的解析口径（`~/` 语义）在 support::environment::manifest_path，
+// 与 providers 同源；调用方只负责准备好 root。
+
+pub(super) fn builtin_target_defaults_map(
+    env: &Environment,
+) -> HashMap<AgentTargetId, TargetDefaults> {
+    builtin_target_defaults(env)
         .into_iter()
         .map(|item| (item.id.clone(), item))
         .collect()

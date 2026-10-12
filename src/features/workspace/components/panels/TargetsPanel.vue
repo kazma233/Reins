@@ -19,14 +19,12 @@ const { configDocument, loadingInspection, runningAction, loadError, retryWorksp
 const {
   targetCreateDialog,
   targetDeleteDialog,
-  pendingToggleTargetIds,
   openTargetCreateDialog,
   openTargetEditDialog,
   closeTargetCreateDialog,
   clearTargetFormError,
   loadTargetPresets,
   handleApplyBuiltinTargetPreset,
-  toggleTargetEnabled,
   openTargetDeleteDialog,
   closeTargetDeleteDialog,
   handlePickTargetSkillDirectory,
@@ -52,15 +50,6 @@ const {
 const configTargets = computed(() => configDocument.value?.config?.targets ?? []);
 const configProjects = computed(() => configDocument.value?.config?.projects ?? []);
 
-// 启停失败的结果跟卡片按钮放在一起：结果按 target id 常驻，reload 重建卡片后仍在。
-function toggleError(targetId: string): string | null {
-  return store.actionResults[`target-toggle:${targetId}`]?.message ?? null;
-}
-
-// 启停不进整页忙碌态，进行中的卡片自己锁定（文案不变，按钮宽度不会跟着跳）。
-function isTogglingTarget(targetId: string): boolean {
-  return pendingToggleTargetIds.value.has(targetId);
-}
 </script>
 
 <template>
@@ -107,36 +96,20 @@ function isTogglingTarget(targetId: string): boolean {
                 >
                   <template #header>
                     <span class="manager-target-row__name-text">{{ formatTargetLabel(target.id) }}</span>
-                    <!-- 启用是常态不标注，只有停用才提示；状态变化由「停用/启用」按钮承载 -->
-                    <span v-if="!target.enabled" class="manager-target-row__pill pill--off">已停用</span>
                   </template>
                   <template #ext>
                     <div class="manager-target-row__actions">
-                      <AppResultBadge
-                        v-if="toggleError(target.id)"
-                        placement="bottom"
-                        :message="toggleError(target.id) ?? ''"
-                        tone="danger"
-                      />
                       <button
                         class="secondary-button"
-                        :disabled="runningAction || isTogglingTarget(target.id)"
+                        :disabled="runningAction"
                         type="button"
                         @click="openTargetEditDialog(target)"
                       >
                         编辑
                       </button>
                       <button
-                        class="secondary-button"
-                        :disabled="runningAction || isTogglingTarget(target.id)"
-                        type="button"
-                        @click="toggleTargetEnabled(target)"
-                      >
-                        {{ target.enabled ? "停用" : "启用" }}
-                      </button>
-                      <button
                         class="danger-button"
-                        :disabled="runningAction || isTogglingTarget(target.id)"
+                        :disabled="runningAction"
                         type="button"
                         @click="openTargetDeleteDialog(target.id)"
                       >
@@ -200,8 +173,6 @@ function isTogglingTarget(targetId: string): boolean {
                         <span class="manager-project-target-path__name">
                           {{ formatTargetLabel(target.id) }}
                         </span>
-                        <!-- 启用是常态不标注，与外层卡片的状态处理一致 -->
-                        <span v-if="!target.enabled" class="manager-target-row__pill pill--off">已停用</span>
                       </div>
                       <div class="manager-project-target-path__items">
                         <span><strong>skill</strong><span>{{ target.skillDir }}</span></span>

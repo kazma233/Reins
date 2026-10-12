@@ -28,7 +28,6 @@ function inspectionWithInstalledTarget() {
     mcps: [
       {
         name: "filesystem",
-        enabled: true,
         targets: [
           {
             targetId: "codex" as const,
@@ -53,7 +52,6 @@ function setup() {
 function openExistingMcp(mutations: ReturnType<typeof useMcpMutations>) {
   mutations.openMcpEditDialog({
     name: "filesystem",
-    enabled: true,
     transport: "stdio",
     createdAt: 1,
     homepage: null,
@@ -126,7 +124,6 @@ it("saves a renamed mcp directly when it is not installed anywhere", async () =>
 describe("卡片上的同步到目标", () => {
   const mcpView = {
     name: "filesystem",
-    enabled: true,
     transport: "stdio" as const,
     createdAt: 1,
     homepage: null,

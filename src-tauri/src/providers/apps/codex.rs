@@ -15,7 +15,7 @@ use toml::Value as TomlValue;
 
 use super::dialect::CODEX_PROTOCOL;
 use super::{
-    AppAdapter, AppCapability, ModelField, ToolEnv, classify_reins_entry, codex_config_path,
+    AppAdapter, AppCapability, Environment, ModelField, classify_reins_entry, codex_config_path,
     codex_home_dir, display_path, ensure_protocol_supported, external_entry, read_toml,
     registration_key, serialize_toml,
 };
@@ -31,7 +31,7 @@ fn wire_api() -> &'static str {
     CODEX_PROTOCOL.spell(ProviderProtocol::OpenaiResponses)
 }
 
-const CATALOG_FILE_NAME: &str = "reins-models.json";
+pub(crate) const CATALOG_FILE_NAME: &str = "reins-models.json";
 
 // codex 内置兜底提示词（codex-rs/models-manager/prompt.md，Apache-2.0，
 // 取自 openai/codex rust-v0.145.0）。目录条目的 instructions_template 是
@@ -143,7 +143,7 @@ impl AppAdapter for CodexAdapter {
         ProviderAppId::Codex
     }
 
-    fn config_paths(&self, env: &ToolEnv) -> Result<Vec<PathBuf>> {
+    fn config_paths(&self, env: &Environment) -> Result<Vec<PathBuf>> {
         Ok(vec![codex_config_path(env)?])
     }
 
@@ -173,7 +173,7 @@ impl AppAdapter for CodexAdapter {
 
     fn inspect(
         &self,
-        env: &ToolEnv,
+        env: &Environment,
         providers: &BTreeMap<String, ResolvedProvider>,
     ) -> Result<ProviderAppState> {
         let path = codex_config_path(env)?;
@@ -242,7 +242,7 @@ impl AppAdapter for CodexAdapter {
 
     fn apply(
         &self,
-        env: &ToolEnv,
+        env: &Environment,
         provider: &ResolvedProvider,
         plan: &ApplyProviderInput,
         api_key: &str,
@@ -375,7 +375,7 @@ impl AppAdapter for CodexAdapter {
 
     fn remove(
         &self,
-        env: &ToolEnv,
+        env: &Environment,
         provider_id: &str,
         provider: Option<&ResolvedProvider>,
     ) -> Result<Vec<(PathBuf, String)>> {
@@ -460,7 +460,11 @@ impl AppAdapter for CodexAdapter {
         Ok(vec![(path, serialize_toml(&root)?)])
     }
 
-    fn remove_external(&self, env: &ToolEnv, entry_key: &str) -> Result<Vec<(PathBuf, String)>> {
+    fn remove_external(
+        &self,
+        env: &Environment,
+        entry_key: &str,
+    ) -> Result<Vec<(PathBuf, String)>> {
         let path = codex_config_path(env)?;
         if !path.exists() {
             bail!("Codex 配置文件不存在：{}", display_path(&path));

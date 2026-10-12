@@ -19,6 +19,7 @@ use super::mcp_formats::{McpFormatWriter, mcp_format_writer};
 use super::targets::builtin_target_defaults_map;
 use super::types::*;
 use super::{display_path, parse_manager_config, resolve_target_from_id};
+use crate::support::environment::Environment;
 use crate::support::fs::write_atomic;
 
 // 测试经 mod.rs 的 `use self::mcps::desired_opencode_mcp` 取该构造器；
@@ -44,10 +45,6 @@ pub(crate) fn apply_mcp_to_target_inner(
         .ok_or_else(|| anyhow!("MCP not found: {server_name}"))?;
     let target = resolve_target_from_id(&config, target_id)
         .ok_or_else(|| anyhow!("Missing target {target_id}"))?;
-
-    if !target.enabled {
-        bail!("目标 {target_id} 已禁用。");
-    }
 
     let Some(_config_path) = target.config_path.as_ref() else {
         bail!("目标 {target_id} 没有 MCP 配置路径。");
@@ -79,10 +76,6 @@ pub(crate) fn preview_mcp_target_inner(
     let target = resolve_target_from_id(&config, target_id)
         .ok_or_else(|| anyhow!("Missing target {target_id}"))?;
 
-    if !target.enabled {
-        bail!("目标 {target_id} 已禁用。");
-    }
-
     let config_path = target
         .config_path
         .as_ref()
@@ -109,10 +102,6 @@ pub(crate) fn remove_mcp_from_target_inner(
     let target = resolve_target_from_id(&config, target_id)
         .ok_or_else(|| anyhow!("Missing target {target_id}"))?;
 
-    if !target.enabled {
-        bail!("目标 {target_id} 已禁用。");
-    }
-
     let mutation = remove_mcp_from_target_config(target, &server_name)?;
 
     Ok(McpTargetMutationResult {
@@ -131,8 +120,9 @@ pub(crate) fn remove_mcp_from_target_inner(
 pub(super) fn read_existing_mcp_entries(
     target: &ResolvedTargetConfig,
     config_path: &Path,
+    env: &Environment,
 ) -> Result<BTreeMap<String, JsonValue>> {
-    mcp_format_writer(target.mcp_config_type).read_existing_entries(target, config_path)
+    mcp_format_writer(target.mcp_config_type).read_existing_entries(target, config_path, env)
 }
 
 fn preview_mcp_entry(
@@ -190,8 +180,9 @@ pub(super) fn read_file_entries<W: McpFormatWriter + ?Sized>(
     writer: &W,
     target: &ResolvedTargetConfig,
     config_path: &Path,
+    env: &Environment,
 ) -> Result<BTreeMap<String, JsonValue>> {
-    let target = resolve_read_target_for_config(target, config_path)?;
+    let target = resolve_read_target_for_config(target, config_path, env)?;
     match detect_supported_format(writer, config_path)? {
         McpConfigFileFormat::Toml => {
             let mut root = read_toml_config(config_path)?;
@@ -335,9 +326,10 @@ fn detect_supported_format<W: McpFormatWriter + ?Sized>(
 fn resolve_read_target_for_config(
     target: &ResolvedTargetConfig,
     config_path: &Path,
+    env: &Environment,
 ) -> Result<ResolvedTargetConfig> {
     if target.mcp_config_prefix.trim().is_empty() {
-        if let Some(fallback) = inferred_target_layout(&target.id, config_path) {
+        if let Some(fallback) = inferred_target_layout(&target.id, config_path, env) {
             return Ok(fallback);
         }
     }
@@ -348,13 +340,13 @@ fn resolve_read_target_for_config(
 fn inferred_target_layout(
     target_id: &AgentTargetId,
     config_path: &Path,
+    env: &Environment,
 ) -> Option<ResolvedTargetConfig> {
-    let defaults = builtin_target_defaults_map();
+    let defaults = builtin_target_defaults_map(env);
     let default = defaults.get(target_id)?;
 
     Some(ResolvedTargetConfig {
         id: target_id.clone(),
-        enabled: true,
         is_project: false,
         skill_dir: default.skill_dir.clone(),
         config_path: Some(config_path.to_path_buf()),
@@ -622,7 +614,8 @@ pub(crate) fn delete_workspace_mcp_inner(
     store.locked(|config| {
         let raw_content = config.read_raw()?;
         let mut raw_config: RawManagerConfig = serde_yaml::from_str(&raw_content)?;
-        let resolved_config = parse_manager_config(&raw_content, config.config_path())?;
+        let resolved_config =
+            parse_manager_config(&raw_content, config.config_path(), config.env())?;
         let server_name = normalize_mcp_name(server_name)?;
         let mut updated_paths = vec![display_path(config.config_path())];
 
@@ -681,7 +674,6 @@ fn normalize_mcp_name(value: &str) -> Result<String> {
 fn normalize_raw_mcp(raw_mcp: RawMcpConfig, name: String) -> Result<RawMcpConfig> {
     let next = RawMcpConfig {
         name,
-        enabled: raw_mcp.enabled,
         transport: raw_mcp.transport,
         created_at: raw_mcp.created_at,
         homepage: raw_mcp

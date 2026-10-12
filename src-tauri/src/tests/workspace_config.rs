@@ -11,7 +11,7 @@ use crate::test_support::TestDir;
 // sources. Local sources keep the test off the network and off the real git
 // cache directory.
 fn store_with_local_sources(root: &TestDir, source_ids: &[&str]) -> Result<WorkspaceConfigStore> {
-    let store = WorkspaceConfigStore::at(root.path());
+    let store = WorkspaceConfigStore::at(root.path()).with_env(Environment::from_env());
     let raw = RawManagerConfig {
         skill_sources: source_ids
             .iter()
@@ -118,7 +118,7 @@ fn delete_skill_sources_inner_rejects_empty_input() -> Result<()> {
 #[test]
 fn create_workspace_target_inner_writes_target_to_config() -> Result<()> {
     let root = TestDir::new("config-create-target")?;
-    let store = WorkspaceConfigStore::at(root.path());
+    let store = WorkspaceConfigStore::at(root.path()).with_env(Environment::from_env());
     fs::write(
         store.config_path(),
         serde_yaml::to_string(&RawManagerConfig::default())?,
@@ -128,7 +128,6 @@ fn create_workspace_target_inner_writes_target_to_config() -> Result<()> {
         &store,
         RawTargetInput {
             target_id: "codex".to_string(),
-            enabled: true,
             skill_dir: root.path().join("codex-skills").display().to_string(),
             config_path: Some("~/.codex/config.toml".to_string()),
         },
@@ -149,7 +148,7 @@ fn create_workspace_target_inner_writes_target_to_config() -> Result<()> {
 #[test]
 fn create_workspace_target_inner_allows_target_without_mcp_config() -> Result<()> {
     let root = TestDir::new("config-create-target-no-mcp")?;
-    let store = WorkspaceConfigStore::at(root.path());
+    let store = WorkspaceConfigStore::at(root.path()).with_env(Environment::from_env());
     fs::write(
         store.config_path(),
         serde_yaml::to_string(&RawManagerConfig::default())?,
@@ -159,7 +158,6 @@ fn create_workspace_target_inner_allows_target_without_mcp_config() -> Result<()
         &store,
         RawTargetInput {
             target_id: "pi".to_string(),
-            enabled: true,
             skill_dir: root.path().join("pi-skills").display().to_string(),
             config_path: None,
         },
@@ -175,7 +173,7 @@ fn create_workspace_target_inner_allows_target_without_mcp_config() -> Result<()
 #[test]
 fn create_workspace_target_inner_rejects_non_builtin_id() -> Result<()> {
     let root = TestDir::new("config-create-target-unknown-id")?;
-    let store = WorkspaceConfigStore::at(root.path());
+    let store = WorkspaceConfigStore::at(root.path()).with_env(Environment::from_env());
     fs::write(
         store.config_path(),
         serde_yaml::to_string(&RawManagerConfig::default())?,
@@ -185,7 +183,6 @@ fn create_workspace_target_inner_rejects_non_builtin_id() -> Result<()> {
         &store,
         RawTargetInput {
             target_id: "cursor".to_string(),
-            enabled: true,
             skill_dir: root.path().join("skills").display().to_string(),
             config_path: None,
         },
@@ -210,7 +207,7 @@ fn create_workspace_target_inner_rejects_non_builtin_id() -> Result<()> {
 #[test]
 fn create_workspace_target_inner_keeps_prefix_in_sync_with_path() -> Result<()> {
     let root = TestDir::new("config-create-target-mcp-pair")?;
-    let store = WorkspaceConfigStore::at(root.path());
+    let store = WorkspaceConfigStore::at(root.path()).with_env(Environment::from_env());
     fs::write(
         store.config_path(),
         serde_yaml::to_string(&RawManagerConfig::default())?,
@@ -222,7 +219,6 @@ fn create_workspace_target_inner_keeps_prefix_in_sync_with_path() -> Result<()> 
         &store,
         RawTargetInput {
             target_id: "codex".to_string(),
-            enabled: true,
             skill_dir: root.path().join("skills").display().to_string(),
             config_path: Some("~/.codex/config.toml".to_string()),
         },
@@ -239,7 +235,6 @@ fn create_workspace_target_inner_keeps_prefix_in_sync_with_path() -> Result<()> 
         &store,
         RawTargetInput {
             target_id: "zcode".to_string(),
-            enabled: true,
             skill_dir: root.path().join("skills").display().to_string(),
             config_path: None,
         },
@@ -256,12 +251,11 @@ fn create_workspace_target_inner_keeps_prefix_in_sync_with_path() -> Result<()> 
 #[test]
 fn update_workspace_target_inner_still_accepts_existing_custom_id() -> Result<()> {
     let root = TestDir::new("config-update-custom-target")?;
-    let store = WorkspaceConfigStore::at(root.path());
+    let store = WorkspaceConfigStore::at(root.path()).with_env(Environment::from_env());
     let raw = RawManagerConfig {
         targets: [(
             "my-gateway".to_string(),
             RawTargetConfig {
-                enabled: true,
                 skill_dir: root.path().join("gateway-skills").display().to_string(),
                 mcp: RawTargetMcpConfig {
                     config_path: Some(
@@ -286,7 +280,6 @@ fn update_workspace_target_inner_still_accepts_existing_custom_id() -> Result<()
         "my-gateway",
         RawTargetInput {
             target_id: "my-gateway-2".to_string(),
-            enabled: true,
             skill_dir: root.path().join("gateway-skills-v2").display().to_string(),
             config_path: Some(
                 root.path()
@@ -308,7 +301,7 @@ fn update_workspace_target_inner_still_accepts_existing_custom_id() -> Result<()
 #[test]
 fn create_workspace_target_inner_derives_config_type_from_builtin_defaults() -> Result<()> {
     let root = TestDir::new("config-create-target-derives-type")?;
-    let store = WorkspaceConfigStore::at(root.path());
+    let store = WorkspaceConfigStore::at(root.path()).with_env(Environment::from_env());
     fs::write(
         store.config_path(),
         serde_yaml::to_string(&RawManagerConfig::default())?,
@@ -318,7 +311,6 @@ fn create_workspace_target_inner_derives_config_type_from_builtin_defaults() -> 
         &store,
         RawTargetInput {
             target_id: "opencode".to_string(),
-            enabled: true,
             skill_dir: "skills".to_string(),
             config_path: Some("opencode.json".to_string()),
         },
@@ -337,13 +329,12 @@ fn create_workspace_target_inner_derives_config_type_from_builtin_defaults() -> 
 #[test]
 fn update_workspace_target_inner_preserves_stored_config_type() -> Result<()> {
     let root = TestDir::new("config-update-keeps-type")?;
-    let store = WorkspaceConfigStore::at(root.path());
+    let store = WorkspaceConfigStore::at(root.path()).with_env(Environment::from_env());
     let raw = RawManagerConfig {
         targets: [
             (
                 "custom-dsh".to_string(),
                 RawTargetConfig {
-                    enabled: true,
                     skill_dir: "custom-dsh/skills".to_string(),
                     mcp: RawTargetMcpConfig {
                         config_path: Some("custom/patch.yml".to_string()),
@@ -355,7 +346,6 @@ fn update_workspace_target_inner_preserves_stored_config_type() -> Result<()> {
             (
                 "codex".to_string(),
                 RawTargetConfig {
-                    enabled: true,
                     skill_dir: "codex/skills".to_string(),
                     mcp: RawTargetMcpConfig {
                         config_path: Some("codex/config.toml".to_string()),
@@ -376,7 +366,6 @@ fn update_workspace_target_inner_preserves_stored_config_type() -> Result<()> {
         "custom-dsh",
         RawTargetInput {
             target_id: "custom-dsh".to_string(),
-            enabled: true,
             skill_dir: "custom-dsh/skills-v2".to_string(),
             config_path: Some("custom/patch.yml".to_string()),
         },
@@ -386,7 +375,6 @@ fn update_workspace_target_inner_preserves_stored_config_type() -> Result<()> {
         "codex",
         RawTargetInput {
             target_id: "codex".to_string(),
-            enabled: true,
             skill_dir: "codex/skills-v2".to_string(),
             config_path: Some("codex/config.toml".to_string()),
         },
@@ -487,7 +475,7 @@ fn write_atomic_leaves_no_temp_files_and_full_content() -> Result<()> {
 #[test]
 fn first_load_bootstraps_template_that_parses() -> Result<()> {
     let root = TestDir::new("config-bootstrap")?;
-    let store = WorkspaceConfigStore::at(root.path());
+    let store = WorkspaceConfigStore::at(root.path()).with_env(Environment::from_env());
 
     assert!(!store.config_path().exists());
     let document = store.load_document()?;

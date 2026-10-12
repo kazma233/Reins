@@ -31,13 +31,13 @@ beforeEach(() => {
 // 的重定向路径，前端静态预设无法预填的根因）。
 function mockPresets(): TargetPreset[] {
   return [
-    { targetId: "codex", label: "Codex", enabled: true, skillDir: "/home/.agents/skills", configPath: "/home/.codex/config.toml", mcpConfigPrefix: "mcp_servers" },
-    { targetId: "claude", label: "Claude Code", enabled: true, skillDir: "/home/.claude/skills", configPath: "/home/.claude.json", mcpConfigPrefix: "mcpServers" },
-    { targetId: "opencode", label: "OpenCode", enabled: true, skillDir: "/home/.config/opencode/skills", configPath: "/home/.config/opencode/opencode.json", mcpConfigPrefix: "mcp.servers" },
-    { targetId: "zcode", label: "ZCode", enabled: true, skillDir: "/home/.zcode/skills", configPath: "/home/.zcode/cli/config.json", mcpConfigPrefix: "mcp.servers" },
-    { targetId: "grokbuild", label: "Grok Build", enabled: true, skillDir: "/custom-grok/skills", configPath: "/custom-grok/config.toml", mcpConfigPrefix: "mcp_servers" },
-    { targetId: "pi", label: "Pi", enabled: true, skillDir: "/custom-pi/skills", configPath: "/custom-pi/mcp.json", mcpConfigPrefix: "mcpServers" },
-    { targetId: "dsh", label: "DeepSeek Harness", enabled: true, skillDir: "/home/.dsh/skills", configPath: "/home/.dsh/cordis.patch.yml", mcpConfigPrefix: "" },
+    { targetId: "codex", label: "Codex", skillDir: "/home/.agents/skills", configPath: "/home/.codex/config.toml", mcpConfigPrefix: "mcp_servers" },
+    { targetId: "claude", label: "Claude Code", skillDir: "/home/.claude/skills", configPath: "/home/.claude.json", mcpConfigPrefix: "mcpServers" },
+    { targetId: "opencode", label: "OpenCode", skillDir: "/home/.config/opencode/skills", configPath: "/home/.config/opencode/opencode.json", mcpConfigPrefix: "mcp.servers" },
+    { targetId: "zcode", label: "ZCode", skillDir: "/home/.zcode/skills", configPath: "/home/.zcode/cli/config.json", mcpConfigPrefix: "mcp.servers" },
+    { targetId: "grokbuild", label: "Grok Build", skillDir: "/custom-grok/skills", configPath: "/custom-grok/config.toml", mcpConfigPrefix: "mcp_servers" },
+    { targetId: "pi", label: "Pi", skillDir: "/custom-pi/skills", configPath: "/custom-pi/mcp.json", mcpConfigPrefix: "mcpServers" },
+    { targetId: "dsh", label: "DeepSeek Harness", skillDir: "/home/.dsh/skills", configPath: "/home/.dsh/cordis.patch.yml", mcpConfigPrefix: "" },
   ];
 }
 
@@ -60,7 +60,6 @@ it("loads backend presets when the create dialog opens and fills the form on cli
   await mutations.handleApplyBuiltinTargetPreset("grokbuild");
   expect(mutations.targetCreateDialog.form).toMatchObject({
     targetId: "grokbuild",
-    enabled: true,
     skillDir: "/custom-grok/skills",
     configPath: "/custom-grok/config.toml",
     mcpConfigPrefix: "mcp_servers",
@@ -77,7 +76,7 @@ it("keeps explicit edits when submitting a preset-filled target", async () => {
   mutations.targetCreateDialog.form.configPath = "/explicit/config.toml";
   await mutations.handleSubmitTarget();
   expect(createWorkspaceTarget).toHaveBeenCalledWith({
-    targetId: "grokbuild", enabled: true, skillDir: "/explicit/skills", configPath: "/explicit/config.toml",
+    targetId: "grokbuild", skillDir: "/explicit/skills", configPath: "/explicit/config.toml",
   });
 });
 
@@ -112,7 +111,6 @@ it("registers dsh as a preset that submits without configPrefix", async () => {
   await mutations.handleSubmitTarget();
   expect(createWorkspaceTarget).toHaveBeenCalledWith({
     targetId: "dsh",
-    enabled: true,
     skillDir: "/home/.dsh/skills",
     configPath: "/home/.dsh/cordis.patch.yml",
   });
@@ -123,7 +121,6 @@ it("carries the mcp format description when editing an existing target", async (
   const mutations = useTargetMutations();
   mutations.openTargetEditDialog({
     id: "my-gateway",
-    enabled: true,
     skillDir: "/gateway/skills",
     configPath: "/gateway/config.json",
     mcpConfigPrefix: "mcpServers",
@@ -147,7 +144,6 @@ it("carries the mcp format description when editing an existing target", async (
   await mutations.handleSubmitTarget();
   expect(updateWorkspaceTarget).toHaveBeenCalledWith("my-gateway", {
     targetId: "my-gateway",
-    enabled: true,
     skillDir: "/gateway/skills",
     configPath: "/gateway/config.json",
   });
@@ -179,104 +175,3 @@ it("clears a field error once the user edits that field", async () => {
   expect(mutations.targetCreateDialog.form.errors.skillDir).toBeDefined();
 });
 
-it("keeps a failed enable/disable on the panel result slot", async () => {
-  vi.mocked(getWorkspaceState).mockResolvedValue({ document: null, inspection: null });
-  vi.mocked(updateWorkspaceTarget).mockRejectedValue(new Error("toggle boom"));
-  const store = useWorkspaceStore();
-  const mutations = useTargetMutations();
-
-  await mutations.toggleTargetEnabled({
-    id: "codex",
-    enabled: true,
-    skillDir: "~/.agents/skills",
-    configPath: null,
-    mcpConfigPrefix: "",
-    mcpFormatDescription: "通用 MCP 条目（标准 command/args/env），按配置文件扩展名写入 JSON 或 TOML 的 mcp 节点下。",
-    mcpFormatExamples: [
-      {
-        label: "本地命令（stdio）",
-        body: "{\n  \"mcpServers\": {\n    \"my-server\": { ... }\n  }\n}",
-      },
-    ],
-  });
-
-  expect(store.actionResults["target-toggle:codex"]).toMatchObject({
-    message: "toggle boom",
-    failed: true,
-  });
-});
-
-it("marks only the toggled card as pending and keeps the page lock off", async () => {
-  const store = useWorkspaceStore();
-  const mutations = useTargetMutations();
-  const runningActionDuringWrite: boolean[] = [];
-  let pendingDuringWrite: string[] = [];
-  vi.mocked(updateWorkspaceTarget).mockImplementation(async (targetId) => {
-    runningActionDuringWrite.push(store.runningAction);
-    pendingDuringWrite = [...mutations.pendingToggleTargetIds.value];
-    return { targetId, updatedPaths: [] };
-  });
-
-  await mutations.toggleTargetEnabled({
-    id: "codex",
-    enabled: true,
-    skillDir: "~/.agents/skills",
-    configPath: null,
-    mcpConfigPrefix: "",
-    mcpFormatDescription: "通用 MCP 条目（标准 command/args/env），按配置文件扩展名写入 JSON 或 TOML 的 mcp 节点下。",
-    mcpFormatExamples: [
-      {
-        label: "本地命令（stdio）",
-        body: "{\n  \"mcpServers\": {\n    \"my-server\": { ... }\n  }\n}",
-      },
-    ],
-  });
-
-  expect(runningActionDuringWrite).toEqual([false]);
-  expect(pendingDuringWrite).toEqual(["codex"]);
-  expect([...mutations.pendingToggleTargetIds.value]).toEqual([]);
-  expect(store.runningAction).toBe(false);
-});
-
-it("runs queued enable/disable writes in order", async () => {
-  const first = deferred();
-  const second = deferred();
-  const order: string[] = [];
-  vi.mocked(updateWorkspaceTarget).mockImplementation(async (targetId) => {
-    order.push(`start:${targetId}`);
-    await (targetId === "codex" ? first.promise : second.promise);
-    order.push(`done:${targetId}`);
-    return { targetId, updatedPaths: [] };
-  });
-
-  const mutations = useTargetMutations();
-  const toggle = (id: "codex" | "zcode") =>
-    mutations.toggleTargetEnabled({
-      id,
-      enabled: true,
-      skillDir: "~/.agents/skills",
-      configPath: null,
-      mcpConfigPrefix: "",
-      mcpFormatDescription: "通用 MCP 条目（标准 command/args/env），按配置文件扩展名写入 JSON 或 TOML 的 mcp 节点下。",
-      mcpFormatExamples: [
-      {
-        label: "本地命令（stdio）",
-        body: "{\n  \"mcpServers\": {\n    \"my-server\": { ... }\n  }\n}",
-      },
-    ],
-    });
-
-  const codexToggle = toggle("codex");
-  const zcodeToggle = toggle("zcode");
-  expect([...mutations.pendingToggleTargetIds.value].sort()).toEqual(["codex", "zcode"]);
-
-  first.resolve();
-  await codexToggle;
-  // 第二次写入不得在第一次完成前开始，否则两次重读会互相覆盖快照
-  expect(order.slice(0, 2)).toEqual(["start:codex", "done:codex"]);
-
-  second.resolve();
-  await zcodeToggle;
-  expect(order).toEqual(["start:codex", "done:codex", "start:zcode", "done:zcode"]);
-  expect([...mutations.pendingToggleTargetIds.value]).toEqual([]);
-});

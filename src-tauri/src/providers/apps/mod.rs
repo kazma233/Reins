@@ -14,9 +14,7 @@ use super::types::{
     ProviderAppId, ProviderAppState, ProviderProtocol, ReasoningEffortWrite, ReasoningLevel,
     ResolvedProvider,
 };
-use crate::support::fs::{
-    display_path, grok_home_path, user_home_dir, write_atomic, write_atomic_private,
-};
+use crate::support::fs::{display_path, user_home_dir, write_atomic, write_atomic_private};
 use dialect::{ProtocolDialect, ReasoningDialect};
 
 pub(crate) mod claude;
@@ -37,28 +35,10 @@ pub(crate) fn registration_key(provider_id: &str) -> String {
     format!("{REINS_PREFIX}{provider_id}")
 }
 
-// 测试与生产共用的环境入口：生产读真实环境变量，home 目录走
-// user_home_dir()（支持测试 override）；测试直接构造 ToolEnv。
-#[derive(Clone, Debug, Default)]
-pub(crate) struct ToolEnv {
-    pub(crate) codex_home: Option<PathBuf>,
-    pub(crate) pi_agent_dir: Option<PathBuf>,
-    pub(crate) grok_home: Option<PathBuf>,
-    pub(crate) claude_config_dir: Option<PathBuf>,
-    pub(crate) dsh_home: Option<PathBuf>,
-}
-
-impl ToolEnv {
-    pub(crate) fn from_env() -> Self {
-        Self {
-            codex_home: std::env::var("CODEX_HOME").ok().map(PathBuf::from),
-            pi_agent_dir: std::env::var("PI_CODING_AGENT_DIR").ok().map(PathBuf::from),
-            grok_home: std::env::var("GROK_HOME").ok().map(PathBuf::from),
-            claude_config_dir: std::env::var("CLAUDE_CONFIG_DIR").ok().map(PathBuf::from),
-            dsh_home: std::env::var("DSH_HOME").ok().map(PathBuf::from),
-        }
-    }
-}
+// 环境视图与工具目录重定向的唯一来源在 support::environment：这里 re-export
+// 供各适配器沿用 `super::Environment` 的既有写法，不再维护第二份字段定义。
+pub(crate) use crate::support::environment::Environment;
+use crate::support::environment::{self, Redirect};
 
 // 工具能力表：协议兼容 + 必填字段门控 + 不写入的元数据 + 思考等级支持集 +
 // 替换/并存语义。
@@ -119,12 +99,12 @@ pub(crate) trait AppAdapter: Sync {
     // 兜底展示与外部调用共用；路径解析失败由调用方兜底为空列表。
     // 注意与 inspect 内部读取的文件集不一定相同（如 dsh 的 inspect 还会
     // 读 workspace 域管理的全局 cordis patch）。
-    fn config_paths(&self, env: &ToolEnv) -> Result<Vec<PathBuf>>;
+    fn config_paths(&self, env: &Environment) -> Result<Vec<PathBuf>>;
 
     // 敏感文件清单（凭据等）：写入时强制 owner-only 权限。默认空；
     // 依赖方若对文件权限有守卫（如 dsh 启动时拒绝加载非 0600 的凭据），
     // 必须在此声明，否则原子写会用默认 umask 权限落盘。
-    fn restricted_paths(&self, _env: &ToolEnv) -> Vec<PathBuf> {
+    fn restricted_paths(&self, _env: &Environment) -> Vec<PathBuf> {
         Vec::new()
     }
 
@@ -143,14 +123,14 @@ pub(crate) trait AppAdapter: Sync {
     // 已应用 / 漂移，无法归类的都按外部配置展示。
     fn inspect(
         &self,
-        env: &ToolEnv,
+        env: &Environment,
         providers: &BTreeMap<String, ResolvedProvider>,
     ) -> Result<ProviderAppState>;
 
     // 生成应用后的完整新文件内容列表；不直接落盘。
     fn apply(
         &self,
-        env: &ToolEnv,
+        env: &Environment,
         provider: &ResolvedProvider,
         plan: &ApplyProviderInput,
         api_key: &str,
@@ -160,7 +140,7 @@ pub(crate) trait AppAdapter: Sync {
     // 已删除，只能按注册键结构化识别；不支持这种方式（Claude）时报错。
     fn remove(
         &self,
-        env: &ToolEnv,
+        env: &Environment,
         provider_id: &str,
         provider: Option<&ResolvedProvider>,
     ) -> Result<Vec<(PathBuf, String)>>;
@@ -169,7 +149,8 @@ pub(crate) trait AppAdapter: Sync {
     // 外部条目内容任意，跳过内容识别校验；默认模型/活动 Provider 仍指向
     // 被删条目时随删除清空。Claude 的外部配置内嵌在 env 中，无可删除条目，
     // 实现固定报错。
-    fn remove_external(&self, env: &ToolEnv, entry_key: &str) -> Result<Vec<(PathBuf, String)>>;
+    fn remove_external(&self, env: &Environment, entry_key: &str)
+    -> Result<Vec<(PathBuf, String)>>;
 }
 
 pub(crate) fn adapter_for(app: ProviderAppId) -> &'static dyn AppAdapter {
@@ -523,31 +504,32 @@ pub(crate) fn empty_state(app: ProviderAppId, config_paths: Vec<PathBuf>) -> Pro
 
 // ---------------------------------------------------------------------------
 // 工具配置路径
+//
+// 目录的相对布局不在本文件重述：根经 Environment 按重定向解析，配置文件名
+// 从 agents 清单派生（mcp_config_path）；只有"同一目录下的另一个文件"
+// （codex 的 reins-models.json、pi 的 models.json/settings.json、claude 的
+// settings.json）在这里显式拼接。
 // ---------------------------------------------------------------------------
 
 fn home_dir() -> Result<PathBuf> {
     user_home_dir().ok_or_else(|| anyhow::anyhow!("无法解析 HOME 目录。"))
 }
 
-pub(crate) fn codex_home_dir(env: &ToolEnv) -> Result<PathBuf> {
-    Ok(match &env.codex_home {
-        Some(dir) => dir.clone(),
-        None => home_dir()?.join(".codex"),
-    })
+pub(crate) fn codex_home_dir(env: &Environment) -> Result<PathBuf> {
+    env.resolve_required(Redirect::CodexHome)
 }
 
-pub(crate) fn codex_config_path(env: &ToolEnv) -> Result<PathBuf> {
-    Ok(codex_home_dir(env)?.join("config.toml"))
+pub(crate) fn codex_config_path(env: &Environment) -> Result<PathBuf> {
+    environment::mcp_config_path(env, ProviderAppId::Codex)
+        .ok_or_else(|| anyhow::anyhow!("codex 缺少 MCP 配置入口。"))
 }
 
-pub(crate) fn claude_settings_path(env: &ToolEnv) -> Result<PathBuf> {
-    // Claude Code 官方支持 CLAUDE_CONFIG_DIR 重定位配置目录，与
-    // CODEX_HOME / PI_CODING_AGENT_DIR / GROK_HOME 同一模式。
-    Ok(match &env.claude_config_dir {
-        Some(dir) => dir.clone(),
-        None => home_dir()?.join(".claude"),
-    }
-    .join("settings.json"))
+pub(crate) fn claude_config_dir(env: &Environment) -> Result<PathBuf> {
+    env.resolve_required(Redirect::ClaudeConfigDir)
+}
+
+pub(crate) fn claude_settings_path(env: &Environment) -> Result<PathBuf> {
+    Ok(claude_config_dir(env)?.join("settings.json"))
 }
 
 // OpenCode 在 Windows 上不认 XDG_CONFIG_HOME（v2.0.16 实测，官方文档未写
@@ -582,32 +564,21 @@ pub(crate) fn read_jsonc_object(path: &Path) -> Result<JsonMap<String, JsonValue
     }
 }
 
-pub(crate) fn pi_models_path(env: &ToolEnv) -> Result<PathBuf> {
+pub(crate) fn pi_models_path(env: &Environment) -> Result<PathBuf> {
     Ok(pi_agent_dir(env)?.join("models.json"))
 }
 
-pub(crate) fn pi_settings_path(env: &ToolEnv) -> Result<PathBuf> {
+pub(crate) fn pi_settings_path(env: &Environment) -> Result<PathBuf> {
     Ok(pi_agent_dir(env)?.join("settings.json"))
 }
 
-fn pi_agent_dir(env: &ToolEnv) -> Result<PathBuf> {
-    let base = match &env.pi_agent_dir {
-        Some(dir) => dir.clone(),
-        None => home_dir()?.join(".pi").join("agent"),
-    };
-    Ok(base)
+fn pi_agent_dir(env: &Environment) -> Result<PathBuf> {
+    env.resolve_required(Redirect::PiAgentDir)
 }
 
-pub(crate) fn grok_config_path(env: &ToolEnv) -> Result<PathBuf> {
-    let home = Some(home_dir()?);
-    let base = grok_home_path(
-        env.grok_home
-            .as_ref()
-            .map(|path| path.as_os_str().to_os_string()),
-        home,
-    )
-    .ok_or_else(|| anyhow::anyhow!("无法解析 GROK_HOME 目录。"))?;
-    Ok(base.join("config.toml"))
+pub(crate) fn grok_config_path(env: &Environment) -> Result<PathBuf> {
+    environment::mcp_config_path(env, ProviderAppId::Grokbuild)
+        .ok_or_else(|| anyhow::anyhow!("grok 缺少 MCP 配置入口。"))
 }
 
 // dsh 的 settings.yaml 与 GROK_HOME / PI_CODING_AGENT_DIR 同一重定向模式：

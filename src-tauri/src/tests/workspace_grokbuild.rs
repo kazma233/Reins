@@ -8,7 +8,8 @@ fn grokbuild_defaults_template_and_preset_agree() -> Result<()> {
     // 读 ambient GROK_HOME/HOME 断言默认值,必须持全局锁防并行测试翻转 env。
     let _guard = TestEnvGuard::lock();
     let path = PathBuf::from("/tmp/reins-grok-defaults.yaml");
-    let config = parse_manager_config(&default_config_template(), &path)?;
+    let env = Environment::from_env();
+    let config = parse_manager_config(&default_config_template(&env), &path, &env)?;
     let target = resolve_target_from_id(&config, "grokbuild").unwrap();
     let root = std::env::var_os("GROK_HOME")
         .map(PathBuf::from)
@@ -18,7 +19,7 @@ fn grokbuild_defaults_template_and_preset_agree() -> Result<()> {
     assert_eq!(target.mcp_config_prefix, "mcp_servers");
     assert_eq!(target.mcp_config_type, McpConfigType::GrokBuild);
     // 预设列表是封闭集合（七个内置工具），不存在“未知内置 target”分支。
-    let preset = target_presets_inner()
+    let preset = target_presets_inner(&Environment::from_env())
         .into_iter()
         .find(|preset| preset.target_id.as_str() == "grokbuild")
         .ok_or_else(|| anyhow!("缺少 grokbuild 预设"))?;
@@ -42,7 +43,7 @@ fn grokbuild_defaults_template_and_preset_agree() -> Result<()> {
 #[test]
 fn grokbuild_explicit_paths_win_and_old_config_is_unchanged() -> Result<()> {
     let root = TestDir::new("grok-explicit")?;
-    let store = WorkspaceConfigStore::at(root.path());
+    let store = WorkspaceConfigStore::at(root.path()).with_env(Environment::from_env());
     let raw = "targets:\n  grokbuild:\n    skill_dir: explicit/skills\n    mcp:\n      config_path: explicit/config.toml\n";
     fs::write(store.config_path(), raw)?;
     let config = store.parse()?;
@@ -65,7 +66,7 @@ fn grokbuild_explicit_paths_win_and_old_config_is_unchanged() -> Result<()> {
 }
 
 fn fixture(root: &TestDir, transport: &str, timeout: Option<u64>) -> Result<WorkspaceConfigStore> {
-    let store = WorkspaceConfigStore::at(root.path());
+    let store = WorkspaceConfigStore::at(root.path()).with_env(Environment::from_env());
     let config = json!({
         "targets": {
             "grokbuild": {"skill_dir": "global/.grok/skills", "mcp": {"config_path": "global/.grok/config.toml"}},
@@ -180,7 +181,8 @@ fn grokbuild_mcp_preview_apply_read_remove_preserves_unrelated_config() -> Resul
             let preview = preview_mcp_target_inner(&store, "probe", id)?;
             assert_eq!(preview.format, "toml");
             let entry: toml::Value = toml::from_str(&preview.content)?;
-            assert_eq!(entry["enabled"].as_bool(), Some(false));
+            // MCP 没有启停开关：写入的条目里不该再出现 enabled 键。
+            assert!(entry.get("enabled").is_none());
             assert_eq!(entry["tool_timeout_sec"].as_integer(), Some(2));
             assert!(entry.get("http_headers").is_none());
             if transport == "stdio" {
@@ -199,7 +201,7 @@ fn grokbuild_mcp_preview_apply_read_remove_preserves_unrelated_config() -> Resul
             apply_mcp_to_target_inner(&store, "probe", id)?;
             assert_eq!(fs::read_to_string(path)?, first);
             assert_eq!(
-                read_existing_mcp_entries(target, path)?["probe"],
+                read_existing_mcp_entries(target, path, &Environment::default())?["probe"],
                 serde_json::to_value(entry)?
             );
             remove_mcp_from_target_inner(&store, "probe", id)?;
@@ -262,7 +264,7 @@ fn grokbuild_rejects_json_and_malformed_config_without_writing() -> Result<()> {
         fs::write(path, content)?;
         assert!(preview_mcp_target_inner(&store, "probe", "grokbuild").is_err());
         assert!(apply_mcp_to_target_inner(&store, "probe", "grokbuild").is_err());
-        assert!(read_existing_mcp_entries(target, path).is_err());
+        assert!(read_existing_mcp_entries(target, path, &Environment::default()).is_err());
         assert!(remove_mcp_from_target_inner(&store, "probe", "grokbuild").is_err());
         assert_eq!(fs::read_to_string(path)?, content);
     }

@@ -16,6 +16,7 @@ mod config;
 mod inspect;
 pub(crate) mod mcp_formats;
 mod mcps;
+mod skill_install;
 mod skills;
 pub(crate) mod targets;
 pub(crate) mod types;
@@ -46,18 +47,25 @@ use self::skills::git_cache_last_fetched_at_ms;
 #[cfg(windows)]
 use self::targets::read_directory_link_target;
 use self::targets::{builtin_target_defaults_map, project_agent_defaults};
+use crate::support::environment::Environment;
+// Windows 路径前缀剥离属于无业务语义的路径工具，实现统一在 support/fs.rs。
+// 模块级导入：inspect / 模板与测试模块都要用同一份实现。
+use crate::support::fs::display_path;
 
 #[cfg(test)]
 use self::mcps::desired_opencode_mcp;
 #[cfg(test)]
 #[cfg_attr(windows, allow(unused_imports))]
-use self::skills::inspect_skill_destination;
+use self::skill_install::inspect_skill_destination;
+#[cfg(test)]
+use self::skill_install::{SkillInstall, destination_snapshot};
+#[cfg(test)]
+use self::skills::remove_source_symlinks_with_root as remove_source_symlinks_from_targets_with_root;
 #[cfg(test)]
 use self::skills::{
-    SkillActionKind, SkillLinkSource, apply_include_patterns,
-    build_sync_target_options_with_sources, classify_skill_destination,
+    SkillLinkSource, apply_include_patterns, build_sync_target_options_with_sources,
     discover_skills_in_directory, git_cache_refresh_is_due, parse_batch_git_skill_import_sources,
-    partition_excluded, remove_source_symlinks_from_targets_with_root,
+    partition_excluded,
 };
 #[cfg(test)]
 use self::targets::read_skill_dir_link;
@@ -101,10 +109,6 @@ fn split_owner_repo(path: &str) -> Option<(String, String)> {
     Some((owner.to_string(), repo.to_string()))
 }
 
-fn default_true() -> bool {
-    true
-}
-
 // 默认模板的一个 target 条目：从 agents 清单构造，再渲染成 YAML 文本。
 // 注释与字段省略是模板契约的一部分（留空 = 解析时回落 builtin defaults）。
 struct TemplateTarget {
@@ -112,18 +116,16 @@ struct TemplateTarget {
     note: Option<String>,
     // 模板原文的写法原样输出（含 grokbuild 的 "" 空串字面量）
     skill_dir: String,
-    // None = 不写出该键（mcp.enabled 仅 Standard 条目携带）
-    mcp_enabled: Option<bool>,
     mcp_config_path: Option<String>,
     config_prefix: &'static str,
     config_type_key: String,
 }
 
-// pi 段在生成模板时按 PI_CODING_AGENT_DIR 解析并固化具体路径；
-// 之后以 config.yaml 里写入的路径为准，环境变量变化不再跟随。
-// 默认场景沿用 ~ 前缀写法，与模板其他条目风格一致。
-pub(crate) fn default_config_template() -> String {
-    let targets = template_targets();
+// 支持 env 重定向的工具（grokbuild / pi / codex / claude / dsh）在生成模板时
+// 解析并固化具体路径；之后以 config.yaml 里写入的路径为准，环境变量变化不再
+// 跟随。默认场景沿用 ~ 前缀写法，与模板其他条目风格一致。
+pub(crate) fn default_config_template(env: &Environment) -> String {
+    let targets = template_targets(env);
 
     let mut out = String::from("targets:\n");
     for (index, target) in targets.iter().enumerate() {
@@ -134,12 +136,8 @@ pub(crate) fn default_config_template() -> String {
             out.push_str(&format!("  # {note}\n"));
         }
         out.push_str(&format!("  {}:\n", target.id));
-        out.push_str("    enabled: true\n");
         out.push_str(&format!("    skill_dir: {}\n", target.skill_dir));
         out.push_str("    mcp:\n");
-        if target.mcp_enabled.is_some() {
-            out.push_str("      enabled: true\n");
-        }
         if let Some(path) = &target.mcp_config_path {
             out.push_str(&format!("      config_path: {path}\n"));
         }
@@ -148,12 +146,12 @@ pub(crate) fn default_config_template() -> String {
     }
 
     out.push_str(
-        "\nmcps: []\n\n# projects:\n#   my-app:\n#     path: ~/code/my-app\n#     agents:\n#       claude:\n#         enabled: true\n#       codex:\n#         enabled: true\n#       opencode:\n#         enabled: true\n#       zcode:\n#         enabled: true\n#       grokbuild:\n#         enabled: true\n",
+        "\nmcps: []\n\n# projects:\n#   my-app:\n#     path: ~/code/my-app\n#     agents:\n#       claude: {}\n#       codex: {}\n#       opencode: {}\n#       zcode: {}\n#       grokbuild: {}\n",
     );
     out
 }
 
-fn template_targets() -> Vec<TemplateTarget> {
+fn template_targets(env: &Environment) -> Vec<TemplateTarget> {
     use crate::agents::{AGENTS, TemplateEntry};
 
     AGENTS
@@ -162,15 +160,14 @@ fn template_targets() -> Vec<TemplateTarget> {
             let target_id = spec.target_id?;
             match spec.template {
                 TemplateEntry::Absent => None,
-                TemplateEntry::Standard { mcp_enabled } => Some(TemplateTarget {
+                TemplateEntry::Standard => Some(TemplateTarget {
                     id: target_id,
                     note: None,
-                    skill_dir: template_global_path(spec.global.root, spec.global.skill_dir),
-                    mcp_enabled: mcp_enabled.then_some(true),
+                    skill_dir: template_global_path(env, spec.global.root, spec.global.skill_dir),
                     mcp_config_path: spec
                         .global
                         .mcp_config_path
-                        .map(|rel| template_global_path(spec.global.root, rel)),
+                        .map(|rel| template_global_path(env, spec.global.root, rel)),
                     config_prefix: spec.mcp.prefix,
                     config_type_key: mcp_config_type_key(spec.mcp.config_type),
                 }),
@@ -187,7 +184,6 @@ fn template_targets() -> Vec<TemplateTarget> {
                         id: target_id,
                         note: Some(note),
                         skill_dir: "\"\"".to_string(),
-                        mcp_enabled: None,
                         mcp_config_path: None,
                         config_prefix: spec.mcp.prefix,
                         config_type_key: mcp_config_type_key(spec.mcp.config_type),
@@ -198,12 +194,16 @@ fn template_targets() -> Vec<TemplateTarget> {
         .collect()
 }
 
-// 模板里的全局路径写法：默认 ~ 缩写；根目录被 env 重定向时固化为绝对路径。
-fn template_global_path(root: crate::agents::GlobalRoot, rel: &str) -> String {
-    use crate::agents::GlobalRoot;
-    match (root, std::env::var_os("PI_CODING_AGENT_DIR")) {
-        (GlobalRoot::PiAgentDir, Some(dir)) => PathBuf::from(dir).join(rel).display().to_string(),
-        _ => format!("{}/{}", root.home_prefix(), rel),
+// 模板里的全局路径写法：默认 ~ 缩写；root 被 env 重定向时固化为绝对路径
+// （判据与 GlobalRoot::resolve 同源，两者不会分叉）；清单里 `~/` 前缀的
+// 路径（codex 的 skills、claude 的 .claude.json）不随 root 重定向，恒写
+// ~ 缩写。
+fn template_global_path(env: &Environment, root: crate::agents::GlobalRoot, rel: &str) -> String {
+    let redirected = root.redirect().and_then(|redirect| env.value(redirect));
+    match (redirected, rel.strip_prefix("~/")) {
+        (Some(dir), None) => dir.join(rel).display().to_string(),
+        (_, Some(home_relative)) => format!("~/{home_relative}"),
+        (None, None) => format!("{}/{}", root.home_prefix(), rel),
     }
 }
 
@@ -220,11 +220,14 @@ fn mcp_config_type_key(config_type: McpConfigType) -> String {
 // ---------------------------------------------------------------------------
 
 pub(crate) fn workspace_state_inner(store: &WorkspaceConfigStore) -> Result<WorkspaceState> {
+    let env = store.env();
     let document = store.load_document()?;
     let inspection = document
         .validation
         .valid
-        .then(|| inspect::inspect_app_state_document(&document.raw_content, store.config_path()))
+        .then(|| {
+            inspect::inspect_app_state_document(&document.raw_content, store.config_path(), env)
+        })
         .transpose()?;
 
     Ok(WorkspaceState {
@@ -253,7 +256,7 @@ fn document_from_content(
         };
     }
 
-    match parse_manager_config(&raw_content, config_path) {
+    match parse_manager_config(&raw_content, config_path, store.env()) {
         Ok(config) => WorkspaceConfigDocument {
             config_path: display_path(config_path),
             exists,
@@ -395,7 +398,6 @@ fn config_to_view(
             .iter()
             .map(|mcp| McpConfigView {
                 name: mcp.name.clone(),
-                enabled: mcp.enabled,
                 transport: mcp.transport,
                 created_at: mcp.created_at,
                 homepage: mcp.homepage.clone(),
@@ -414,7 +416,6 @@ fn target_to_view(target: &ResolvedTargetConfig) -> TargetConfigView {
     let format_writer = mcp_formats::mcp_format_writer(target.mcp_config_type);
     TargetConfigView {
         id: target.id.clone(),
-        enabled: target.enabled,
         skill_dir: display_path(&target.skill_dir),
         config_path: target.config_path.as_ref().map(|path| display_path(path)),
         mcp_config_prefix: target.mcp_config_prefix.clone(),
@@ -432,13 +433,17 @@ fn target_to_view(target: &ResolvedTargetConfig) -> TargetConfigView {
     }
 }
 
-fn parse_manager_config(raw_content: &str, config_path: &Path) -> Result<ResolvedManagerConfig> {
+fn parse_manager_config(
+    raw_content: &str,
+    config_path: &Path,
+    env: &Environment,
+) -> Result<ResolvedManagerConfig> {
     let raw: RawManagerConfig = serde_yaml::from_str(raw_content)
         .with_context(|| format!("YAML 解析失败：{}", config_path.display()))?;
     let mut targets = BTreeMap::new();
     let mut skill_sources = BTreeMap::new();
 
-    let builtin_defaults = builtin_target_defaults_map();
+    let builtin_defaults = builtin_target_defaults_map(env);
 
     for (id, raw_target) in raw.targets {
         let id = normalize_target_id(&id)?;
@@ -483,7 +488,6 @@ fn parse_manager_config(raw_content: &str, config_path: &Path) -> Result<Resolve
             id.clone(),
             ResolvedTargetConfig {
                 id: id.clone(),
-                enabled: raw_target.enabled,
                 is_project: false,
                 skill_dir,
                 config_path: config_file_path,
@@ -559,7 +563,6 @@ fn parse_manager_config(raw_content: &str, config_path: &Path) -> Result<Resolve
 
         mcps.push(ResolvedMcpConfig {
             name,
-            enabled: mcp.enabled,
             transport: mcp.transport,
             created_at: mcp.created_at,
             homepage: mcp.homepage,
@@ -582,17 +585,16 @@ fn parse_manager_config(raw_content: &str, config_path: &Path) -> Result<Resolve
         let project_path = expand_path(&raw_project.path, config_path.parent())?;
         let agent_defaults = project_agent_defaults(&project_path);
         let mut agents = BTreeMap::new();
-        for (agent_name, raw_agent) in raw_project.agents {
-            let agent_id = normalize_target_id(&agent_name)?;
+        for agent_name in raw_project.agents.keys() {
+            let agent_id = normalize_target_id(agent_name)?;
             let defaults = agent_defaults.iter().find(|d| d.id == agent_id);
             let skill_dir = defaults
                 .map(|d| d.skill_dir.clone())
-                .unwrap_or_else(|| project_path.join(&agent_name).join("skills"));
+                .unwrap_or_else(|| project_path.join(agent_name).join("skills"));
             agents.insert(
                 agent_id.clone(),
                 ResolvedTargetConfig {
                     id: agent_id,
-                    enabled: raw_agent.enabled,
                     is_project: true,
                     skill_dir,
                     config_path: defaults.and_then(|d| d.config_path.clone()),
@@ -626,9 +628,6 @@ fn parse_manager_config(raw_content: &str, config_path: &Path) -> Result<Resolve
 fn format_local_skill_source_label(root_path: &Path) -> String {
     display_path(root_path)
 }
-
-// Windows 路径前缀剥离属于无业务语义的路径工具，实现统一在 support/fs.rs。
-use crate::support::fs::display_path;
 
 fn format_git_skill_source_label(repo: &str, reference: Option<&str>) -> String {
     format!(

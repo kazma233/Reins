@@ -17,6 +17,7 @@ use super::types::{
     McpConfigFileFormat, McpConfigType, McpTargetMutationResult, McpTransport, ResolvedMcpConfig,
     ResolvedTargetConfig,
 };
+use crate::support::environment::Environment;
 
 // 每个 writer 只声明「这个 config type 的条目长什么样、接受什么文件、
 // 需要哪些前置条件」；JSON/TOML 的读/预览/应用/移除由 mcps.rs 的共享引擎
@@ -54,12 +55,14 @@ pub(super) trait McpFormatWriter: Sync {
     }
 
     /// 读既有条目（key 为 server 名；dsh 按清洗后的 serverName）。
+    /// env 只在 target 缺 prefix 时用于回落内置布局（旧配置兼容路径）。
     fn read_existing_entries(
         &self,
         target: &ResolvedTargetConfig,
         config_path: &Path,
+        env: &Environment,
     ) -> Result<BTreeMap<String, JsonValue>> {
-        super::mcps::read_file_entries(self, target, config_path)
+        super::mcps::read_file_entries(self, target, config_path, env)
     }
 
     /// 预览条目内容（格式标签 + 序列化文本），不落盘。
@@ -110,7 +113,6 @@ const REMOTE_EXAMPLE_LABEL: &str = "远端地址（http / sse）";
 fn example_server(name: &str) -> ResolvedMcpConfig {
     ResolvedMcpConfig {
         name: name.to_string(),
-        enabled: true,
         transport: McpTransport::Stdio,
         command: Some("node".to_string()),
         args: vec!["server.js".to_string()],
@@ -126,7 +128,6 @@ fn example_server(name: &str) -> ResolvedMcpConfig {
 fn example_remote_server(name: &str) -> ResolvedMcpConfig {
     ResolvedMcpConfig {
         name: name.to_string(),
-        enabled: true,
         transport: McpTransport::Http,
         command: None,
         args: Vec::new(),
@@ -358,6 +359,7 @@ impl McpFormatWriter for DshPatchWriter {
         &self,
         _target: &ResolvedTargetConfig,
         config_path: &Path,
+        _env: &Environment,
     ) -> Result<BTreeMap<String, JsonValue>> {
         read_existing_dsh_patch_entries(config_path)
     }
@@ -438,7 +440,6 @@ fn desired_toml_mcp(
     timeout: Option<TomlValue>,
 ) -> Result<TomlValue> {
     let mut table = toml::map::Map::new();
-    table.insert("enabled".to_string(), TomlValue::Boolean(server.enabled));
 
     if let Some(timeout) = timeout {
         table.insert("tool_timeout_sec".to_string(), timeout);
@@ -569,7 +570,6 @@ fn desired_openai_json_mcp(server: &ResolvedMcpConfig) -> Result<JsonValue> {
 
 pub(super) fn desired_opencode_mcp(server: &ResolvedMcpConfig) -> Result<JsonValue> {
     let mut object = JsonMap::new();
-    object.insert("enabled".to_string(), JsonValue::Bool(server.enabled));
     if let Some(timeout) = server.timeout {
         object.insert("timeout".to_string(), JsonValue::Number(timeout.into()));
     }
@@ -877,6 +877,7 @@ mod tests {
     use anyhow::Result;
 
     use super::mcp_format_writer;
+    use crate::support::environment::Environment;
     use crate::test_support::TestDir;
     use crate::workspace::types::{
         AgentTargetId, McpConfigType, McpTransport, ResolvedMcpConfig, ResolvedTargetConfig,
@@ -890,7 +891,6 @@ mod tests {
     fn stdio_server(name: &str) -> ResolvedMcpConfig {
         ResolvedMcpConfig {
             name: name.to_string(),
-            enabled: true,
             transport: McpTransport::Stdio,
             created_at: None,
             homepage: None,
@@ -911,7 +911,6 @@ mod tests {
     ) -> ResolvedTargetConfig {
         ResolvedTargetConfig {
             id: AgentTargetId(id.to_string()),
-            enabled: true,
             is_project: false,
             skill_dir: PathBuf::from("/tmp/reins-mcp-formats-skills"),
             config_path: Some(config_path),
@@ -948,7 +947,7 @@ mod tests {
 
         assert!(
             writer
-                .read_existing_entries(&target, &config_path)?
+                .read_existing_entries(&target, &config_path, &Environment::default())?
                 .contains_key("probe")
         );
 
@@ -999,7 +998,7 @@ mod tests {
 
         assert!(
             writer
-                .read_existing_entries(&target, &config_path)?
+                .read_existing_entries(&target, &config_path, &Environment::default())?
                 .contains_key("probe")
         );
 
@@ -1036,7 +1035,7 @@ mod tests {
         );
         assert!(
             writer
-                .read_existing_entries(&target, &config_path)?
+                .read_existing_entries(&target, &config_path, &Environment::default())?
                 .contains_key("probe")
         );
 
@@ -1063,7 +1062,7 @@ mod tests {
         );
         assert_eq!(
             writer
-                .read_existing_entries(&target, &json_path)
+                .read_existing_entries(&target, &json_path, &Environment::default())
                 .unwrap_err()
                 .to_string(),
             GROK_TOML_ONLY
@@ -1103,7 +1102,7 @@ mod tests {
 
         assert!(
             writer
-                .read_existing_entries(&target, &config_path)?
+                .read_existing_entries(&target, &config_path, &Environment::default())?
                 .contains_key("probe")
         );
 
@@ -1172,7 +1171,7 @@ mod tests {
         // 读取侧按清洗后的 serverName 建键。
         assert!(
             writer
-                .read_existing_entries(&target, &config_path)?
+                .read_existing_entries(&target, &config_path, &Environment::default())?
                 .contains_key("probe")
         );
 
@@ -1214,7 +1213,6 @@ mod tests {
         let writer = mcp_format_writer(McpConfigType::Dsh);
         let server = ResolvedMcpConfig {
             name: "probe".to_string(),
-            enabled: true,
             transport: McpTransport::Http,
             created_at: None,
             homepage: None,

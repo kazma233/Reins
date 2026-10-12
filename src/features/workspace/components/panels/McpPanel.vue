@@ -46,7 +46,7 @@ const {
 
 const {
   projectAgentPickerDialog,
-  enabledProjectEntries,
+  projectEntriesWithAgents,
   projectAgentsByProjectId,
   pickerInstalledAgentIds,
   pickerPendingDiff,
@@ -140,7 +140,7 @@ function cardSyncResult(serverName: string): { text: string; failed: boolean } |
               :mcp="mcp"
               :inspection="inspectionMap.get(mcp.name) ?? null"
               :loading="runningAction"
-              :projects="enabledProjectEntries"
+              :projects="projectEntriesWithAgents"
               :target-ids="targetIds"
               :warning="pickerWarning(mcp.name)"
               :sync-result="cardSyncResult(mcp.name)"

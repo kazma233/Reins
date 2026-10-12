@@ -68,7 +68,7 @@ export function hasCurrentSourceSkillLinks(
 
 // 能被勾选的 target：禁用的、整目录继承别的 target 的都不参与同步选择。
 export function isSelectableSyncTarget(target: SyncTargetOption): boolean {
-  return target.enabled && !target.linkedTargetId;
+  return !target.linkedTargetId;
 }
 
 // 打开同步弹窗时的 targets 预选：只挑已经装了当前来源内容的那批（列表里带

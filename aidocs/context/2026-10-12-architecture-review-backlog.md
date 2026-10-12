@@ -1,7 +1,7 @@
 # 架构评审待办清单
 
 - 日期：2026-10-12
-- 状态：待办（按建议顺序排列）
+- 状态：待办（第 1、2 项已完成，其余按建议顺序排列）
 
 来源：2026-10-11 的架构加深评审（workspace / session / providers / 前端四路扫描 + ADR 交叉验证）。已完成项见文末；以下是剩余候选。文中行号为评审时快照，实施前以当前代码为准。
 
@@ -10,17 +10,19 @@
 ### 1. C10 · 工具配置路径与 env 重定向：三处知识、两域口径已分叉
 
 - 域：providers / workspace / agents；强度：Worth exploring（有真实咬人风险）
-- 问题：「某工具全局配置在哪、认不认 env 重定向」存在三份——`agents.rs` 的 GlobalLayout、providers 的 ToolEnv、tests 的路径助手；且 CODEX_HOME / CLAUDE_CONFIG_DIR / DSH_HOME 只被 providers 承认。用户设置后，workspace 的 MCP 分发写 `~/.codex/config.toml`，providers 的模型配置写 `$CODEX_HOME/config.toml`——同一个文件两个域解析到两个位置。
-- 方向：`GlobalRoot` 补齐 env 变体（解析走 `support::fs` 单一口径，接受可注入 env 视图保 ToolEnv 测试性），providers 路径函数从清单派生，测试助手改调清单。
-- 前置：先定性「workspace 不认 CODEX_HOME」是知识漂移还是隐含决策（无 ADR 记载，大概率漂移）；`agents.rs`「只收静态知识不收行为」的模块定位需以增补方式修订。
-- 证据：`src-tauri/src/agents.rs:102-260`（GlobalRoot 仅 Home/GrokHome/PiAgentDir）、`providers/apps/mod.rs:521-604`（ToolEnv）、`tests/providers.rs:178-230`（第三份拷贝）。
+- 状态：**已完成**（2026-10-12，见 `decisions/2026-10-12-global-root-env-redirect.md`）。剩余仅两个 unverified 点（claude 的 `CLAUDE_CONFIG_DIR` 语义）与 session 域的同类解析（已单列，不在 C10 范围）。
+- 问题（修复前）：「某工具全局配置在哪、认不认 env 重定向」存在三份——`agents.rs` 的 GlobalLayout、providers 的 ToolEnv、tests 的路径助手；且 CODEX_HOME / CLAUDE_CONFIG_DIR / DSH_HOME 只被 providers 承认。用户设置后，workspace 的 MCP 分发写 `~/.codex/config.toml`，providers 的模型配置写 `$CODEX_HOME/config.toml`——同一个文件两个域解析到两个位置。
+- 已做：重定向知识收进 `support::environment`（`Environment` 是进程环境的唯一读取点，`Redirect` 同时持变量名与默认目录）；`GlobalRoot` 补齐三个 env 变体且与模板渲染共用同一判据；providers 的路径函数从清单派生（`mcp_config_path(app)` 读 `mcp_config_path`），原 `ToolEnv` 删除；workspace 的环境挂在 store 上（`app()` 读环境、`at()` 空视图、`with_env()` 注入）；`tests/providers.rs` 的第三份路径助手删除，测试改调生产函数。
+- 证据：`src-tauri/src/support/environment.rs`、`agents.rs`（GlobalRoot / GlobalLayout）、`workspace/config.rs`（store 持环境）、`providers/apps/mod.rs`（路径函数派生化）。
 
 ### 2. C1 · skill 分发的「target 安装面」收成深模块
 
 - 域：workspace；强度：Strong
-- 问题：「把一个 skill 装进一个 target」的物理语义没有接缝。三条平行遍历（sync `skills.rs:327-422`、conflicts 预览 `458-496`、remove `1101-1175`）各自携带 skip 规则（两份且行为刻意不同：`379-385` vs `470-475`）、落点计算（`389` vs `479`）、链接分类与路径规范化；同一个 destination 状态机被渲染成 4 种输出形状（`191-242 / 498-543 / 693-733 / 737-785`）。历史 bug（两侧规范化不一致导致 /var → /private/var 链接删不掉，`skills.rs:1106` 注释）恰好落在重复处。
-- 方向：安装 / 预览冲突 / 枚举链接 / 移除四个动作收进一个以 target + 来源根为输入的模块；skip、落点、分类状态机、`normalize_link_path` 全部内化，输出统一 destination 枚举，文案由调用方渲染。
-- 收益：落点 / skip 规则变化只改一处；单 target 最小夹具可测（现状须手拼三件套 config，`tests/workspace.rs:17-53`）。
+- 状态：**已完成**（2026-10-12，见 `decisions/2026-10-12-skill-install-surface.md`）。
+- 问题（修复前）：「把一个 skill 装进一个 target」的物理语义没有接缝。三条平行遍历（sync、conflicts 预览、remove）各自携带 skip 规则（两份且行为刻意不同）、落点计算、链接分类与路径规范化；同一个 destination 状态机被渲染成 4 种输出形状。历史 bug（两侧规范化不一致导致 /var → /private/var 链接删不掉）恰好落在重复处。
+- 已做：新增 `workspace/skill_install.rs`——`resolve_ids` / `managed_targets` 统一目标与 skip 判定，`SkillInstall` 提供 `apply` / `conflicts` / `remove_installed` / `remove_at` 四个动作，`DestinationState`（uninstalled / 指向本 skill / 指向同来源别的 skill / 指向别处 / 真实文件目录）是三态比较的唯一实现，`enumerate_links` / `normalize_link_path` / `relative_to_source_root` 内化；`skills.rs` 只留来源发现、git 缓存与编排，四条调用路径全部改为调用模块，重复的 `SkillAction`/`SkillActionKind` 与本地路径助手删除。
+- 收益落地：单 target 最小夹具 5 个直接测试（`skill_install.rs` 内联模块），不再手拼整份 config.yaml。
+- 证据：`src-tauri/src/workspace/skill_install.rs`、`workspace/skills.rs`（1326 行，较改造前少约 370 行）。
 
 ### 3. C2 · target 的寻址与枚举缺一个接缝
 
@@ -71,12 +73,19 @@
 - 问题：「目录文件必须排在 config.toml 之前写入」只活在 `apps/codex.rs:324-330` 的注释里，接口类型 `Vec<(PathBuf, String)>` 对顺序零承诺。
 - 方向：一个测试断言 codex apply 产物的首个文件是 reins-models.json，把注释变成被守卫的事实。
 
+## 已完成（本轮额外做的裁决）
+
+- **启停开关全部废弃**（`decisions/2026-10-12-deprecate-enabled-flags.md`）：target / MCP / 项目 agent 三处 `enabled` 字段删除，旧配置的键被忽略且不再写回，前端启停交互与 3 个相关测试删除。这条原本不在清单里，是实施 C1 时发现的同层分叉（同一个状态机被四条路径各解释一遍）。
+
 ## 小项（不单独立项，顺手做）
 
 - providers 能力表 `ModelField::ReasoningLevels` 零适配器引用（`apps/mod.rs:66-79`）——2026-09-24 plan 声明的 unverified 项，验证后填充或删除。
+- session 域的同类环境解析：`session/pi.rs`、`session/grokbuild.rs` 直接读 env，`session/codex.rs` / `claude_code.rs` / `dsh.rs` 各自拼默认目录（与 `support::environment` 同批事实）。C10 只覆盖 agents / workspace / providers 三处；session 的会话存储读取路径要收敛应单独立项，见 ADR「未纳入本次」。
 
 ## 已完成（2026-10-11 ~ 10-12，作为上下文保留）
 
+- C1 安装面深模块（`decisions/2026-10-12-skill-install-surface.md`）：目标 skip 判定、落点计算、链接三态分类、按来源卸载四条路径收进 `workspace/skill_install.rs`；`DestinationState` 取代原先按调用方分叉的 4 种判定；单 target 最小夹具 5 个直接测试。行为逐条对齐（含一条隐性前置于写入的「创建父目录」）。
+- C10 全项（`decisions/2026-10-12-global-root-env-redirect.md`）：重定向知识收进 `support::environment`（进程环境唯一读取点，`Redirect` 同持变量名与默认目录），`GlobalRoot` 认 CODEX_HOME / CLAUDE_CONFIG_DIR / DSH_HOME 且与模板渲染共用判据；providers 路径函数从清单派生、原 `ToolEnv` 删除；workspace 环境挂在 store 上；`tests/providers.rs` 的第三份路径助手删除。回归测试 `tests/workspace.rs::codex_mcp_apply_follows_codex_home_redirect` 先失败后通过；两个 claude 语义点仍标 `unverified`。
 - C8 方言表（`4994b5d` / `c31b33b`）：归一化枚举拼写单一来源 + roundtrip 守卫；修复 dsh `off→none` 映射文案活 bug。
 - Windows 测试基线（`ea152bb` / `8371e1c`）：修复 claude delete plan 漏 meta.json、grokbuild delete plan 漏子会话目录两个真 bug；`GlobalRoot::resolve` 走 `user_home_dir`；快照比较统一分隔符口径。
 - C13 token 展示口径（`6f088cb`）：收敛到 `sessions/token-usage.ts` 单一来源。

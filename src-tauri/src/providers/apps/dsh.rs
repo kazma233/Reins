@@ -16,7 +16,7 @@ use serde_yaml::{Mapping, Value as YamlValue};
 
 use super::dialect::{PI_AI_PROTOCOL, PI_AI_REASONING};
 use super::{
-    AppAdapter, AppCapability, ModelField, ToolEnv, display_path, ensure_protocol_supported,
+    AppAdapter, AppCapability, Environment, ModelField, display_path, ensure_protocol_supported,
     external_entry, registration_key,
 };
 use crate::providers::types::{
@@ -24,7 +24,7 @@ use crate::providers::types::{
     ResolvedProvider,
 };
 use crate::support::dsh_patch;
-use crate::support::fs::user_home_dir;
+use crate::support::environment::Redirect;
 
 pub(crate) struct DshAdapter;
 
@@ -52,27 +52,22 @@ fn api_key_ref(provider_id: &str) -> String {
 // 路径
 // ---------------------------------------------------------------------------
 
-pub(crate) fn dsh_home(env: &ToolEnv) -> Result<PathBuf> {
-    match &env.dsh_home {
-        Some(dir) => Ok(dir.clone()),
-        None => user_home_dir()
-            .map(|home| home.join(".dsh"))
-            .ok_or_else(|| anyhow::anyhow!("无法解析 HOME 目录。")),
-    }
+pub(crate) fn dsh_home(env: &Environment) -> Result<PathBuf> {
+    env.resolve_required(Redirect::DshHome)
 }
 
-pub(crate) fn dsh_patch_path(env: &ToolEnv) -> Result<PathBuf> {
+pub(crate) fn dsh_patch_path(env: &Environment) -> Result<PathBuf> {
     Ok(dsh_home(env)?.join("cordis.patch.yml"))
 }
 
 // 默认模型行写在桌面版实际使用的 profile patch 里——profile 层晚于全局层
 // 生效，之前 settings 导入落下的 agent-default-model 行就位于此，只有同层
 // 覆盖才能纠正它。
-pub(crate) fn dsh_profile_patch_path(env: &ToolEnv) -> Result<PathBuf> {
+pub(crate) fn dsh_profile_patch_path(env: &Environment) -> Result<PathBuf> {
     Ok(dsh_home(env)?.join("profiles/desktop/cordis.patch.yml"))
 }
 
-pub(crate) fn dsh_credentials_path(env: &ToolEnv) -> Result<PathBuf> {
+pub(crate) fn dsh_credentials_path(env: &Environment) -> Result<PathBuf> {
     Ok(dsh_home(env)?.join(".credentials.yaml"))
 }
 
@@ -302,7 +297,7 @@ impl AppAdapter for DshAdapter {
 
     // providers 域只管理 profile 层 patch 与凭据；全局 cordis patch 属于
     // workspace 域 MCP 分发，不在此列（inspect 反读时会带上它）。
-    fn config_paths(&self, env: &ToolEnv) -> Result<Vec<PathBuf>> {
+    fn config_paths(&self, env: &Environment) -> Result<Vec<PathBuf>> {
         Ok(vec![
             dsh_profile_patch_path(env)?,
             dsh_credentials_path(env)?,
@@ -311,7 +306,7 @@ impl AppAdapter for DshAdapter {
 
     // dsh 启动时会拒绝加载非 owner-only(0600) 的凭据文件,整个 app 起不来;
     // 凭据写入必须强制该权限(路径解析失败时返回空,由后续写入路径自己报错)。
-    fn restricted_paths(&self, env: &ToolEnv) -> Vec<PathBuf> {
+    fn restricted_paths(&self, env: &Environment) -> Vec<PathBuf> {
         dsh_credentials_path(env).into_iter().collect()
     }
 
@@ -339,7 +334,7 @@ impl AppAdapter for DshAdapter {
 
     fn inspect(
         &self,
-        env: &ToolEnv,
+        env: &Environment,
         providers: &BTreeMap<String, ResolvedProvider>,
     ) -> Result<ProviderAppState> {
         let global_patch = dsh_patch_path(env)?;
@@ -423,7 +418,7 @@ impl AppAdapter for DshAdapter {
 
     fn apply(
         &self,
-        env: &ToolEnv,
+        env: &Environment,
         provider: &ResolvedProvider,
         plan: &ApplyProviderInput,
         api_key: &str,
@@ -493,7 +488,7 @@ impl AppAdapter for DshAdapter {
 
     fn remove(
         &self,
-        env: &ToolEnv,
+        env: &Environment,
         provider_id: &str,
         provider: Option<&ResolvedProvider>,
     ) -> Result<Vec<(PathBuf, String)>> {
@@ -553,7 +548,11 @@ impl AppAdapter for DshAdapter {
         Ok(files)
     }
 
-    fn remove_external(&self, env: &ToolEnv, entry_key: &str) -> Result<Vec<(PathBuf, String)>> {
+    fn remove_external(
+        &self,
+        env: &Environment,
+        entry_key: &str,
+    ) -> Result<Vec<(PathBuf, String)>> {
         let profile_patch = dsh_profile_patch_path(env)?;
         if !profile_patch.exists() {
             bail!("dsh 配置文件不存在：{}", display_path(&profile_patch));

@@ -26,7 +26,6 @@ import { useWorkspaceAction } from "./useWorkspaceAction";
 
 type WorkspaceMcpPayload = {
   name: string;
-  enabled: boolean;
   transport: McpConfigView["transport"];
   homepage: string | null;
   command: string | null;
@@ -220,11 +219,6 @@ export function useMcpMutations() {
     }
 
     for (const targetId of syncTargetIds) {
-      if (!payload.enabled) {
-        await removeMcpFromTarget(currentServerName, targetId);
-        continue;
-      }
-
       await applyMcpToTarget(payload.name, targetId);
 
       if (currentServerName !== payload.name) {
@@ -242,7 +236,6 @@ export function useMcpMutations() {
     mcpCreateDialog.form = {
       originalName: mcp.name,
       name: mcp.name,
-      enabled: mcp.enabled,
       transport: mcp.transport,
       createdAt: mcp.createdAt,
       homepage: mcp.homepage ?? "",
@@ -288,7 +281,6 @@ export function useMcpMutations() {
     try {
       payload = {
         name: form.name.trim(),
-        enabled: form.enabled,
         transport: form.transport,
         homepage: form.homepage.trim() || null,
         command: form.transport === "stdio" ? form.command.trim() : null,
@@ -360,7 +352,6 @@ export function useMcpMutations() {
     mcpCardSyncDialog.serverName = mcp.name;
     mcpCardSyncDialog.payload = {
       name: mcp.name,
-      enabled: mcp.enabled,
       transport: mcp.transport,
       homepage: mcp.homepage,
       command: mcp.command,

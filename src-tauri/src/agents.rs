@@ -7,31 +7,42 @@ use std::path::PathBuf;
 
 use crate::providers::types::ProviderAppId;
 use crate::session::model::SourceApp;
+use crate::support::environment::{Environment, Redirect};
 use crate::workspace::types::McpConfigType;
 
-// 全局布局的路径根：多数工具固定在 HOME 下；grok / pi 支持 env 重定向，
-// 解析规则与 support::fs 的 grok_home_path / pi_agent_dir_path 同一口径。
+// 全局布局的路径根：多数工具固定在 HOME 下，其余各有一个官方重定向（映射见
+// GlobalRoot::redirect）。解析经 Environment 注入，本模块不读进程环境；
+// providers 的适配器同样收 Environment 参数。
 #[derive(Clone, Copy)]
 pub(crate) enum GlobalRoot {
     Home,
     GrokHome,
     PiAgentDir,
+    CodexHome,
+    ClaudeConfigDir,
+    DshHome,
 }
 
 impl GlobalRoot {
-    // 解析为实际根目录：env 重定向优先，HOME 兜底。home 走 user_home_dir
-    // 单一口径，测试的 home 覆盖才能生效（Windows 上 dirs::home_dir 忽略
-    // HOME，直连会让真实家目录漏进测试）。
-    pub(crate) fn resolve(self) -> Option<PathBuf> {
-        let home = crate::support::fs::user_home_dir();
+    // 模板渲染与路径解析共用的判据：该根对应哪个重定向（无官方变量时为 None）。
+    pub(crate) fn redirect(self) -> Option<Redirect> {
         match self {
-            GlobalRoot::Home => home,
-            GlobalRoot::GrokHome => {
-                crate::support::fs::grok_home_path(std::env::var_os("GROK_HOME"), home)
-            }
-            GlobalRoot::PiAgentDir => {
-                crate::support::fs::pi_agent_dir_path(std::env::var_os("PI_CODING_AGENT_DIR"), home)
-            }
+            GlobalRoot::Home => None,
+            GlobalRoot::GrokHome => Some(Redirect::GrokHome),
+            GlobalRoot::PiAgentDir => Some(Redirect::PiAgentDir),
+            GlobalRoot::CodexHome => Some(Redirect::CodexHome),
+            GlobalRoot::ClaudeConfigDir => Some(Redirect::ClaudeConfigDir),
+            GlobalRoot::DshHome => Some(Redirect::DshHome),
+        }
+    }
+
+    // 解析为实际根目录：重定向优先，HOME 兜底。home 走 Environment 里的
+    // user_home_dir 口径，测试的 home 覆盖才能生效（Windows 上 dirs::home_dir
+    // 忽略 HOME，直连会让真实家目录漏进测试）。
+    pub(crate) fn resolve(self, env: &Environment) -> Option<PathBuf> {
+        match self.redirect() {
+            Some(redirect) => env.resolve(redirect),
+            None => env.home.clone(),
         }
     }
 
@@ -41,6 +52,9 @@ impl GlobalRoot {
             GlobalRoot::Home => "~",
             GlobalRoot::GrokHome => "~/.grok",
             GlobalRoot::PiAgentDir => "~/.pi/agent",
+            GlobalRoot::CodexHome => "~/.codex",
+            GlobalRoot::ClaudeConfigDir => "~/.claude",
+            GlobalRoot::DshHome => "~/.dsh",
         }
     }
 }
@@ -51,7 +65,9 @@ pub(crate) struct McpLayout {
     pub(crate) config_type: McpConfigType,
 }
 
-// 全局布局：skill 目录与 MCP 配置入口都相对 GlobalRoot 根。
+// 全局布局：路径相对 GlobalRoot 根；`~/` 前缀表示落在 HOME 而非 root 下
+// （codex 的 skills 与 claude 的 .claude.json：重定向只搬配置目录，这两个
+// 落点仍在 HOME）。
 pub(crate) struct GlobalLayout {
     pub(crate) root: GlobalRoot,
     pub(crate) skill_dir: &'static str,
@@ -70,7 +86,7 @@ pub(crate) struct ProjectLayout {
 pub(crate) enum TemplateEntry {
     // 写全 skill_dir 与 MCP 路径（~ 缩写；pi 在 env 重定向时固化为绝对路径）。
     // mcp.enabled 键现状只有部分条目携带（pi 段没有），如实区分。
-    Standard { mcp_enabled: bool },
+    Standard,
     // 留空 skill_dir 与 MCP 路径：解析时回落 builtin defaults，跟随
     // GROK_HOME 重定向，避免模板固化错误路径（grokbuild）。
     FollowEnv,
@@ -113,15 +129,17 @@ pub(crate) static AGENTS: &[AgentSpec] = &[
             config_type: McpConfigType::Common,
         },
         global: GlobalLayout {
-            root: GlobalRoot::Home,
-            skill_dir: ".agents/skills",
-            mcp_config_path: Some(".codex/config.toml"),
+            root: GlobalRoot::CodexHome,
+            // skills 不在 CODEX_HOME 内：codex 的 skills 目录相对 HOME 解析
+            // （`.agents/skills`），只有 config.toml 随 CODEX_HOME 重定向。
+            skill_dir: "~/.agents/skills",
+            mcp_config_path: Some("config.toml"),
         },
         project: Some(ProjectLayout {
             skill_dir: ".agents/skills",
             mcp_config_path: Some(".codex/config.toml"),
         }),
-        template: TemplateEntry::Standard { mcp_enabled: true },
+        template: TemplateEntry::Standard,
     },
     AgentSpec {
         key: "claude",
@@ -134,16 +152,19 @@ pub(crate) static AGENTS: &[AgentSpec] = &[
             config_type: McpConfigType::Common,
         },
         global: GlobalLayout {
-            root: GlobalRoot::Home,
-            skill_dir: ".claude/skills",
-            mcp_config_path: Some(".claude.json"),
+            root: GlobalRoot::ClaudeConfigDir,
+            skill_dir: "skills",
+            // CLI 状态与 MCP 条目在配置目录之外（官方目录布局）：~ 前缀表示
+            // 落在 HOME。该文件是否随 CLAUDE_CONFIG_DIR 搬移未经实测，见
+            // decisions/2026-10-12-global-root-env-redirect.md 的 unverified。
+            mcp_config_path: Some("~/.claude.json"),
         },
         // Claude 的项目级 MCP 配置按官方约定在项目根 .mcp.json。
         project: Some(ProjectLayout {
             skill_dir: ".claude/skills",
             mcp_config_path: Some(".mcp.json"),
         }),
-        template: TemplateEntry::Standard { mcp_enabled: true },
+        template: TemplateEntry::Standard,
     },
     AgentSpec {
         key: "opencode",
@@ -165,7 +186,7 @@ pub(crate) static AGENTS: &[AgentSpec] = &[
             skill_dir: ".opencode/skills",
             mcp_config_path: Some("opencode.json"),
         }),
-        template: TemplateEntry::Standard { mcp_enabled: true },
+        template: TemplateEntry::Standard,
     },
     AgentSpec {
         key: "zcode",
@@ -187,7 +208,7 @@ pub(crate) static AGENTS: &[AgentSpec] = &[
             skill_dir: ".zcode/skills",
             mcp_config_path: Some(".zcode/config.json"),
         }),
-        template: TemplateEntry::Standard { mcp_enabled: true },
+        template: TemplateEntry::Standard,
     },
     AgentSpec {
         key: "grokbuild",
@@ -232,7 +253,7 @@ pub(crate) static AGENTS: &[AgentSpec] = &[
             skill_dir: ".pi/skills",
             mcp_config_path: Some(".pi/mcp.json"),
         }),
-        template: TemplateEntry::Standard { mcp_enabled: false },
+        template: TemplateEntry::Standard,
     },
     AgentSpec {
         key: "dsh",
@@ -247,9 +268,9 @@ pub(crate) static AGENTS: &[AgentSpec] = &[
             config_type: McpConfigType::Dsh,
         },
         global: GlobalLayout {
-            root: GlobalRoot::Home,
-            skill_dir: ".dsh/skills",
-            mcp_config_path: Some(".dsh/cordis.patch.yml"),
+            root: GlobalRoot::DshHome,
+            skill_dir: "skills",
+            mcp_config_path: Some("cordis.patch.yml"),
         },
         // dsh 项目层只读 skills（项目 rank 优先于用户级）；MCP 走全局
         // Cordis patch，项目级没有配置文件，是“仅 skill 分发”形态。

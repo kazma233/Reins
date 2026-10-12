@@ -58,7 +58,7 @@ export function useProjectMutations() {
       originalProjectId: project.id,
       projectId: project.id,
       path: project.path,
-      agents: project.agents.filter((a) => a.enabled).map((a) => a.id),
+      agents: project.agents.map((a) => a.id),
       errors: {},
     };
     projectCreateDialog.error = null;

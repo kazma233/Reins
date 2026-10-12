@@ -10,7 +10,7 @@ use anyhow::{Result, bail};
 use serde_json::{Map as JsonMap, Value as JsonValue};
 
 use super::{
-    AppAdapter, AppCapability, ModelField, ToolEnv, claude_settings_path, display_path,
+    AppAdapter, AppCapability, Environment, ModelField, claude_settings_path, display_path,
     ensure_protocol_supported, external_entry, read_json_object, serialize_json,
 };
 use crate::providers::types::{
@@ -48,7 +48,7 @@ impl AppAdapter for ClaudeAdapter {
         ProviderAppId::Claude
     }
 
-    fn config_paths(&self, env: &ToolEnv) -> Result<Vec<PathBuf>> {
+    fn config_paths(&self, env: &Environment) -> Result<Vec<PathBuf>> {
         Ok(vec![claude_settings_path(env)?])
     }
 
@@ -76,7 +76,7 @@ impl AppAdapter for ClaudeAdapter {
 
     fn inspect(
         &self,
-        env: &ToolEnv,
+        env: &Environment,
         providers: &BTreeMap<String, ResolvedProvider>,
     ) -> Result<ProviderAppState> {
         let path = claude_settings_path(env)?;
@@ -142,7 +142,7 @@ impl AppAdapter for ClaudeAdapter {
 
     fn apply(
         &self,
-        env: &ToolEnv,
+        env: &Environment,
         provider: &ResolvedProvider,
         plan: &ApplyProviderInput,
         api_key: &str,
@@ -207,7 +207,7 @@ impl AppAdapter for ClaudeAdapter {
 
     fn remove(
         &self,
-        env: &ToolEnv,
+        env: &Environment,
         provider_id: &str,
         provider: Option<&ResolvedProvider>,
     ) -> Result<Vec<(PathBuf, String)>> {
@@ -261,7 +261,11 @@ impl AppAdapter for ClaudeAdapter {
         Ok(vec![(path, serialize_json(&root)?)])
     }
 
-    fn remove_external(&self, _env: &ToolEnv, _entry_key: &str) -> Result<Vec<(PathBuf, String)>> {
+    fn remove_external(
+        &self,
+        _env: &Environment,
+        _entry_key: &str,
+    ) -> Result<Vec<(PathBuf, String)>> {
         // Claude 的外部配置是 env 内嵌值，没有可结构化删除的独立条目。
         bail!("Claude 的外部配置不支持按条目删除。");
     }

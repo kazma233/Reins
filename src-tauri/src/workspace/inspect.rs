@@ -11,6 +11,7 @@ use super::{
     ProjectInspection, ResolvedManagerConfig, ResolvedMcpConfig, ResolvedTargetConfig,
     TargetInspection, WorkspaceInspection, parse_manager_config, read_existing_mcp_entries,
 };
+use crate::support::environment::Environment;
 
 type McpEntryCache = HashMap<
     (AgentTargetId, PathBuf, String, McpConfigType),
@@ -20,8 +21,9 @@ type McpEntryCache = HashMap<
 pub(crate) fn inspect_app_state_document(
     raw_content: &str,
     config_path: &Path,
+    env: &Environment,
 ) -> Result<WorkspaceInspection> {
-    let config = parse_manager_config(raw_content, config_path)?;
+    let config = parse_manager_config(raw_content, config_path, env)?;
     let warnings = Vec::new();
 
     let targets = config
@@ -29,7 +31,6 @@ pub(crate) fn inspect_app_state_document(
         .values()
         .map(|target| TargetInspection {
             id: target.id.clone(),
-            enabled: target.enabled,
             skill_dir: PathInspection {
                 path: super::display_path(&target.skill_dir),
                 exists: target.skill_dir.exists(),
@@ -45,7 +46,7 @@ pub(crate) fn inspect_app_state_document(
     let mcps = config
         .mcps
         .iter()
-        .map(|mcp| inspect_mcp(mcp, &config, &mut mcp_entry_cache))
+        .map(|mcp| inspect_mcp(mcp, &config, &mut mcp_entry_cache, env))
         .collect::<Result<Vec<_>>>()?;
 
     let projects = config
@@ -62,7 +63,6 @@ pub(crate) fn inspect_app_state_document(
                 .values()
                 .map(|target| TargetInspection {
                     id: target.id.clone(),
-                    enabled: target.enabled,
                     skill_dir: PathInspection {
                         path: super::display_path(&target.skill_dir),
                         exists: target.skill_dir.exists(),
@@ -89,6 +89,7 @@ fn inspect_mcp(
     mcp: &ResolvedMcpConfig,
     config: &ResolvedManagerConfig,
     mcp_entry_cache: &mut McpEntryCache,
+    env: &Environment,
 ) -> Result<McpInspection> {
     let mut targets = Vec::new();
 
@@ -99,6 +100,7 @@ fn inspect_mcp(
             None,
             None,
             mcp_entry_cache,
+            env,
         )?);
     }
 
@@ -111,13 +113,13 @@ fn inspect_mcp(
                 Some(composite_id),
                 Some(&project.id),
                 mcp_entry_cache,
+                env,
             )?);
         }
     }
 
     Ok(McpInspection {
         name: mcp.name.clone(),
-        enabled: mcp.enabled,
         targets,
     })
 }
@@ -128,31 +130,25 @@ fn inspect_mcp_target(
     composite_id: Option<AgentTargetId>,
     project_id: Option<&str>,
     mcp_entry_cache: &mut McpEntryCache,
+    env: &Environment,
 ) -> Result<McpTargetInspection> {
     let config_path = target.config_path.as_ref();
 
-    let (state, detail, config_exists) = if !target.enabled {
-        (
-            "disabled".to_string(),
-            "当前 target 已禁用。".to_string(),
-            config_path.is_some_and(|path| path.exists()),
-        )
-    } else if let Some(config_path) = config_path {
-        match read_existing_mcp_entries_cached(mcp_entry_cache, target, config_path) {
+    // 落点状态只有「有没有找到同名条目」两态：agent 与 MCP 都没有启停开关，
+    // 配置在盘上就是生效的。
+    let (state, detail, config_exists) = if let Some(config_path) = config_path {
+        match read_existing_mcp_entries_cached(mcp_entry_cache, target, config_path, env) {
             Ok(existing) => {
                 // 条目 key 的归类由各 config type 的 writer 声明（dsh 为清洗后
                 // 的 serverName，其余与 Reins 的 mcp name 一致）。
                 let lookup_name =
                     mcp_format_writer(target.mcp_config_type).entry_key_for(&mcp.name);
-                let state = if !mcp.enabled {
-                    "disabled".to_string()
-                } else if existing.contains_key(&lookup_name) {
+                let state = if existing.contains_key(&lookup_name) {
                     "present".to_string()
                 } else {
                     "missing".to_string()
                 };
                 let detail = match state.as_str() {
-                    "disabled" => "当前 yaml 中该 MCP 已禁用。".to_string(),
                     "present" => "目标配置里已经存在同名条目。".to_string(),
                     _ => "目标配置里还没有同名条目。".to_string(),
                 };
@@ -186,6 +182,7 @@ fn read_existing_mcp_entries_cached(
     cache: &mut McpEntryCache,
     target: &ResolvedTargetConfig,
     config_path: &Path,
+    env: &Environment,
 ) -> Result<Arc<std::collections::BTreeMap<String, JsonValue>>> {
     let key = (
         target.id.clone(),
@@ -198,7 +195,7 @@ fn read_existing_mcp_entries_cached(
         return cached.clone().map_err(anyhow::Error::msg);
     }
 
-    let result = read_existing_mcp_entries(target, config_path)
+    let result = read_existing_mcp_entries(target, config_path, env)
         .map(Arc::new)
         .map_err(|error| error.to_string());
     cache.insert(key, result.clone());

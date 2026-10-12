@@ -7,9 +7,9 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use crate::providers::apps::ToolEnv;
 use crate::providers::commands::app_config_paths;
 use crate::providers::types::{PROVIDER_APPS, ProviderAppId};
+use crate::support::environment::Environment;
 use crate::test_support::{TestDir, TestEnvGuard};
 use crate::workspace::default_config_template;
 use crate::workspace::targets::{TargetDefaults, builtin_target_defaults, project_agent_defaults};
@@ -101,7 +101,10 @@ fn snapshot_builtin_target_defaults() {
         },
     ]);
 
-    assert_eq!(render_sorted(builtin_target_defaults()), expected);
+    assert_eq!(
+        render_sorted(builtin_target_defaults(&Environment::from_env())),
+        expected
+    );
 }
 
 #[test]
@@ -131,11 +134,75 @@ fn snapshot_builtin_target_defaults_with_env_redirect() {
         },
     ]);
 
-    let redirected: Vec<TargetDefaults> = builtin_target_defaults()
+    let redirected: Vec<TargetDefaults> = builtin_target_defaults(&Environment::from_env())
         .into_iter()
         .filter(|item| item.id.0 == "grokbuild" || item.id.0 == "pi")
         .collect();
     assert_eq!(render_sorted(redirected), expected);
+}
+
+// 其余三个重定向根与 grok / pi 同一口径：workspace 认的落点必须与各工具
+// 官方变量一致，否则同一个配置文件会被两个域解析到两个位置。
+#[test]
+fn snapshot_builtin_target_defaults_with_codex_claude_dsh_redirect() {
+    let dir = TestDir::new("agents-snap-builtin-env-more").unwrap();
+    let home = dir.path().to_path_buf();
+    let _guard = TestEnvGuard::set_home(&home);
+    let codex_home = dir.path().join("custom-codex");
+    let claude_dir = dir.path().join("custom-claude");
+    let dsh_home = dir.path().join("custom-dsh");
+    unsafe { std::env::set_var("CODEX_HOME", &codex_home) };
+    unsafe { std::env::set_var("CLAUDE_CONFIG_DIR", &claude_dir) };
+    unsafe { std::env::set_var("DSH_HOME", &dsh_home) };
+
+    let expected = render_sorted(vec![
+        TargetDefaults {
+            id: AgentTargetId("codex".to_string()),
+            skill_dir: home.join(".agents/skills"),
+            config_path: Some(codex_home.join("config.toml")),
+            config_prefix: "mcp_servers",
+            config_type: McpConfigType::Common,
+        },
+        TargetDefaults {
+            id: AgentTargetId("claude".to_string()),
+            // skills 随配置目录搬移；.claude.json 落在 HOME（该文件是否随
+            // CLAUDE_CONFIG_DIR 搬移未经实测，保持现状并在清单里显式标注）。
+            skill_dir: claude_dir.join("skills"),
+            config_path: Some(home.join(".claude.json")),
+            config_prefix: "mcpServers",
+            config_type: McpConfigType::Common,
+        },
+        TargetDefaults {
+            id: AgentTargetId("dsh".to_string()),
+            skill_dir: dsh_home.join("skills"),
+            config_path: Some(dsh_home.join("cordis.patch.yml")),
+            config_prefix: "",
+            config_type: McpConfigType::Dsh,
+        },
+    ]);
+
+    let redirected: Vec<TargetDefaults> = builtin_target_defaults(&Environment::from_env())
+        .into_iter()
+        .filter(|item| matches!(item.id.0.as_str(), "codex" | "claude" | "dsh"))
+        .collect();
+    assert_eq!(render_sorted(redirected), expected);
+}
+
+// 空串与未设置同义（providers 读同一口径）：空值不该把路径解析成相对路径。
+#[test]
+fn empty_env_redirect_falls_back_to_home() {
+    let dir = TestDir::new("agents-empty-env").unwrap();
+    let home = dir.path().to_path_buf();
+    let _guard = TestEnvGuard::set_home(&home);
+    unsafe { std::env::set_var("CODEX_HOME", "") };
+
+    let codex = builtin_target_defaults(&Environment::from_env())
+        .into_iter()
+        .find(|item| item.id.0 == "codex")
+        .expect("codex defaults exist");
+
+    assert_eq!(codex.skill_dir, home.join(".agents/skills"));
+    assert_eq!(codex.config_path, Some(home.join(".codex/config.toml")));
 }
 
 #[test]
@@ -201,54 +268,45 @@ fn snapshot_default_config_template() {
     let dir = TestDir::new("agents-snap-template").unwrap();
     let _guard = TestEnvGuard::set_home(dir.path());
     unsafe { std::env::remove_var("PI_CODING_AGENT_DIR") };
+    let env = Environment::from_env();
 
     let expected = r#"targets:
   codex:
-    enabled: true
     skill_dir: ~/.agents/skills
     mcp:
-      enabled: true
       config_path: ~/.codex/config.toml
       config_prefix: mcp_servers
       config_type: common
 
   claude:
-    enabled: true
     skill_dir: ~/.claude/skills
     mcp:
-      enabled: true
       config_path: ~/.claude.json
       config_prefix: mcpServers
       config_type: common
 
   opencode:
-    enabled: true
     skill_dir: ~/.config/opencode/skills
     mcp:
-      enabled: true
       config_path: ~/.config/opencode/opencode.json
       config_prefix: mcp.servers
       config_type: opencode
 
   zcode:
-    enabled: true
     skill_dir: ~/.zcode/skills
     mcp:
-      enabled: true
       config_path: ~/.zcode/cli/config.json
       config_prefix: mcp.servers
       config_type: common
 
   # 留空路径以跟随 GROK_HOME；默认 ~/.grok/skills 和 ~/.grok/config.toml。
   grokbuild:
-    enabled: true
     skill_dir: ""
     mcp:
       config_prefix: mcp_servers
       config_type: grokbuild
 
   pi:
-    enabled: true
     skill_dir: ~/.pi/agent/skills
     mcp:
       config_path: ~/.pi/agent/mcp.json
@@ -261,19 +319,14 @@ mcps: []
 #   my-app:
 #     path: ~/code/my-app
 #     agents:
-#       claude:
-#         enabled: true
-#       codex:
-#         enabled: true
-#       opencode:
-#         enabled: true
-#       zcode:
-#         enabled: true
-#       grokbuild:
-#         enabled: true
+#       claude: {}
+#       codex: {}
+#       opencode: {}
+#       zcode: {}
+#       grokbuild: {}
 "#;
 
-    assert_eq!(default_config_template(), expected);
+    assert_eq!(default_config_template(&env), expected);
 }
 
 #[test]
@@ -282,8 +335,9 @@ fn snapshot_default_config_template_pins_pi_dir() {
     let _guard = TestEnvGuard::set_home(dir.path());
     let pi_dir = dir.path().join("custom-pi");
     unsafe { std::env::set_var("PI_CODING_AGENT_DIR", &pi_dir) };
+    let env = Environment::from_env();
 
-    let template = default_config_template();
+    let template = default_config_template(&env);
     let skill_line = format!("    skill_dir: {}", pi_dir.join("skills").display());
     let mcp_line = format!("      config_path: {}", pi_dir.join("mcp.json").display());
     assert!(template.contains(&skill_line), "模板应固化 pi skills 路径");
@@ -318,7 +372,8 @@ fn snapshot_app_config_paths() {
     let dir = TestDir::new("agents-snap-paths").unwrap();
     let home = dir.path().to_path_buf();
     let _guard = TestEnvGuard::set_home(&home);
-    let env = ToolEnv::default();
+    // 与生产同一条读取路径：guard 已把 home 指向临时目录并清空重定向变量。
+    let env = Environment::from_env();
 
     let cases: Vec<(ProviderAppId, Vec<String>)> = vec![
         (
@@ -363,6 +418,38 @@ fn snapshot_app_config_paths() {
             .collect();
         assert_eq!(actual, expected, "{app:?}");
     }
+}
+
+// C10 的核心不变量：workspace 的 MCP 落点与 providers 认的配置文件是同一个。
+// 此前 workspace 只认 GROK_HOME / PI_CODING_AGENT_DIR，用户设 CODEX_HOME 后
+// 两个域会各写一份配置。这条断言把「两域同源」直接钉住（两边各自经不同函数，
+// 但环境与清单判据只有一份）。
+#[test]
+fn workspace_and_providers_agree_on_codex_config_path() {
+    let dir = TestDir::new("agents-two-domains").unwrap();
+    let home = dir.path().to_path_buf();
+    let _guard = TestEnvGuard::set_home(&home);
+    let redirected = dir.path().join("custom-codex");
+    let env = Environment {
+        codex_home: Some(redirected.clone()),
+        ..Environment::from_env()
+    };
+
+    let workspace_path = builtin_target_defaults(&env)
+        .into_iter()
+        .find(|item| item.id.0 == "codex")
+        .and_then(|item| item.config_path)
+        .expect("codex 缺少 workspace 落点");
+    let provider_path = app_config_paths(&env, ProviderAppId::Codex)
+        .into_iter()
+        .find(|path| path.ends_with("config.toml"))
+        .expect("codex 缺少 providers 落点");
+
+    assert_eq!(
+        workspace_path, provider_path,
+        "workspace 与 providers 的 codex 落点必须一致"
+    );
+    assert_eq!(workspace_path, redirected.join("config.toml"));
 }
 
 // AgentSpec 清单自身的一致性：键与各域 id 唯一、PROVIDER_APPS 全覆盖

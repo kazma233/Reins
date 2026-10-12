@@ -132,7 +132,6 @@ export type TargetDeleteDialogState = {
 export type TargetFormState = {
   originalTargetId: string | null;
   targetId: string;
-  enabled: boolean;
   skillDir: string;
   configPath: string;
   mcpConfigPrefix: string;
@@ -162,7 +161,6 @@ export type McpApplyPreviewDialogState = {
 export type McpFormState = {
   originalName: string | null;
   name: string;
-  enabled: boolean;
   transport: McpTransport;
   createdAt: number | null;
   homepage: string;
@@ -225,7 +223,6 @@ export function createSkillDiscoveryPreviewState(): SkillDiscoveryPreviewState {
 export const DEFAULT_MCP_FORM: McpFormState = {
   originalName: null,
   name: "",
-  enabled: true,
   transport: "stdio",
   createdAt: null,
   homepage: "",
@@ -241,7 +238,6 @@ export const DEFAULT_MCP_FORM: McpFormState = {
 export const DEFAULT_TARGET_FORM: TargetFormState = {
   originalTargetId: null,
   targetId: "",
-  enabled: true,
   skillDir: "",
   configPath: "",
   mcpConfigPrefix: "",

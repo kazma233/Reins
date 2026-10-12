@@ -13,7 +13,7 @@ use toml::Value as TomlValue;
 
 use super::dialect::{GROK_PROTOCOL, GROK_REASONING};
 use super::{
-    AppAdapter, AppCapability, ModelField, ToolEnv, display_path, ensure_protocol_supported,
+    AppAdapter, AppCapability, Environment, ModelField, display_path, ensure_protocol_supported,
     external_entry, grok_config_path, read_toml, registration_key, serialize_toml,
 };
 use crate::providers::types::{
@@ -168,7 +168,7 @@ impl AppAdapter for GrokbuildAdapter {
         ProviderAppId::Grokbuild
     }
 
-    fn config_paths(&self, env: &ToolEnv) -> Result<Vec<PathBuf>> {
+    fn config_paths(&self, env: &Environment) -> Result<Vec<PathBuf>> {
         Ok(vec![grok_config_path(env)?])
     }
 
@@ -195,7 +195,7 @@ impl AppAdapter for GrokbuildAdapter {
 
     fn inspect(
         &self,
-        env: &ToolEnv,
+        env: &Environment,
         providers: &BTreeMap<String, ResolvedProvider>,
     ) -> Result<ProviderAppState> {
         let path = grok_config_path(env)?;
@@ -309,7 +309,7 @@ impl AppAdapter for GrokbuildAdapter {
 
     fn apply(
         &self,
-        env: &ToolEnv,
+        env: &Environment,
         provider: &ResolvedProvider,
         plan: &ApplyProviderInput,
         api_key: &str,
@@ -444,7 +444,7 @@ impl AppAdapter for GrokbuildAdapter {
 
     fn remove(
         &self,
-        env: &ToolEnv,
+        env: &Environment,
         provider_id: &str,
         provider: Option<&ResolvedProvider>,
     ) -> Result<Vec<(PathBuf, String)>> {
@@ -465,7 +465,11 @@ impl AppAdapter for GrokbuildAdapter {
         Ok(vec![(path, serialize_toml(&root)?)])
     }
 
-    fn remove_external(&self, env: &ToolEnv, entry_key: &str) -> Result<Vec<(PathBuf, String)>> {
+    fn remove_external(
+        &self,
+        env: &Environment,
+        entry_key: &str,
+    ) -> Result<Vec<(PathBuf, String)>> {
         let path = grok_config_path(env)?;
         if !path.exists() {
             bail!("Grok 配置文件不存在：{}", display_path(&path));

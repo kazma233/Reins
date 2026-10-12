@@ -9,6 +9,7 @@ use super::types::{RawManagerConfig, ResolvedManagerConfig, WorkspaceConfigDocum
 use super::{
     default_config_template, document_from_content, parse_git_owner_repo, parse_manager_config,
 };
+use crate::support::environment::Environment;
 use crate::support::fs::write_atomic;
 
 const APP_DIR_NAME: &str = "reins";
@@ -25,6 +26,9 @@ pub(crate) struct WorkspaceConfigStore(Arc<StoreInner>);
 struct StoreInner {
     app_dir: PathBuf,
     config_path: PathBuf,
+    // 路径解析用的环境视图（工具目录重定向 + HOME）。生产在 app() 里读进程
+    // 环境；测试用 at() 的空视图或 with_env() 注入，不依赖进程环境。
+    env: Environment,
     lock: Mutex<()>,
 }
 
@@ -36,6 +40,7 @@ impl WorkspaceConfigStore {
                 .unwrap_or_else(|| PathBuf::from("."))
                 .join(APP_DIR_NAME),
         )
+        .with_env(Environment::from_env())
     }
 
     // Test/injection constructor: everything (config.yaml, git cache) is
@@ -46,8 +51,23 @@ impl WorkspaceConfigStore {
         Self(Arc::new(StoreInner {
             app_dir,
             config_path,
+            env: Environment::default(),
             lock: Mutex::new(()),
         }))
+    }
+
+    // 注入路径解析环境（测试夹具：home 指向临时目录 + 重定向变量）。
+    pub(crate) fn with_env(self, env: Environment) -> Self {
+        Self(Arc::new(StoreInner {
+            app_dir: self.0.app_dir.clone(),
+            config_path: self.0.config_path.clone(),
+            env,
+            lock: Mutex::new(()),
+        }))
+    }
+
+    pub(crate) fn env(&self) -> &Environment {
+        &self.0.env
     }
 
     pub(crate) fn config_path(&self) -> &Path {
@@ -79,7 +99,7 @@ impl WorkspaceConfigStore {
     // pub(super): ResolvedManagerConfig stays inside the workspace module tree.
     pub(super) fn parse(&self) -> Result<ResolvedManagerConfig> {
         let raw_content = self.read_raw()?;
-        parse_manager_config(&raw_content, self.config_path())
+        parse_manager_config(&raw_content, self.config_path(), &self.0.env)
     }
 
     // Read the config document for the frontend, bootstrapping the default
@@ -91,7 +111,7 @@ impl WorkspaceConfigStore {
             fs::read_to_string(config_path)
                 .with_context(|| format!("Failed to read config file {}", config_path.display()))?
         } else {
-            let template = default_config_template();
+            let template = default_config_template(&self.0.env);
             write_atomic(config_path, &template)?;
             // The template has just been persisted to disk, so the document
             // is no longer "missing" — flip the flag so document_from_content
@@ -139,6 +159,10 @@ pub(super) struct ConfigLock<'a> {
 impl ConfigLock<'_> {
     pub(super) fn config_path(&self) -> &Path {
         self.store.config_path()
+    }
+
+    pub(super) fn env(&self) -> &Environment {
+        self.store.env()
     }
 
     pub(super) fn read_raw(&self) -> Result<String> {

@@ -5,23 +5,17 @@ use std::sync::{Mutex, OnceLock};
 use anyhow::Result;
 use walkdir::WalkDir;
 
+// GROK_HOME 重定向：变量存在且非空时用变量值，否则落到 HOME 下的 .grok。
+// 各工具「认哪个变量、默认目录是什么」的知识在 support::environment 的
+// Redirect 里；这条具名解析只服务 session 域读 grok 会话目录的调用点。
 pub(crate) fn grok_home_path(
     grok_home: Option<std::ffi::OsString>,
     home: Option<PathBuf>,
 ) -> Option<PathBuf> {
     grok_home
+        .filter(|value| !value.is_empty())
         .map(PathBuf::from)
         .or_else(|| home.map(|path| path.join(".grok")))
-}
-
-// pi 的 agent 目录与 GROK_HOME 同一解析模式：优先环境变量重定向。
-pub(crate) fn pi_agent_dir_path(
-    pi_agent_dir: Option<std::ffi::OsString>,
-    home: Option<PathBuf>,
-) -> Option<PathBuf> {
-    pi_agent_dir
-        .map(PathBuf::from)
-        .or_else(|| home.map(|path| path.join(".pi").join("agent")))
 }
 
 // dirs::home_dir() resolves through the known-folder API on Windows and

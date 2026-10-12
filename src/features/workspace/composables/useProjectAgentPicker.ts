@@ -27,17 +27,18 @@ export function useProjectAgentPicker() {
     createProjectAgentPickerDialogState(),
   );
 
-  // Derived list of (projectId, enabledAgents) for use by McpPanel and the
-  // agent picker. Computed caches the projection so we don't recompute it
-  // every render.
+  // Derived list of (projectId, agents) for use by McpPanel and the agent
+  // picker. Computed caches the projection so we don't recompute it every
+  // render.
   const configProjects = computed(() => configDocument.value?.config?.projects ?? []);
   const projectEntries = computed<ProjectTargetEntry[]>(() =>
     configProjects.value.map((project) => ({
       id: project.id,
-      agents: project.agents.filter((agent) => agent.enabled),
+      agents: project.agents,
     })),
   );
-  const enabledProjectEntries = computed(() =>
+  // 只保留有成员的项目：选择器里没有可选 agent 的项目没有意义。
+  const projectEntriesWithAgents = computed(() =>
     projectEntries.value.filter((entry) => entry.agents.length > 0),
   );
   const projectAgentsByProjectId = computed(
@@ -169,7 +170,7 @@ export function useProjectAgentPicker() {
 
   return {
     projectAgentPickerDialog,
-    enabledProjectEntries,
+    projectEntriesWithAgents,
     projectAgentsByProjectId,
     pickerInstalledAgentIds,
     pickerPendingDiff,

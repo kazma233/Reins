@@ -1,5 +1,4 @@
 use super::*;
-use crate::support::fs::pi_agent_dir_path;
 use crate::test_support::{TestDir, TestEnvGuard};
 use crate::workspace::targets::target_presets_inner;
 use std::time::{Duration, UNIX_EPOCH};
@@ -17,7 +16,6 @@ fn write_skill(root: &Path, relative_path: &str, body: &str) -> Result<()> {
 fn resolved_target(id: &str, skill_dir: PathBuf) -> ResolvedTargetConfig {
     ResolvedTargetConfig {
         id: AgentTargetId(id.to_string()),
-        enabled: true,
         is_project: false,
         skill_dir,
         config_path: None,
@@ -272,8 +270,9 @@ fn create_directory_link_is_detected_as_installed() -> Result<()> {
     let link_target = read_skill_dir_link(&destination)?.expect("directory link should exist");
     assert_eq!(link_target, source.canonicalize()?);
 
-    let action = classify_skill_destination(&source, &destination)?;
-    assert_eq!(action.kind, SkillActionKind::Unchanged);
+    let install = SkillInstall::new(&source);
+    let action = destination_snapshot(&install, &source, &destination);
+    assert_eq!(action.action, "unchanged");
 
     remove_existing_path(&destination)?;
     assert!(destination.symlink_metadata().is_err());
@@ -300,7 +299,6 @@ fn remove_source_links_keeps_source_directory() -> Result<()> {
         AgentTargetId("codex".to_string()),
         ResolvedTargetConfig {
             id: AgentTargetId("codex".to_string()),
-            enabled: true,
             is_project: false,
             skill_dir: target_skill_dir,
             config_path: None,
@@ -326,7 +324,7 @@ fn remove_source_links_keeps_source_directory() -> Result<()> {
 
 // 两个 target + 一个 local 来源的最小 workspace 配置，供链接移除用例复用。
 fn write_link_store(root: &TestDir) -> Result<WorkspaceConfigStore> {
-    let store = WorkspaceConfigStore::at(root.path());
+    let store = WorkspaceConfigStore::at(root.path()).with_env(Environment::from_env());
     let config = serde_json::json!({
         "targets": {
             "codex": {"skill_dir": root.path().join("target/skills").display().to_string()},
@@ -579,7 +577,8 @@ fn default_config_template_parses_with_builtin_targets() -> Result<()> {
     // 读 ambient PI env 断言默认值,必须持全局锁防并行 pi 测试翻转 env。
     let _guard = TestEnvGuard::lock();
     let config_path = PathBuf::from("/tmp/reins-default-template-test.yaml");
-    let config = parse_manager_config(&default_config_template(), &config_path)?;
+    let env = Environment::from_env();
+    let config = parse_manager_config(&default_config_template(&env), &config_path, &env)?;
 
     assert_eq!(config.targets.len(), 6);
     assert!(
@@ -609,9 +608,34 @@ fn default_config_template_parses_with_builtin_targets() -> Result<()> {
     );
 
     for target in config.targets.values() {
-        assert!(target.enabled, "target {} should be enabled", target.id);
         assert!(!target.skill_dir.as_os_str().is_empty());
     }
+
+    // 模板渲染与清单解析必须用同一份重定向判据：未设变量时 codex / claude
+    // 的路径都写 ~ 缩写（解析时按当前 HOME 展开），设了 env 重定向的工具
+    // 才固化绝对路径。两者分叉会让首次启动生成的 config.yaml 指向别处。
+    let home = home_dir().ok_or_else(|| anyhow!("测试环境缺少 HOME"))?;
+    let codex = config
+        .targets
+        .get(&AgentTargetId("codex".to_string()))
+        .expect("codex target exists");
+    // codex 的 skills 不随 CODEX_HOME 搬移：只有 config.toml 在 CODEX_HOME 下。
+    assert_eq!(codex.skill_dir, home.join(".agents/skills"));
+    assert_eq!(codex.config_path, Some(home.join(".codex/config.toml")));
+
+    let claude = config
+        .targets
+        .get(&AgentTargetId("claude".to_string()))
+        .expect("claude target exists");
+    assert_eq!(claude.skill_dir, home.join(".claude/skills"));
+    assert_eq!(claude.config_path, Some(home.join(".claude.json")));
+
+    assert!(
+        !config
+            .targets
+            .contains_key(&AgentTargetId("dsh".to_string())),
+        "dsh 不在默认模板（TemplateEntry::Absent）"
+    );
 
     let opencode = config
         .targets
@@ -646,12 +670,13 @@ fn default_config_template_parses_with_builtin_targets() -> Result<()> {
         .get(&AgentTargetId("pi".to_string()))
         .expect("pi target exists");
     assert!(pi.skill_dir.ends_with(".pi/agent/skills"));
-    // pi ≥0.99 支持 MCP：模板固化 <agentDir>/mcp.json，顶层 mcpServers。
+    // pi ≥0.99 支持 MCP：模板固化 <agentDir>/mcp.json（env 视图与模板同源）。
     assert_eq!(
-        pi.config_path.as_deref(),
-        pi_agent_dir_path(std::env::var_os("PI_CODING_AGENT_DIR"), home_dir())
+        pi.config_path,
+        env.value(crate::support::environment::Redirect::PiAgentDir)
+            .cloned()
+            .or_else(|| home_dir().map(|home| home.join(".pi/agent")))
             .map(|dir| dir.join("mcp.json"))
-            .as_deref()
     );
     assert_eq!(pi.mcp_config_prefix, "mcpServers");
     assert_eq!(pi.mcp_config_type, McpConfigType::Common);
@@ -670,18 +695,23 @@ fn global_pi_target_without_mcp_section_falls_back_to_preset() -> Result<()> {
     skill_dir: ~/.pi/agent/skills
 "#;
 
-    let config = parse_manager_config(raw, &config_path)?;
+    // 环境与解析同源：skill_dir 里的 ~ 按当前 HOME 展开（parse 侧口径），
+    // mcp 段缺失则回落内置默认（<agentDir>/mcp.json）。
+    let env = Environment::from_env();
+    let config = parse_manager_config(raw, &config_path, &env)?;
     let pi = config
         .targets
         .get(&AgentTargetId("pi".to_string()))
         .expect("pi target exists");
 
     // 省略 mcp 段时回落到内置默认：<agentDir>/mcp.json + mcpServers。
+    let expected_pi_dir = env
+        .value(crate::support::environment::Redirect::PiAgentDir)
+        .cloned()
+        .or_else(|| home_dir().map(|home| home.join(".pi/agent")));
     assert_eq!(
-        pi.config_path.as_deref(),
-        pi_agent_dir_path(std::env::var_os("PI_CODING_AGENT_DIR"), home_dir())
-            .map(|dir| dir.join("mcp.json"))
-            .as_deref()
+        pi.config_path,
+        expected_pi_dir.map(|dir| dir.join("mcp.json"))
     );
     assert_eq!(pi.mcp_config_prefix, "mcpServers");
 
@@ -697,7 +727,7 @@ fn target_presets_cover_builtin_agents_with_env_resolved_paths() -> Result<()> {
     unsafe { std::env::set_var("GROK_HOME", grok_root.path()) };
     unsafe { std::env::set_var("PI_CODING_AGENT_DIR", pi_root.path()) };
 
-    let presets = target_presets_inner();
+    let presets = target_presets_inner(&Environment::from_env());
     assert_eq!(presets.len(), 7, "七个内置工具各一条预设");
     let by_id = |id: &str| {
         presets
@@ -710,7 +740,6 @@ fn target_presets_cover_builtin_agents_with_env_resolved_paths() -> Result<()> {
 
     let codex = by_id("codex");
     assert_eq!(codex.label, "Codex");
-    assert!(codex.enabled);
     assert_eq!(
         codex.skill_dir,
         home.join(".agents/skills").display().to_string()
@@ -958,7 +987,6 @@ fn target_view_carries_mcp_format_example_per_config_type() {
           "node",
           "server.js"
         ],
-        "enabled": true,
         "environment": {
           "KEY": "value"
         },
@@ -974,7 +1002,6 @@ fn target_view_carries_mcp_format_example_per_config_type() {
   "mcp": {
     "servers": {
       "my-server": {
-        "enabled": true,
         "headers": {
           "X-Key": "value"
         },
@@ -995,7 +1022,6 @@ fn target_view_carries_mcp_format_example_per_config_type() {
         r#"[mcp_servers.my-server]
 args = ["server.js"]
 command = "node"
-enabled = true
 
 [mcp_servers.my-server.env]
 KEY = "value"
@@ -1004,7 +1030,6 @@ KEY = "value"
     assert_eq!(
         body(&view, 1),
         r#"[mcp_servers.my-server]
-enabled = true
 url = "https://example.com/mcp"
 
 [mcp_servers.my-server.headers]
@@ -1061,7 +1086,7 @@ fn pi_preset_and_template_follow_pi_coding_agent_dir() -> Result<()> {
     let redirected = PathBuf::from("/tmp/reins-pi-agent-dir-redirect");
     unsafe { std::env::set_var("PI_CODING_AGENT_DIR", &redirected) };
 
-    let preset = target_presets_inner()
+    let preset = target_presets_inner(&Environment::from_env())
         .into_iter()
         .find(|preset| preset.target_id.as_str() == "pi")
         .ok_or_else(|| anyhow!("缺少 pi 预设"))?;
@@ -1073,7 +1098,8 @@ fn pi_preset_and_template_follow_pi_coding_agent_dir() -> Result<()> {
 
     // 模板在生成时把重定向路径固化为具体值，config.yaml 是之后的权威。
     let path = PathBuf::from("/tmp/reins-pi-defaults.yaml");
-    let config = parse_manager_config(&default_config_template(), &path)?;
+    let env = Environment::from_env();
+    let config = parse_manager_config(&default_config_template(&env), &path, &env)?;
     let pi = config
         .targets
         .get(&AgentTargetId("pi".to_string()))
@@ -1084,10 +1110,79 @@ fn pi_preset_and_template_follow_pi_coding_agent_dir() -> Result<()> {
     Ok(())
 }
 
+// target / MCP / 项目 agent 的启停开关已废弃：旧配置里的 enabled 键被忽略、
+// 不报错，也不再把目标当作「停用」。这条同时守住反序列化兼容与语义变化。
+#[test]
+fn legacy_enabled_key_is_ignored_and_never_disables() -> Result<()> {
+    let root = TestDir::new("legacy-enabled")?;
+    let store = WorkspaceConfigStore::at(root.path()).with_env(Environment::from_env());
+    let skill_dir = root.path().join("codex-skills");
+    fs::write(
+        store.config_path(),
+        format!(
+            r#"targets:
+  codex:
+    enabled: false
+    skill_dir: {}
+    mcp:
+      enabled: false
+      config_path: {}
+      config_prefix: mcp_servers
+      config_type: common
+projects:
+  my-app:
+    path: {}
+    agents:
+      codex:
+        enabled: false
+mcps:
+- name: fs-server
+  enabled: false
+  transport: stdio
+  command: npx
+"#,
+            skill_dir.display(),
+            root.path().join("codex.toml").display(),
+            root.path().join("my-app").display(),
+        ),
+    )?;
+
+    // 照常解析（旧键不报错），且线格式里不再出现 enabled 字段。
+    let state = workspace_state_inner(&store)?;
+    let view = state
+        .document
+        .as_ref()
+        .and_then(|document| document.config.as_ref())
+        .expect("config view");
+    let codex = view
+        .targets
+        .iter()
+        .find(|target| target.id.0 == "codex")
+        .expect("codex target view");
+    assert_eq!(
+        codex.config_path.as_deref(),
+        Some(
+            root.path()
+                .join("codex.toml")
+                .display()
+                .to_string()
+                .as_str()
+        )
+    );
+    assert_eq!(view.projects[0].agents.len(), 1);
+
+    // 不再有「停用目标」这一说：MCP 照常应用（此前会报「目标已禁用」）。
+    let applied = apply_mcp_to_target_inner(&store, "fs-server", "codex")?;
+    assert_eq!(applied.action, "apply");
+    assert!(root.path().join("codex.toml").exists());
+
+    Ok(())
+}
+
 #[test]
 fn pi_mcp_apply_read_remove_roundtrip() -> Result<()> {
     let root = TestDir::new("pi-mcp-roundtrip")?;
-    let store = WorkspaceConfigStore::at(root.path());
+    let store = WorkspaceConfigStore::at(root.path()).with_env(Environment::from_env());
     let pi_mcp = root.path().join("mcp.json");
     let config = serde_json::json!({
         "targets": {
@@ -1125,6 +1220,55 @@ fn pi_mcp_apply_read_remove_roundtrip() -> Result<()> {
     Ok(())
 }
 
+// CODEX_HOME 是 codex 官方支持的目录重定位：workspace 的 MCP 落点必须与
+// providers 认的配置文件是同一个。此前 workspace 只认 GROK_HOME /
+// PI_CODING_AGENT_DIR，用户设了 CODEX_HOME 后两个域会写两份配置。
+#[test]
+fn codex_mcp_apply_follows_codex_home_redirect() -> Result<()> {
+    let home = TestDir::new("codex-home-redirect-home")?;
+    let codex_home = TestDir::new("codex-home-redirect")?;
+    let _guard = TestEnvGuard::set_home(home.path());
+    unsafe { std::env::set_var("CODEX_HOME", codex_home.path()) };
+
+    let store = WorkspaceConfigStore::at(home.path()).with_env(Environment::from_env());
+    fs::write(
+        store.config_path(),
+        format!(
+            r#"targets:
+  codex:
+    skill_dir: {}
+mcps:
+- name: fs-server
+  transport: stdio
+  command: npx
+"#,
+            codex_home.path().join("skills").display(),
+        ),
+    )?;
+
+    // 省略 mcp 段 -> 回落内置默认：$CODEX_HOME/config.toml。
+    let preview = preview_mcp_target_inner(&store, "fs-server", "codex")?;
+    assert_eq!(preview.format, "toml");
+    assert_eq!(
+        PathBuf::from(&preview.config_path),
+        codex_home.path().join("config.toml")
+    );
+
+    let applied = apply_mcp_to_target_inner(&store, "fs-server", "codex")?;
+    let written = codex_home.path().join("config.toml");
+    assert_eq!(
+        applied.updated_path.as_deref(),
+        Some(display_path(&written).as_str())
+    );
+    assert!(fs::read_to_string(&written)?.contains("fs-server"));
+    assert!(
+        !home.path().join(".codex").join("config.toml").exists(),
+        "重定向生效时不该再写 ~/.codex"
+    );
+
+    Ok(())
+}
+
 #[test]
 fn project_pi_agent_uses_pi_project_layout() -> Result<()> {
     let project_path = PathBuf::from("/tmp/reins-pi-project-layout-test");
@@ -1140,7 +1284,7 @@ fn project_pi_agent_uses_pi_project_layout() -> Result<()> {
         project_path.display()
     );
 
-    let config = parse_manager_config(&raw, &config_path)?;
+    let config = parse_manager_config(&raw, &config_path, &Environment::default())?;
     let project = config.projects.get("my-app").expect("project exists");
     let target = project
         .agents
@@ -1173,7 +1317,7 @@ fn project_opencode_agent_uses_opencode_project_layout() -> Result<()> {
         project_path.display()
     );
 
-    let config = parse_manager_config(&raw, &config_path)?;
+    let config = parse_manager_config(&raw, &config_path, &Environment::default())?;
     let project = config.projects.get("my-app").expect("project exists");
     let target = project
         .agents
@@ -1204,7 +1348,7 @@ fn project_zcode_agent_uses_zcode_project_layout() -> Result<()> {
         project_path.display()
     );
 
-    let config = parse_manager_config(&raw, &config_path)?;
+    let config = parse_manager_config(&raw, &config_path, &Environment::default())?;
     let project = config.projects.get("my-app").expect("project exists");
     let target = project
         .agents
@@ -1223,7 +1367,7 @@ fn project_zcode_agent_uses_zcode_project_layout() -> Result<()> {
 #[test]
 fn delete_workspace_mcp_skips_targets_without_mcp_config() -> Result<()> {
     let root = TestDir::new("mcp-delete-skips-unconfigured")?;
-    let store = WorkspaceConfigStore::at(root.path());
+    let store = WorkspaceConfigStore::at(root.path()).with_env(Environment::from_env());
     let claude_config = root.path().join("claude.json");
     fs::write(
         store.config_path(),
@@ -1266,11 +1410,12 @@ mcps:
     Ok(())
 }
 
+// OpenCode 条目保留 transport 与 timeout；启用状态已不是 MCP 的字段，
+// 写出的条目里不该再出现 enabled 键。
 #[test]
-fn opencode_mcp_entry_preserves_disabled_state() -> Result<()> {
+fn opencode_mcp_entry_writes_transport_and_timeout_without_enabled() -> Result<()> {
     let server = ResolvedMcpConfig {
-        name: "disabled-server".to_string(),
-        enabled: false,
+        name: "probe-server".to_string(),
         transport: McpTransport::Stdio,
         created_at: None,
         homepage: None,
@@ -1284,7 +1429,7 @@ fn opencode_mcp_entry_preserves_disabled_state() -> Result<()> {
 
     let entry = desired_opencode_mcp(&server)?;
 
-    assert_eq!(entry["enabled"], false);
+    assert!(entry.get("enabled").is_none());
     assert_eq!(entry["type"], "local");
     assert_eq!(entry["command"], serde_json::json!(["node", "server.js"]));
     assert_eq!(entry["timeout"], 3000);
@@ -1329,7 +1474,7 @@ fn git_cache_dir_for_repo_uses_owner_name_layout() -> Result<()> {
 #[test]
 fn git_cache_last_fetched_at_reads_refresh_marker() -> Result<()> {
     let root = TestDir::new("git-cache-last-fetched-at")?;
-    let store = WorkspaceConfigStore::at(root.path());
+    let store = WorkspaceConfigStore::at(root.path()).with_env(Environment::from_env());
     let repo = "https://github.com/acme/skills.git";
 
     assert_eq!(git_cache_last_fetched_at_ms(&store, repo), None);

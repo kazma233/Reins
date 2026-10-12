@@ -2,4 +2,4 @@
 import type { AgentTargetId } from "./AgentTargetId";
 import type { McpFormatExample } from "./McpFormatExample";
 
-export type TargetConfigView = { id: AgentTargetId, enabled: boolean, skillDir: string, configPath: string | null, mcpConfigPrefix: string, mcpFormatDescription: string, mcpFormatExamples: Array<McpFormatExample>, };
+export type TargetConfigView = { id: AgentTargetId, skillDir: string, configPath: string | null, mcpConfigPrefix: string, mcpFormatDescription: string, mcpFormatExamples: Array<McpFormatExample>, };

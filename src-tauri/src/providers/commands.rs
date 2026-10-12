@@ -7,7 +7,7 @@ use tauri::async_runtime;
 use crate::logger;
 
 use super::apps::{
-    MASKED_KEY, ToolEnv, adapter_for, diff_lines, ensure_protocol_supported, validate_plan,
+    Environment, MASKED_KEY, adapter_for, diff_lines, ensure_protocol_supported, validate_plan,
 };
 use super::catalog::{fetch_provider_models_inner, match_modelsdev};
 use super::config::ProviderConfigStore;
@@ -28,7 +28,7 @@ pub(crate) async fn get_providers_state(
 ) -> std::result::Result<ProvidersState, String> {
     let store = store.inner().clone();
     run_blocking(move || {
-        let env = ToolEnv::from_env();
+        let env = Environment::from_env();
         providers_state_inner(&store, &env)
     })
     .await
@@ -40,7 +40,7 @@ pub(crate) async fn get_provider_app_state(
     app: ProviderAppId,
 ) -> std::result::Result<ProviderAppState, String> {
     let store = store.inner().clone();
-    run_blocking(move || app_state_inner(&store, &ToolEnv::from_env(), app)).await
+    run_blocking(move || app_state_inner(&store, &Environment::from_env(), app)).await
 }
 
 #[tauri::command]
@@ -64,7 +64,8 @@ pub(crate) async fn delete_provider(
 ) -> std::result::Result<ProviderMutationResult, String> {
     let store = store.inner().clone();
     logger::log_info(format!("delete_provider provider_id={provider_id}"));
-    run_blocking(move || delete_provider_inner(&store, &ToolEnv::from_env(), &provider_id)).await
+    run_blocking(move || delete_provider_inner(&store, &Environment::from_env(), &provider_id))
+        .await
 }
 
 // 按表单当前值拉取模型列表：不读 providers.yaml、不写任何持久状态，
@@ -125,7 +126,7 @@ pub(crate) async fn preview_provider_apply(
     input: ApplyProviderInput,
 ) -> std::result::Result<ProviderApplyPreview, String> {
     let store = store.inner().clone();
-    run_blocking(move || preview_apply_inner(&store, &ToolEnv::from_env(), &input)).await
+    run_blocking(move || preview_apply_inner(&store, &Environment::from_env(), &input)).await
 }
 
 #[tauri::command]
@@ -138,7 +139,7 @@ pub(crate) async fn apply_provider_to_app(
         "apply_provider_to_app provider_id={} app={:?}",
         input.provider_id, input.app
     ));
-    run_blocking(move || apply_provider_inner(&store, &ToolEnv::from_env(), &input)).await
+    run_blocking(move || apply_provider_inner(&store, &Environment::from_env(), &input)).await
 }
 
 #[tauri::command]
@@ -152,7 +153,7 @@ pub(crate) async fn remove_provider_from_app(
         "remove_provider_from_app provider_id={provider_id} app={app:?}"
     ));
     run_blocking(move || {
-        remove_provider_from_app_inner(&store, &ToolEnv::from_env(), &provider_id, app)
+        remove_provider_from_app_inner(&store, &Environment::from_env(), &provider_id, app)
     })
     .await
 }
@@ -163,16 +164,17 @@ pub(crate) async fn remove_external_entry(
     entry_key: String,
 ) -> std::result::Result<ProviderMutationResult, String> {
     logger::log_info(format!("remove_external_entry app={app:?} key={entry_key}"));
-    run_blocking(move || remove_external_entry_inner(&ToolEnv::from_env(), &app, &entry_key)).await
+    run_blocking(move || remove_external_entry_inner(&Environment::from_env(), &app, &entry_key))
+        .await
 }
 
 // ---------------------------------------------------------------------------
-// Inner implementations（可测试；ToolEnv 由调用方注入）
+// Inner implementations（可测试；Environment 由调用方注入）
 // ---------------------------------------------------------------------------
 
 pub(crate) fn providers_state_inner(
     store: &ProviderConfigStore,
-    env: &ToolEnv,
+    env: &Environment,
 ) -> Result<ProvidersState> {
     let providers = store.load()?;
     let apps = super::types::PROVIDER_APPS
@@ -194,7 +196,7 @@ pub(crate) fn providers_state_inner(
 // 不重读其余工具，也不查密钥（providers.yaml 与密钥都不是写操作的对象）。
 pub(crate) fn app_state_inner(
     store: &ProviderConfigStore,
-    env: &ToolEnv,
+    env: &Environment,
     app: ProviderAppId,
 ) -> Result<ProviderAppState> {
     Ok(inspect_app(&store.load()?, env, app))
@@ -202,7 +204,7 @@ pub(crate) fn app_state_inner(
 
 fn inspect_app(
     providers: &BTreeMap<String, ResolvedProvider>,
-    env: &ToolEnv,
+    env: &Environment,
     app: ProviderAppId,
 ) -> ProviderAppState {
     let adapter = adapter_for(app);
@@ -217,7 +219,7 @@ fn inspect_app(
     }
 }
 
-pub(crate) fn app_config_paths(env: &ToolEnv, app: ProviderAppId) -> Vec<PathBuf> {
+pub(crate) fn app_config_paths(env: &Environment, app: ProviderAppId) -> Vec<PathBuf> {
     adapter_for(app).config_paths(env).unwrap_or_default()
 }
 
@@ -246,7 +248,7 @@ fn provider_view(provider: &ResolvedProvider) -> Result<ProviderView> {
 
 pub(crate) fn delete_provider_inner(
     store: &ProviderConfigStore,
-    env: &ToolEnv,
+    env: &Environment,
     provider_id: &str,
 ) -> Result<ProviderMutationResult> {
     // Claude 的写入没有结构化注册键，平台删掉后就无法安全移除了，
@@ -277,7 +279,7 @@ pub(crate) fn delete_provider_inner(
 // 生成应用产物。preview=true 时内容里的密钥用脱敏占位符，不读真实密钥。
 fn compute_apply(
     store: &ProviderConfigStore,
-    env: &ToolEnv,
+    env: &Environment,
     input: &ApplyProviderInput,
     preview: bool,
 ) -> Result<(Vec<(PathBuf, String)>, Vec<String>)> {
@@ -304,7 +306,7 @@ fn compute_apply(
 
 pub(crate) fn preview_apply_inner(
     store: &ProviderConfigStore,
-    env: &ToolEnv,
+    env: &Environment,
     input: &ApplyProviderInput,
 ) -> Result<ProviderApplyPreview> {
     let (files, warnings) = compute_apply(store, env, input, true)?;
@@ -346,7 +348,7 @@ pub(crate) fn preview_apply_inner(
 
 pub(crate) fn apply_provider_inner(
     store: &ProviderConfigStore,
-    env: &ToolEnv,
+    env: &Environment,
     input: &ApplyProviderInput,
 ) -> Result<ProviderMutationResult> {
     let (files, warnings) = compute_apply(store, env, input, false)?;
@@ -373,7 +375,7 @@ pub(crate) fn apply_provider_inner(
 
 pub(crate) fn remove_provider_from_app_inner(
     store: &ProviderConfigStore,
-    env: &ToolEnv,
+    env: &Environment,
     provider_id: &str,
     app: ProviderAppId,
 ) -> Result<ProviderMutationResult> {
@@ -399,7 +401,7 @@ pub(crate) fn remove_provider_from_app_inner(
 // 破坏性由前端确认弹窗承担，后端只做键存在性检查；默认模型/活动
 // Provider 仍指向被删条目时随删除清空，不再要求先切换。
 pub(crate) fn remove_external_entry_inner(
-    env: &ToolEnv,
+    env: &Environment,
     app: &ProviderAppId,
     entry_key: &str,
 ) -> Result<ProviderMutationResult> {

@@ -2,9 +2,9 @@
 // config, and install/remove directory links across targets.
 
 use std::collections::{HashMap, HashSet};
-use std::ffi::{OsStr, OsString};
+use std::ffi::OsStr;
 use std::fs;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -13,17 +13,21 @@ use anyhow::{Context, Result, anyhow, bail};
 use walkdir::WalkDir;
 
 use crate::state::skill_discovery::SkillDiscoveryState;
+use crate::support::environment::Environment;
 
 use super::WorkspaceConfigStore;
-use super::targets::{
-    is_linked_skill_dir, read_directory_link_target, read_skill_dir_link,
-    resolve_symlink_target_path,
+use super::skill_install::enumerate_links as enumerate_target_links;
+use super::skill_install::{
+    InstallItem, ManagedTarget, SelectedSkill, SkillInstall, TargetSkip, managed_targets,
+    resolve_ids,
 };
+// 路径规范化只有一份实现：链接归属分类与安装侧的比较必须同口径。
+pub(super) use super::skill_install::{normalize_link_path, relative_to_source_root};
+use super::targets::read_skill_dir_link;
 use super::types::*;
 use super::{
-    create_directory_symlink, display_path, expand_path, normalize_patterns, parse_manager_config,
-    remove_empty_parent_dirs, remove_existing_path, resolve_target_from_id, run_command,
-    workspace_state_inner,
+    display_path, expand_path, normalize_patterns, parse_manager_config, remove_empty_parent_dirs,
+    remove_existing_path, resolve_target_from_id, run_command, workspace_state_inner,
 };
 
 // Discover all skills in a source root, without applying include filters.
@@ -133,9 +137,6 @@ pub(super) fn build_sync_target_options_with_sources(
         // target; links to external directories stay selectable.
         let linked_target_id =
             read_skill_dir_link(skill_dir)?.and_then(|linked| dir_to_target.get(&linked).cloned());
-        let enabled = resolve_target_from_id(&config, &id)
-            .map(|t| t.enabled)
-            .unwrap_or(false);
         // 整目录继承另一个受管 target 时，不重复报告同一批物理链接。
         let links = if linked_target_id.is_some() {
             Vec::new()
@@ -146,7 +147,6 @@ pub(super) fn build_sync_target_options_with_sources(
             id: id.clone(),
             label: id,
             skill_dir: display_path(skill_dir),
-            enabled,
             linked_target_id,
             links,
         });
@@ -159,26 +159,10 @@ fn scan_target_skill_links(
     skill_dir: &Path,
     sources: &[SkillLinkSource],
 ) -> Result<Vec<SkillLinkAssociation>> {
-    let entries = match fs::read_dir(skill_dir) {
-        Ok(entries) => entries,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(error) => {
-            return Err(error)
-                .with_context(|| format!("读取 target skills 目录失败：{}", skill_dir.display()));
-        }
-    };
-
-    let mut links = Vec::new();
-    for entry in entries {
-        let entry = entry
-            .with_context(|| format!("读取 target skills 目录项失败：{}", skill_dir.display()))?;
-        let destination = entry.path();
-        let Some(source_path) = read_directory_link_target(&destination)? else {
-            continue;
-        };
-
-        links.push(classify_skill_link(&destination, &source_path, sources));
-    }
+    let mut links = enumerate_target_links(skill_dir)?
+        .into_iter()
+        .map(|(destination, source_path)| classify_skill_link(&destination, &source_path, sources))
+        .collect::<Vec<_>>();
 
     links.sort_by(|left, right| {
         left.skill_name
@@ -239,57 +223,6 @@ fn classify_skill_link(
         matched_source_ids,
         state,
     }
-}
-
-fn normalize_link_path(path: &Path) -> PathBuf {
-    let mut missing_components = Vec::<OsString>::new();
-    let mut current = Some(path);
-
-    while let Some(candidate) = current {
-        if let Ok(normalized) = candidate.canonicalize() {
-            return missing_components
-                .iter()
-                .rev()
-                .fold(normalized, |path, component| path.join(component));
-        }
-
-        let Some(component) = candidate.file_name() else {
-            break;
-        };
-        missing_components.push(component.to_os_string());
-        current = candidate.parent();
-    }
-
-    path.to_path_buf()
-}
-
-fn relative_to_source_root(path: &Path, source_root: &Path) -> Option<PathBuf> {
-    #[cfg(not(windows))]
-    {
-        path.strip_prefix(source_root).ok().map(Path::to_path_buf)
-    }
-
-    #[cfg(windows)]
-    {
-        let mut path_components = path.components();
-        for source_component in source_root.components() {
-            let path_component = path_components.next()?;
-            if !windows_path_component_eq(path_component, source_component) {
-                return None;
-            }
-        }
-        Some(path_components.as_path().to_path_buf())
-    }
-}
-
-#[cfg(windows)]
-fn windows_path_component_eq(left: Component<'_>, right: Component<'_>) -> bool {
-    let left = left.as_os_str().to_string_lossy();
-    let right = right.as_os_str().to_string_lossy();
-    let left = left.strip_prefix(r"\\?\").unwrap_or(&left);
-    let right = right.strip_prefix(r"\\?\").unwrap_or(&right);
-
-    left.eq_ignore_ascii_case(right)
 }
 
 // Build a list of discovered skills for the sync-dialog UI, tagging each with
@@ -358,61 +291,41 @@ pub(crate) fn sync_source_to_targets_inner(
         );
     }
 
-    // 3. Remove old directory links for this source from the selected targets only,
-    //    so the sync operation never touches targets the user didn't pick.
-    let target_id_filter: HashSet<&str> = input.target_ids.iter().map(|s| s.as_str()).collect();
-    let removed = remove_source_symlinks_from_targets_with_root(
-        &config,
-        &source_root,
-        Some(&target_id_filter),
-    )?;
-
-    // 4. Create directory links for selected skills to selected targets.
-    let mut applied = Vec::new();
+    // 3. 参与分发的目标：不存在/禁用是警告，整目录继承是静默跳过——这条
+    //    规则由安装面统一判定，同步与冲突预演不会分叉。
     let mut warnings = Vec::new();
-
-    for target_id in &input.target_ids {
-        let Some(target) = resolve_target_from_id(&config, target_id) else {
-            warnings.push(format!("目标 {} 不存在，已跳过。", target_id));
-            continue;
-        };
-        if !target.enabled {
-            warnings.push(format!("目标 {} 已禁用，已跳过。", target_id));
-            continue;
-        }
-        if target.is_project && is_linked_skill_dir(&target.skill_dir)? {
-            continue;
-        }
-
-        for skill in &selected_skills {
-            let source_dir = source_skill_dir(&source_root, &skill.relative_path)?;
-            let dest = target.skill_dir.join(&skill.name);
-
-            let action = classify_skill_destination(&source_dir, &dest)?;
-            match action.kind {
-                SkillActionKind::Create | SkillActionKind::Replace => {
-                    if dest.exists() || dest.symlink_metadata().is_ok() {
-                        remove_existing_path(&dest)?;
-                    }
-                    if let Some(parent) = dest.parent() {
-                        fs::create_dir_all(parent)
-                            .with_context(|| format!("创建目标目录失败：{}", parent.display()))?;
-                    }
-                    create_directory_symlink(&source_dir, &dest)?;
-                    applied.push(SkillSyncItem {
-                        skill_name: skill.name.clone(),
-                        target_id: AgentTargetId(target_id.clone()),
-                        source_path: display_path(&source_dir),
-                        destination_path: display_path(&dest),
-                        action: action.kind.as_str().to_string(),
-                        detail: action.detail,
-                    });
-                }
-                // Already linked to this source — nothing to do.
-                SkillActionKind::Unchanged => {}
+    let mut participating = Vec::new();
+    for target in resolve_ids(&config, &input.target_ids)? {
+        match target.skip {
+            None => participating.push(target),
+            Some(TargetSkip::Missing) => {
+                warnings.push(format!("目标 {} 不存在，已跳过。", target.id))
             }
+            Some(TargetSkip::LinkedProjectDir) => {}
         }
     }
+    let targets: Vec<&ManagedTarget<'_>> = participating.iter().collect();
+    let selected: Vec<SelectedSkill<'_>> = selected_skills
+        .iter()
+        .map(|skill| SelectedSkill {
+            name: &skill.name,
+            relative_path: &skill.relative_path,
+        })
+        .collect();
+
+    // 4. 先清掉本来源在这批目标上的旧链接，再按选中集合装回去；两次操作
+    //    共用同一份目标列表，同步不会碰用户没选的目标。
+    let install = SkillInstall::new(&source_root);
+    let removed = install
+        .remove_installed(&targets)?
+        .iter()
+        .map(InstallItem::to_sync_item)
+        .collect();
+    let applied = install
+        .apply(&targets, &selected)?
+        .iter()
+        .map(InstallItem::to_sync_item)
+        .collect();
 
     Ok(SourceSyncResult {
         removed,
@@ -461,85 +374,32 @@ fn source_sync_conflicts(
     selected_skills: &[&DiscoveredSkill],
     target_ids: &[String],
 ) -> Result<Vec<SourceSyncConflict>> {
-    let normalized_source_root = source_root
-        .canonicalize()
-        .unwrap_or_else(|_| source_root.to_path_buf());
-    let mut conflicts = Vec::new();
+    // 与同步共用同一套 skip 判定与落点分类：预演会报的，同步才会覆盖。
+    let participating: Vec<ManagedTarget<'_>> = resolve_ids(config, target_ids)?
+        .into_iter()
+        .filter(|target| target.skip.is_none())
+        .collect();
+    let targets: Vec<&ManagedTarget<'_>> = participating.iter().collect();
+    let selected: Vec<SelectedSkill<'_>> = selected_skills
+        .iter()
+        .map(|skill| SelectedSkill {
+            name: &skill.name,
+            relative_path: &skill.relative_path,
+        })
+        .collect();
 
-    for target_id in target_ids {
-        let Some(target) = resolve_target_from_id(config, target_id) else {
-            continue;
-        };
-        if !target.enabled || (target.is_project && is_linked_skill_dir(&target.skill_dir)?) {
-            continue;
-        }
-
-        for skill in selected_skills {
-            let source_dir = source_skill_dir(source_root, &skill.relative_path)?;
-            let destination = target.skill_dir.join(&skill.name);
-            if let Some((existing_kind, detail)) =
-                non_source_destination_detail(&destination, &normalized_source_root)?
-            {
-                conflicts.push(SourceSyncConflict {
-                    skill_name: skill.name.clone(),
-                    target_id: AgentTargetId(target_id.clone()),
-                    source_path: display_path(&source_dir),
-                    destination_path: display_path(&destination),
-                    existing_kind,
-                    detail,
-                });
-            }
-        }
-    }
-
-    Ok(conflicts)
-}
-
-fn non_source_destination_detail(
-    destination: &Path,
-    source_root: &Path,
-) -> Result<Option<(String, String)>> {
-    let metadata = match destination.symlink_metadata() {
-        Ok(metadata) => metadata,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => {
-            return Err(error)
-                .with_context(|| format!("Failed to inspect {}", destination.display()));
-        }
-    };
-
-    if let Some(resolved) = read_directory_link_target(destination)? {
-        if resolved.starts_with(source_root) {
-            return Ok(None);
-        }
-        return Ok(Some((
-            "目录链接".to_string(),
-            format!("当前指向 {}", display_path(&resolved)),
-        )));
-    }
-
-    if metadata.file_type().is_symlink() {
-        let link_target = fs::read_link(destination)
-            .with_context(|| format!("读取 {} 的软链接失败", destination.display()))?;
-        let resolved = resolve_symlink_target_path(destination, &link_target);
-        if resolved.starts_with(source_root) {
-            return Ok(None);
-        }
-        return Ok(Some((
-            "软链接".to_string(),
-            format!("当前指向 {}", display_path(&resolved)),
-        )));
-    }
-
-    if metadata.is_dir() {
-        return Ok(Some(("目录".to_string(), "当前是同名目录".to_string())));
-    }
-
-    if metadata.is_file() {
-        return Ok(Some(("文件".to_string(), "当前是同名文件".to_string())));
-    }
-
-    Ok(Some(("路径".to_string(), "当前是同名路径".to_string())))
+    Ok(SkillInstall::new(source_root)
+        .conflicts(&targets, &selected)?
+        .into_iter()
+        .map(|conflict| SourceSyncConflict {
+            skill_name: conflict.skill_name,
+            target_id: AgentTargetId(conflict.target_id),
+            source_path: display_path(&conflict.source_path),
+            destination_path: display_path(&conflict.destination_path),
+            existing_kind: conflict.existing_kind,
+            detail: conflict.detail,
+        })
+        .collect())
 }
 
 fn validate_sync_snapshot_root(
@@ -584,39 +444,13 @@ fn sync_skill_option_to_discovered(
     source_root: &Path,
     skill: &SyncSkillOption,
 ) -> Result<DiscoveredSkill> {
-    let source_dir = source_skill_dir(source_root, &skill.relative_path)?;
+    let source_dir = SkillInstall::new(source_root).source_dir(&skill.relative_path)?;
     Ok(DiscoveredSkill {
         name: skill.name.clone(),
         relative_path: skill.relative_path.clone(),
         skill_file_path: display_path(&source_dir.join("SKILL.md")),
         source_path: Some(display_path(&source_dir)),
     })
-}
-
-fn source_skill_dir(source_root: &Path, relative_path: &str) -> Result<PathBuf> {
-    let relative = Path::new(relative_path);
-    if relative.components().any(|component| {
-        matches!(
-            component,
-            Component::Prefix(_) | Component::RootDir | Component::ParentDir
-        )
-    }) {
-        bail!("skill 路径不能越过来源根目录：{relative_path}");
-    }
-
-    let source_root = source_root
-        .canonicalize()
-        .unwrap_or_else(|_| source_root.to_path_buf());
-    let source_dir = source_root.join(relative);
-    let normalized_source_dir = source_dir
-        .canonicalize()
-        .with_context(|| format!("skill 来源目录不存在：{}", source_dir.display()))?;
-
-    if !normalized_source_dir.starts_with(&source_root) {
-        bail!("skill 路径不属于来源根目录：{relative_path}");
-    }
-
-    Ok(normalized_source_dir)
 }
 
 // Remove directory links installed by this source from the given targets. This is the
@@ -684,115 +518,6 @@ fn source_definition_from_config<'a>(
         .skill_sources
         .get(source_id)
         .ok_or_else(|| anyhow!("未找到来源：{source_id}"))
-}
-
-// ---------------------------------------------------------------------------
-// Directory-link classify / inspect primitives
-// ---------------------------------------------------------------------------
-
-pub(super) fn classify_skill_destination(
-    source_path: &Path,
-    destination: &Path,
-) -> Result<SkillAction> {
-    if !destination.exists() && destination.symlink_metadata().is_err() {
-        return Ok(SkillAction {
-            kind: SkillActionKind::Create,
-            detail: format!("将创建软链接：{}", display_path(destination)),
-        });
-    }
-
-    let metadata = destination
-        .symlink_metadata()
-        .with_context(|| format!("Failed to inspect {}", destination.display()))?;
-
-    if let Some(resolved) = read_directory_link_target(destination)? {
-        let normalized_source = source_path
-            .canonicalize()
-            .unwrap_or_else(|_| source_path.to_path_buf());
-        if resolved == normalized_source {
-            return Ok(SkillAction {
-                kind: SkillActionKind::Unchanged,
-                detail: format!("目录链接已存在：{}", display_path(destination)),
-            });
-        }
-    }
-
-    if metadata.file_type().is_symlink() {
-        if symlink_points_to_source(destination, source_path) {
-            return Ok(SkillAction {
-                kind: SkillActionKind::Unchanged,
-                detail: format!("软链接已存在：{}", display_path(destination)),
-            });
-        }
-    }
-
-    Ok(SkillAction {
-        kind: SkillActionKind::Replace,
-        detail: format!("{} 已存在同名路径，将替换。", display_path(destination)),
-    })
-}
-
-#[cfg(test)]
-#[cfg_attr(windows, allow(dead_code))]
-pub(super) fn inspect_skill_destination(
-    source_path: &Path,
-    destination: &Path,
-) -> (String, String) {
-    if !destination.exists() && destination.symlink_metadata().is_err() {
-        return (
-            "missing".to_string(),
-            format!("尚未安装到 {}", display_path(destination)),
-        );
-    }
-
-    let Ok(metadata) = destination.symlink_metadata() else {
-        return (
-            "error".to_string(),
-            format!("无法读取 {}", display_path(destination)),
-        );
-    };
-
-    if metadata.file_type().is_symlink() {
-        let Ok(link_target) = fs::read_link(destination) else {
-            return ("broken".to_string(), "软链接已损坏。".to_string());
-        };
-
-        let resolved_target = resolve_symlink_target_path(destination, &link_target);
-        if symlink_points_to_source(destination, source_path) {
-            return (
-                "installed".to_string(),
-                format!("已链接到 {}", display_path(source_path)),
-            );
-        }
-
-        return (
-            "conflict".to_string(),
-            format!("当前软链接指向 {}", display_path(&resolved_target)),
-        );
-    }
-
-    if metadata.is_dir() {
-        return (
-            "conflict".to_string(),
-            "目标位置已经有真实目录。".to_string(),
-        );
-    }
-
-    (
-        "conflict".to_string(),
-        "目标位置已经有真实文件。".to_string(),
-    )
-}
-
-fn symlink_points_to_source(destination: &Path, source_path: &Path) -> bool {
-    let Ok(link_target) = fs::read_link(destination) else {
-        return false;
-    };
-
-    let normalized_source = source_path
-        .canonicalize()
-        .unwrap_or_else(|_| source_path.to_path_buf());
-    resolve_symlink_target_path(destination, &link_target) == normalized_source
 }
 
 // ---------------------------------------------------------------------------
@@ -1095,83 +820,30 @@ fn remove_source_symlinks_from_targets(
 ) -> Result<Vec<SkillSyncItem>> {
     let source_definition = source_definition_from_config(config, source_id)?;
     let source_root = resolve_source_root(store, source_definition)?;
-    remove_source_symlinks_from_targets_with_root(config, &source_root, target_ids)
+    remove_source_symlinks_with_root(config, &source_root, target_ids)
 }
 
-pub(super) fn remove_source_symlinks_from_targets_with_root(
+// 无 store 的卸载入口：来源根已知时直接清理（测试与已解析配置的调用方用）。
+pub(super) fn remove_source_symlinks_with_root(
     config: &ResolvedManagerConfig,
     source_root: &Path,
     target_ids: Option<&HashSet<&str>>,
 ) -> Result<Vec<SkillSyncItem>> {
-    // 两侧都走 normalize_link_path：来源目录被删时 canonicalize 会失败并退回
-    // 原始配置路径，与同样退回原始路径的链接目标在 /var → /private/var 这类
-    // 系统软链接下失配，导致该来源的链接删不掉。
-    let source_root = normalize_link_path(source_root);
+    let participating: Vec<ManagedTarget<'_>> = managed_targets(config)?
+        .into_iter()
+        .filter(|target| target.skip.is_none())
+        .filter(|target| match target_ids {
+            Some(ids) => ids.contains(target.id.as_str()),
+            None => true,
+        })
+        .collect();
+    let targets: Vec<&ManagedTarget<'_>> = participating.iter().collect();
 
-    let global_targets = config
-        .targets
-        .values()
-        .map(|target| (target.id.to_string(), target));
-    let project_targets = config.projects.values().flat_map(|project| {
-        project
-            .agents
-            .values()
-            .map(move |target| (format!("{}:{}", project.id, target.id), target))
-    });
-
-    let mut removed = Vec::new();
-    for (target_id, target) in global_targets.chain(project_targets) {
-        if let Some(ids) = target_ids {
-            if !ids.contains(target_id.as_str()) {
-                continue;
-            }
-        }
-        // 目录不存在说明该 target 没有可清理的链接；其他读取错误（如权限不足、
-        // 路径不是目录）会让链接留在磁盘上，必须上报，否则调用方会把部分成功
-        // 当成成功，界面也会据此错误地更新本地状态。
-        let entries = match fs::read_dir(&target.skill_dir) {
-            Ok(entries) => entries,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
-            Err(error) => {
-                return Err(error).with_context(|| {
-                    format!(
-                        "读取 target skills 目录失败：{}",
-                        target.skill_dir.display()
-                    )
-                });
-            }
-        };
-        for entry in entries {
-            let entry = entry.with_context(|| {
-                format!(
-                    "读取 target skills 目录项失败：{}",
-                    target.skill_dir.display()
-                )
-            })?;
-            let path = entry.path();
-            let Some(resolved) = read_directory_link_target(&path)? else {
-                continue;
-            };
-            if relative_to_source_root(&normalize_link_path(&resolved), &source_root).is_some() {
-                let skill_name = path
-                    .file_name()
-                    .and_then(|n| n.to_str())
-                    .unwrap_or("")
-                    .to_string();
-                remove_existing_path(&path)?;
-                removed.push(SkillSyncItem {
-                    skill_name,
-                    target_id: AgentTargetId(target_id.clone()),
-                    source_path: display_path(&resolved),
-                    destination_path: display_path(&path),
-                    action: "remove".to_string(),
-                    detail: String::new(),
-                });
-            }
-        }
-    }
-
-    Ok(removed)
+    Ok(SkillInstall::new(source_root)
+        .remove_installed(&targets)?
+        .iter()
+        .map(InstallItem::to_sync_item)
+        .collect())
 }
 
 // 移除单个 target 上的目录链接，用于同步弹窗里逐条清理非受管控条目。
@@ -1186,31 +858,10 @@ pub(crate) fn remove_target_skill_link_inner(
         .ok_or_else(|| anyhow!("未找到 target：{target_id}"))?;
 
     let destination = PathBuf::from(destination_path);
-    // 只规范化父目录：对链接自身 canonicalize 会把链接解析到目标路径，
-    // 无法再判断它位于哪个 skill_dir 下。
-    let parent = destination
-        .parent()
-        .ok_or_else(|| anyhow!("路径无效：{destination_path}"))?;
-    if normalize_link_path(parent) != normalize_link_path(&target.skill_dir) {
-        bail!("路径不属于该 target 的 skills 目录：{destination_path}");
-    }
-
-    let resolved = read_directory_link_target(&destination)?
-        .ok_or_else(|| anyhow!("目标不是软链接，已跳过：{destination_path}"))?;
-    remove_existing_path(&destination)?;
-
-    Ok(SkillSyncItem {
-        skill_name: destination
-            .file_name()
-            .and_then(OsStr::to_str)
-            .unwrap_or("skill")
-            .to_string(),
-        target_id: AgentTargetId(target_id.to_string()),
-        source_path: display_path(&resolved),
-        destination_path: display_path(&destination),
-        action: "remove".to_string(),
-        detail: String::new(),
-    })
+    // 链接归属校验与删除都在安装面：真实目录/文件一律拒绝。
+    SkillInstall::new(&target.skill_dir)
+        .remove_at(target_id, &target.skill_dir, &destination)
+        .map(|item| item.to_sync_item())
 }
 
 // ---------------------------------------------------------------------------
@@ -1276,6 +927,7 @@ pub(crate) fn delete_skill_source_inner(
             &raw_content,
             &mut raw_config,
             source_id,
+            config.env(),
         )?;
         config.write_raw(&raw_config)
     })?;
@@ -1292,6 +944,7 @@ fn delete_skill_source_entries(
     raw_content: &str,
     raw_config: &mut RawManagerConfig,
     source_id: &str,
+    env: &Environment,
 ) -> Result<()> {
     if !raw_config
         .skill_sources
@@ -1302,7 +955,7 @@ fn delete_skill_source_entries(
     }
 
     // Remove softlinks for this source's skills from every target.
-    let resolved_config = parse_manager_config(raw_content, config_path)?;
+    let resolved_config = parse_manager_config(raw_content, config_path, env)?;
     remove_source_symlinks_from_targets(store, &resolved_config, source_id, None)?;
 
     // Remove git cache if this is a git source AND no other source references
@@ -1354,6 +1007,7 @@ pub(crate) fn delete_skill_sources_inner(
                 &raw_content,
                 &mut raw_config,
                 source_id,
+                config.env(),
             )?;
         }
 
@@ -1662,28 +1316,4 @@ fn wildcard_match(value: &str, pattern: &str) -> bool {
     }
 
     pattern_index == pattern.len()
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum SkillActionKind {
-    Create,
-    Unchanged,
-    Replace,
-}
-
-impl SkillActionKind {
-    // Wire form for the SkillSyncItem contract field.
-    pub(super) fn as_str(self) -> &'static str {
-        match self {
-            SkillActionKind::Create => "create",
-            SkillActionKind::Unchanged => "unchanged",
-            SkillActionKind::Replace => "replace",
-        }
-    }
-}
-
-#[derive(Clone, Debug)]
-pub(super) struct SkillAction {
-    pub(super) kind: SkillActionKind,
-    pub(super) detail: String,
 }
