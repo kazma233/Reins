@@ -1,12 +1,39 @@
 use std::collections::HashSet;
+use std::process::Command;
 
-use anyhow::Result;
+use anyhow::{Context, Result, bail};
 
 use crate::state::session_index::SessionIndexState;
 
 use super::model::{DeletePlan, DeletePlanAction, SessionOverview};
 use super::sources::{self, DELETE_UNSUPPORTED_LABEL, DeletePolicy};
 use super::{DeleteSessionResult, SourceApp};
+
+// 官方 CLI 删除的统一执行机械:怎么跑、失败怎么把 exit code 与标准输出/错误
+// 原样带回,只在这里说一次;用哪个二进制是各家知识,由调用方构造好传入。
+// what 是命令的人类描述,进两段错误文案。
+pub(crate) fn run_official_cli(what: &str, command: &mut Command) -> Result<()> {
+    let output = command
+        .output()
+        .with_context(|| format!("Failed to execute {what}"))?;
+
+    if output.status.success() {
+        return Ok(());
+    }
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let exit_code = output
+        .status
+        .code()
+        .map(|code| code.to_string())
+        .unwrap_or_else(|| "terminated by signal".to_string());
+    bail!(
+        "{what} failed. exit_code: {exit_code}\nstdout:\n{}\nstderr:\n{}",
+        stdout.trim(),
+        stderr.trim()
+    )
+}
 
 pub(crate) fn delete_session_inner(
     state: &SessionIndexState,

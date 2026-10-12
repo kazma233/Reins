@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Arc;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 use rusqlite::Connection;
 use serde_json::{Value, json};
 
@@ -20,6 +20,7 @@ use super::reader_engine::{
 use super::{
     ContentBlock, DeletePlanAction, SessionEvent, SessionMessage, SessionOverview, SessionSummary,
     SessionTokenUsage, SourceApp, SummaryAccumulator, TimelineRecord, UsageHourBuckets,
+    delete::run_official_cli,
 };
 
 #[derive(Clone, Debug)]
@@ -222,33 +223,13 @@ pub(crate) fn delete_session(source_session_id: &str) -> Result<()> {
             continue;
         }
 
-        let output = Command::new("codex")
-            .arg("delete")
-            .arg("--force")
-            .arg(&member.summary.source_session_id)
-            .output()
-            .with_context(|| {
-                format!(
-                    "Failed to execute codex delete {}",
-                    member.summary.source_session_id
-                )
-            })?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            let exit_code = output
-                .status
-                .code()
-                .map(|code| code.to_string())
-                .unwrap_or_else(|| "terminated by signal".to_string());
-            bail!(
-                "Codex delete command failed for {}. exit_code: {exit_code}\nstdout:\n{}\nstderr:\n{}",
-                member.summary.source_session_id,
-                stdout.trim(),
-                stderr.trim()
-            );
-        }
+        run_official_cli(
+            &format!("codex delete {}", member.summary.source_session_id),
+            Command::new("codex")
+                .arg("delete")
+                .arg("--force")
+                .arg(&member.summary.source_session_id),
+        )?;
     }
 
     BACKEND.engine()?.clear()?;

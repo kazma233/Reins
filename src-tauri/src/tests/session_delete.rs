@@ -47,10 +47,7 @@ fn deleting_codex_family_invokes_official_cli() -> Result<()> {
     connection.execute("INSERT INTO threads (id) VALUES (?1)", params![root_id])?;
     connection.execute("INSERT INTO threads (id) VALUES (?1)", params![child_id])?;
 
-    let bin_dir = temp_home.join("bin");
-    fs::create_dir_all(&bin_dir)?;
-    install_fake_cli(&bin_dir, "codex")?;
-    let original_path = prepend_to_path(&bin_dir);
+    let fake_cli = FakeCli::install(&temp_home, "codex")?;
 
     let result = session::delete::delete_session_inner(
         &state::session_index::SessionIndexState::default(),
@@ -58,10 +55,8 @@ fn deleting_codex_family_invokes_official_cli() -> Result<()> {
         root_id,
     )?;
 
-    let deleted = fs::read_to_string(fake_cli_log_path(&bin_dir))?;
+    let deleted = fs::read_to_string(fake_cli.log_path())?;
     let deleted_ids = deleted.lines().collect::<HashSet<_>>();
-
-    unsafe { env::set_var("PATH", &original_path) };
 
     assert_eq!(result.deleted_session_id, root_id);
     assert!(
@@ -233,10 +228,7 @@ fn deleting_opencode_family_uses_cli() -> Result<()> {
     let child_id = "ses_child_session";
     seed_opencode_family(root_id, child_id)?;
 
-    let bin_dir = temp_home.join("bin");
-    fs::create_dir_all(&bin_dir)?;
-    install_fake_cli(&bin_dir, "opencode")?;
-    let original_path = prepend_to_path(&bin_dir);
+    let fake_cli = FakeCli::install(&temp_home, "opencode")?;
 
     let result = session::delete::delete_session_inner(
         &state::session_index::SessionIndexState::default(),
@@ -244,7 +236,7 @@ fn deleting_opencode_family_uses_cli() -> Result<()> {
         root_id,
     )?;
 
-    let deleted = fs::read_to_string(fake_cli_log_path(&bin_dir))?;
+    let deleted = fs::read_to_string(fake_cli.log_path())?;
     let deleted_ids = deleted.lines().collect::<HashSet<_>>();
 
     assert_eq!(result.deleted_session_id, root_id);
@@ -256,7 +248,6 @@ fn deleting_opencode_family_uses_cli() -> Result<()> {
     assert!(deleted_ids.contains(root_id));
     assert!(deleted_ids.contains(child_id));
 
-    unsafe { env::set_var("PATH", &original_path) };
     fs::remove_dir_all(&temp_home).ok();
     Ok(())
 }
@@ -334,6 +325,35 @@ fn fake_cli_log_path(bin_dir: &Path) -> PathBuf {
     bin_dir.join("fake-cli.log")
 }
 
+// 假 CLI 的完整装卸:建 bin 目录、放入替身、PATH 前插;drop 时恢复原 PATH,
+// 用例不再手工记着恢复。
+struct FakeCli {
+    bin_dir: PathBuf,
+    original_path: std::ffi::OsString,
+}
+
+impl FakeCli {
+    fn install(temp_home: &Path, name: &str) -> Result<Self> {
+        let bin_dir = temp_home.join("bin");
+        fs::create_dir_all(&bin_dir)?;
+        install_fake_cli(&bin_dir, name)?;
+        Ok(Self {
+            original_path: prepend_to_path(&bin_dir),
+            bin_dir,
+        })
+    }
+
+    fn log_path(&self) -> PathBuf {
+        fake_cli_log_path(&self.bin_dir)
+    }
+}
+
+impl Drop for FakeCli {
+    fn drop(&mut self) {
+        unsafe { env::set_var("PATH", &self.original_path) };
+    }
+}
+
 // PATH 前插(分隔符跨平台),返回原值供恢复。
 fn prepend_to_path(bin_dir: &Path) -> std::ffi::OsString {
     let original = env::var_os("PATH").unwrap_or_default();
@@ -367,10 +387,7 @@ fn deleting_grokbuild_family_removes_member_dirs_and_search_rows() -> Result<()>
         &temp_home,
         &["grok-parent", "grok-child", "unrelated-session"],
     )?;
-    let bin_dir = temp_home.join("bin");
-    fs::create_dir_all(&bin_dir)?;
-    install_fake_cli(&bin_dir, "grok")?;
-    let original_path = prepend_to_path(&bin_dir);
+    let fake_cli = FakeCli::install(&temp_home, "grok")?;
 
     let result = session::delete::delete_session_inner(
         &state::session_index::SessionIndexState::default(),
@@ -379,7 +396,7 @@ fn deleting_grokbuild_family_removes_member_dirs_and_search_rows() -> Result<()>
     )?;
 
     // root 交给官方命令:假 CLI 忠实模拟官方行为(记录参数 + 删除 root 目录)。
-    let official_calls = fs::read_to_string(fake_cli_log_path(&bin_dir))?;
+    let official_calls = fs::read_to_string(fake_cli.log_path())?;
     assert_eq!(official_calls.lines().collect::<Vec<_>>(), ["grok-parent"]);
 
     assert_eq!(result.deleted_session_id, "grok-parent");
@@ -390,7 +407,6 @@ fn deleting_grokbuild_family_removes_member_dirs_and_search_rows() -> Result<()>
     assert_eq!(grok_search_rows(&temp_home, "grok-child")?, 0);
     assert_eq!(grok_search_rows(&temp_home, "unrelated-session")?, 1);
 
-    unsafe { env::set_var("PATH", &original_path) };
     fs::remove_dir_all(&temp_home).ok();
     Ok(())
 }
@@ -406,10 +422,7 @@ fn deleting_grokbuild_session_prunes_empty_cwd_bucket() -> Result<()> {
     grok_history(&parent_path)?;
     let bucket = temp_home.join(".grok/sessions/not-a-cwd");
     // 官方命令删除 root 目录，假 CLI 模拟同样的文件效果。
-    let bin_dir = temp_home.join("bin");
-    fs::create_dir_all(&bin_dir)?;
-    install_fake_cli(&bin_dir, "grok")?;
-    let original_path = prepend_to_path(&bin_dir);
+    let _fake_cli = FakeCli::install(&temp_home, "grok")?;
 
     session::delete::delete_session_inner(
         &state::session_index::SessionIndexState::default(),
@@ -421,7 +434,6 @@ fn deleting_grokbuild_session_prunes_empty_cwd_bucket() -> Result<()> {
     // bucket 内已无共享文件，空目录应被清理。
     assert!(!bucket.exists());
 
-    unsafe { env::set_var("PATH", &original_path) };
     fs::remove_dir_all(&temp_home).ok();
     Ok(())
 }

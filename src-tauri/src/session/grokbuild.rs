@@ -13,7 +13,7 @@ use serde_json::{Value, json};
 use super::{
     ContentBlock, DeletePlanAction, SessionEvent, SessionEventPage, SessionFileEntry,
     SessionMessage, SessionMessagePage, SessionOverview, SessionReader, SessionSummary,
-    SessionTokenUsage, SourceApp, UsageHourBuckets,
+    SessionTokenUsage, SourceApp, UsageHourBuckets, delete::run_official_cli,
 };
 
 use super::family_index::{Family, FamilyIndex, FamilyRow};
@@ -981,30 +981,12 @@ pub(crate) fn delete_plan(overview: &SessionOverview) -> Result<Vec<DeletePlanAc
 }
 
 // grok 对不存在的会话输出 "No session found" 但 exit 0（幂等语义），只有
-// 真正失败才 exit 非零；失败时把命令输出原样带回给调用方。
+// 真正失败才 exit 非零；失败时的命令输出由 run_official_cli 原样带回。
 fn run_official_delete(session_id: &str) -> Result<()> {
-    let output = grok_binary()?
-        .arg("sessions")
-        .arg("delete")
-        .arg(session_id)
-        .output()
-        .with_context(|| format!("Failed to execute grok sessions delete {session_id}"))?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let exit_code = output
-            .status
-            .code()
-            .map(|code| code.to_string())
-            .unwrap_or_else(|| "terminated by signal".to_string());
-        bail!(
-            "Grok delete command failed for {session_id}. exit_code: {exit_code}\nstdout:\n{}\nstderr:\n{}",
-            stdout.trim(),
-            stderr.trim()
-        );
-    }
-    Ok(())
+    run_official_cli(
+        &format!("grok sessions delete {session_id}"),
+        grok_binary()?.arg("sessions").arg("delete").arg(session_id),
+    )
 }
 
 // 会话数据由 grok home 内的 CLI 写入，删除优先用同源二进制；home 内没有

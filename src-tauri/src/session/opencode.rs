@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Arc;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 use rusqlite::{Connection, params_from_iter};
 use serde_json::{Value, json};
 
@@ -17,7 +17,7 @@ use super::reader_engine::{
 use super::tool_blocks::{self, ToolShape};
 use super::{
     ContentBlock, DeletePlanAction, SessionEvent, SessionMessage, SessionOverview, SessionSummary,
-    SessionTokenUsage, SourceApp, usage_stats::SqlUsageHours,
+    SessionTokenUsage, SourceApp, delete::run_official_cli, usage_stats::SqlUsageHours,
 };
 
 #[derive(Clone, Debug)]
@@ -327,28 +327,13 @@ pub(crate) fn delete_session(source_session_id: &str) -> Result<()> {
             continue;
         }
 
-        let output = Command::new("opencode")
-            .arg("session")
-            .arg("delete")
-            .arg(&member.id)
-            .output()
-            .with_context(|| format!("Failed to execute opencode session delete {}", member.id))?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            let exit_code = output
-                .status
-                .code()
-                .map(|code| code.to_string())
-                .unwrap_or_else(|| "terminated by signal".to_string());
-            bail!(
-                "OpenCode delete command failed for {}. exit_code: {exit_code}\nstdout:\n{}\nstderr:\n{}",
-                member.id,
-                stdout.trim(),
-                stderr.trim()
-            );
-        }
+        run_official_cli(
+            &format!("opencode session delete {}", member.id),
+            Command::new("opencode")
+                .arg("session")
+                .arg("delete")
+                .arg(&member.id),
+        )?;
     }
 
     BACKEND.engine()?.clear()?;
