@@ -82,7 +82,22 @@
 - **2026-10-12 部分完成**（四种解释里的前两种，语义未变）：
   - `mcps.rs` 里「没有落点」的三处 None 行为都保留，但改成**被显式声明**：新增注释说明为何写入/预览报错、删除必须跳过（删除在遍历全部 target 的循环里，报错会中断整轮清理），并删掉 `apply_mcp_to_target_inner` 里那次复述（同一条件原本在入口再判一次、文案还差一个句号）。
   - `inferred_target_layout` 查清来历后**保留**：它是被文档声明的「旧配置兼容路径」（`mcp_formats.rs:58`，前缀为空的存量配置按 id 回落内置布局），不是冗余兜底；此前它**零测试覆盖**（删掉兜底实现 441 个用例仍全绿），现已补 `empty_mcp_prefix_falls_back_to_builtin_layout_when_reading`（内置 id 读到条目 + 非内置 id 读空且不报错），并验证过删掉兜底该用例会失败。
-  - 剩余：transport 校验三层三文案、inspect 自建 `McpEntryCache`。
+  - **剩余两项经复核后不成立**（2026-10-12 逐项验证）：
+    - 「transport 校验三层三文案」实测只有**两层**且规则相同：层1
+      `workspace/mod.rs:567`（带 mcp 名）、层2 `workspace/mcps.rs:721`（不带名）。
+      两者都经 `normalize_raw_mcp` 写入口径，落盘值已归一化；层1 是配置读取侧的
+      守卫，对**手改过的 config.yaml** 才有意义，不是冗余。行为无分叉：空白 command
+      在写入侧就被拒（探针实测 `Err(stdio MCP 必须提供 command。)`）。
+      清单原描述里的「`mcp_formats.rs` 八处防御 bail」是错的——该文件只有 6 处
+      bail，且全是格式/配置类型守卫（Grok 仅 TOML、Dsh 仅 Cordis YAML、OpenCode
+      不支持 TOML、毫秒须为 1000 倍数），与 transport 无关。
+    - 「inspect 自建 `McpEntryCache`」不是问题而是**已有优化**：`inspect.rs:129/157`
+      的结构是 N 个 mcp × M 个 target 的双层循环，缓存键含
+      `(target.id, config_path, prefix, config_type)`，把「每个 mcp 各读一遍同一份
+      配置」压成「每个 target 读一次」。没有它就会是 N×M 次文件读。
+  - **评级复核结论**：C3 保持 `Worth exploring`，且实际优先级低于队列位置显示的——
+    四项里没有一项造成过用户可见故障（两项是文档/测试缺口，两项根本不是缺陷）。
+    当初写下这份问题描述的依据是二手引用，不是逐项验证。
 
 ### 7. C6 · 删除侧线的散落机械
 
