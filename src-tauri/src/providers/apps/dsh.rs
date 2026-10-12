@@ -17,7 +17,7 @@ use serde_yaml::{Mapping, Value as YamlValue};
 use super::dialect::{PI_AI_PROTOCOL, PI_AI_REASONING};
 use super::{
     AppAdapter, AppCapability, Environment, ModelField, display_path, ensure_protocol_supported,
-    external_entry, registration_key,
+    entry_not_found_error, external_entry, registration_key, unrecognized_entry_error,
 };
 use crate::providers::types::{
     ApplyProviderInput, ProviderAppId, ProviderAppState, ProviderProtocol, ReasoningLevel,
@@ -27,6 +27,37 @@ use crate::support::dsh_patch;
 use crate::support::environment::Redirect;
 
 pub(crate) struct DshAdapter;
+
+// 删除路径的两段共享机械:llm-pi-ai 行的 providers 表重写(表空删整行,
+// 恢复组合里的休眠挂载),与 agent-default-model 行的指向清理(回落组合
+// 默认)。reins- 条目与外部条目两条删除路径共用;profile 的最终态由调用
+// 方在全部修改完成后只序列化一次。
+fn write_providers_route(profile_ops: &mut Vec<YamlValue>, providers_table: Mapping) {
+    if providers_table.is_empty() {
+        remove_row(profile_ops, "llm-pi-ai");
+    } else {
+        let mut config = Mapping::new();
+        config.insert(key("providers"), YamlValue::Mapping(providers_table));
+        row_into_ops(
+            profile_ops,
+            "llm-pi-ai",
+            "@deepseek-ai/dsh-llm-pi-ai",
+            config,
+        );
+    }
+}
+
+fn drop_default_model_row(profile_ops: &mut Vec<YamlValue>, route: &str) {
+    let points_at_route = find_row(profile_ops, "agent-default-model").is_some_and(|row| {
+        row_config(row)
+            .get(&key("provider"))
+            .and_then(YamlValue::as_str)
+            == Some(route)
+    });
+    if points_at_route {
+        remove_row(profile_ops, "agent-default-model");
+    }
+}
 
 fn key(name: &str) -> YamlValue {
     YamlValue::String(name.to_string())
@@ -502,29 +533,13 @@ impl AppAdapter for DshAdapter {
         let mut profile_ops = dsh_patch::read_ops(&profile_patch)?;
         let mut providers_table = llm_providers(find_row(&profile_ops, "llm-pi-ai"));
         if providers_table.get(&key(&registration)).is_none() {
-            bail!("dsh 中没有可识别的 {registration} 条目。");
+            return Err(unrecognized_entry_error("dsh", &registration));
         }
-        let mut files = Vec::new();
         providers_table.remove(&key(&registration));
-        if providers_table.is_empty() {
-            // providers 清空后删整行，恢复组合里的休眠挂载。
-            remove_row(&mut profile_ops, "llm-pi-ai");
-        } else {
-            let mut config = Mapping::new();
-            config.insert(key("providers"), YamlValue::Mapping(providers_table));
-            row_into_ops(
-                &mut profile_ops,
-                "llm-pi-ai",
-                "@deepseek-ai/dsh-llm-pi-ai",
-                config,
-            );
-        }
-        files.push((
-            profile_patch.clone(),
-            dsh_patch::serialize_ops(&profile_ops)?,
-        ));
 
-        // 凭据随路由一起清掉（refs 段删自己的 ref）。
+        let mut files = Vec::new();
+        // 凭据随路由一起清掉(refs 段删自己的 ref);与 profile 是不同文件,
+        // 先推后推无碍,profile 最终态只在最后序列化一次。
         let credentials = dsh_credentials_path(env)?;
         if credentials.exists() {
             let existing = std::fs::read_to_string(&credentials).unwrap_or_default();
@@ -534,16 +549,9 @@ impl AppAdapter for DshAdapter {
             }
         }
 
-        // 默认模型行若指向被删路由，一并清掉（回落组合默认）。
-        let points_at_route = find_row(&profile_ops, "agent-default-model").is_some_and(|row| {
-            row_config(row)
-                .get(&key("provider"))
-                .and_then(YamlValue::as_str)
-                == Some(registration.as_str())
-        });
-        if points_at_route && remove_row(&mut profile_ops, "agent-default-model") {
-            files.push((profile_patch, dsh_patch::serialize_ops(&profile_ops)?));
-        }
+        write_providers_route(&mut profile_ops, providers_table);
+        drop_default_model_row(&mut profile_ops, &registration);
+        files.push((profile_patch, dsh_patch::serialize_ops(&profile_ops)?));
 
         Ok(files)
     }
@@ -560,35 +568,12 @@ impl AppAdapter for DshAdapter {
         let mut profile_ops = dsh_patch::read_ops(&profile_patch)?;
         let mut providers_table = llm_providers(find_row(&profile_ops, "llm-pi-ai"));
         if providers_table.remove(&key(entry_key)).is_none() {
-            bail!("dsh 路由里没有条目 {entry_key}。");
+            return Err(entry_not_found_error("dsh", entry_key));
         }
-        let mut files = Vec::new();
-        if providers_table.is_empty() {
-            remove_row(&mut profile_ops, "llm-pi-ai");
-        } else {
-            let mut config = Mapping::new();
-            config.insert(key("providers"), YamlValue::Mapping(providers_table));
-            row_into_ops(
-                &mut profile_ops,
-                "llm-pi-ai",
-                "@deepseek-ai/dsh-llm-pi-ai",
-                config,
-            );
-        }
-        files.push((
-            profile_patch.clone(),
-            dsh_patch::serialize_ops(&profile_ops)?,
-        ));
 
-        let points_at_route = find_row(&profile_ops, "agent-default-model").is_some_and(|row| {
-            row_config(row)
-                .get(&key("provider"))
-                .and_then(YamlValue::as_str)
-                == Some(entry_key)
-        });
-        if points_at_route && remove_row(&mut profile_ops, "agent-default-model") {
-            files.push((profile_patch, dsh_patch::serialize_ops(&profile_ops)?));
-        }
+        write_providers_route(&mut profile_ops, providers_table);
+        drop_default_model_row(&mut profile_ops, entry_key);
+        let files = vec![(profile_patch, dsh_patch::serialize_ops(&profile_ops)?)];
         Ok(files)
     }
 }

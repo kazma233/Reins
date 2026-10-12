@@ -14,7 +14,8 @@ use toml::Value as TomlValue;
 use super::dialect::{GROK_PROTOCOL, GROK_REASONING};
 use super::{
     AppAdapter, AppCapability, Environment, ModelField, display_path, ensure_protocol_supported,
-    external_entry, grok_config_path, read_toml, registration_key, serialize_toml,
+    entry_not_found_error, external_entry, grok_config_path, modified_entry_error, read_toml,
+    registration_key, serialize_toml, unrecognized_entry_error,
 };
 use crate::providers::types::{
     ApplyProviderInput, ProviderAppId, ProviderAppState, ProviderProtocol, ReasoningLevel,
@@ -58,6 +59,19 @@ fn model_entry_key(registration: &str, model_id: &str) -> String {
     format!("{registration}--{model_id}")
 }
 
+// models.default 与 default_reasoning_effort 是一对:默认指向被删条目时
+// 随删除清掉,单独留思考等级没有意义。Provider 树与独立模型两条删除路径
+// 共用。
+fn clear_models_default(root_table: &mut toml::map::Map<String, TomlValue>) {
+    if let Some(models_table) = root_table
+        .get_mut("models")
+        .and_then(TomlValue::as_table_mut)
+    {
+        models_table.remove("default");
+        models_table.remove("default_reasoning_effort");
+    }
+}
+
 // remove 与 remove_external 的共享删除路径：清掉指向该键的默认值、
 // 删除 model_providers 条目与 `{key}--` 前缀的模型条目。require_recognizable
 // 区分两条路径的防护：reins- 条目内容被手工改过时不自动删，外部条目
@@ -74,13 +88,7 @@ fn remove_provider_tree(
         .and_then(TomlValue::as_str)
         .is_some_and(|default| default.starts_with(&format!("{key}--")));
     if default_refs_key {
-        if let Some(models_table) = root_table
-            .get_mut("models")
-            .and_then(TomlValue::as_table_mut)
-        {
-            models_table.remove("default");
-            models_table.remove("default_reasoning_effort");
-        }
+        clear_models_default(root_table);
     }
 
     let mut removed = false;
@@ -96,7 +104,7 @@ fn remove_provider_tree(
                         .and_then(TomlValue::as_str)
                         .is_some();
                 if !recognizable {
-                    bail!("条目 {key} 已被手工修改，无法自动识别，请手动处理。");
+                    return Err(modified_entry_error(key));
                 }
             }
             providers_table.remove(key);
@@ -152,13 +160,7 @@ fn remove_standalone_model(root_table: &mut toml::map::Map<String, TomlValue>, k
         .and_then(TomlValue::as_str)
         .is_some_and(|default| default == key);
     if is_default {
-        if let Some(models_table) = root_table
-            .get_mut("models")
-            .and_then(TomlValue::as_table_mut)
-        {
-            models_table.remove("default");
-            models_table.remove("default_reasoning_effort");
-        }
+        clear_models_default(root_table);
     }
     true
 }
@@ -460,7 +462,7 @@ impl AppAdapter for GrokbuildAdapter {
         let root_table = root.as_table_mut().expect("checked above");
         let registration = registration_key(provider_id);
         if !remove_provider_tree(root_table, &registration, true)? {
-            bail!("Grok 中没有可识别的 {registration} 条目。");
+            return Err(unrecognized_entry_error("Grok", &registration));
         }
         Ok(vec![(path, serialize_toml(&root)?)])
     }
@@ -491,7 +493,7 @@ impl AppAdapter for GrokbuildAdapter {
             remove_standalone_model(root_table, entry_key)
         };
         if !removed {
-            bail!("Grok 中没有外部条目 {entry_key}。");
+            return Err(entry_not_found_error("Grok", entry_key));
         }
         Ok(vec![(path, serialize_toml(&root)?)])
     }

@@ -5,7 +5,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, anyhow, bail};
 use serde_json::{Map as JsonMap, Value as JsonValue};
 use toml::Value as TomlValue;
 
@@ -33,6 +33,21 @@ pub(crate) const MASKED_KEY: &str = "******";
 
 pub(crate) fn registration_key(provider_id: &str) -> String {
     format!("{REINS_PREFIX}{provider_id}")
+}
+
+// 移除路径的三句报错,全部条目生命周期共用、逐字单一来源:条目内容被
+// 手工改过不自动删;注册键查不到;外部键查不到。app_label 是各家文案里
+// 的既有主语(Codex/OpenCode/Pi/Grok/dsh),不做大小写统一。
+pub(crate) fn modified_entry_error(key: &str) -> anyhow::Error {
+    anyhow!("条目 {key} 已被手工修改，无法自动识别，请手动处理。")
+}
+
+pub(crate) fn unrecognized_entry_error(app_label: &str, registration: &str) -> anyhow::Error {
+    anyhow!("{app_label} 中没有可识别的 {registration} 条目。")
+}
+
+pub(crate) fn entry_not_found_error(app_label: &str, entry_key: &str) -> anyhow::Error {
+    anyhow!("{app_label} 中没有外部条目 {entry_key}。")
 }
 
 // 环境视图与工具目录重定向的唯一来源在 support::environment：这里 re-export

@@ -16,8 +16,8 @@ use toml::Value as TomlValue;
 use super::dialect::CODEX_PROTOCOL;
 use super::{
     AppAdapter, AppCapability, Environment, ModelField, classify_reins_entry, codex_config_path,
-    codex_home_dir, display_path, ensure_protocol_supported, external_entry, read_toml,
-    registration_key, serialize_toml,
+    codex_home_dir, display_path, ensure_protocol_supported, entry_not_found_error, external_entry,
+    modified_entry_error, read_toml, registration_key, serialize_toml, unrecognized_entry_error,
 };
 use crate::providers::types::{
     ApplyProviderInput, ProviderAppId, ProviderAppState, ProviderProtocol, ReasoningLevel,
@@ -403,14 +403,14 @@ impl AppAdapter for CodexAdapter {
                 let recognizable_now = entry.get("base_url").and_then(TomlValue::as_str).is_some()
                     && entry.get("wire_api").and_then(TomlValue::as_str) == Some(wire_api());
                 if !recognizable_now {
-                    bail!("条目 {registration} 已被手工修改，无法自动识别，请手动处理。");
+                    return Err(modified_entry_error(&registration));
                 }
                 recognizable = true;
                 providers_table.remove(&registration);
             }
         }
         if !recognizable {
-            bail!("Codex 中没有可识别的 {} 条目。", registration);
+            return Err(unrecognized_entry_error("Codex", &registration));
         }
 
         // model_catalog_json 只在仍指向 Reins 的目录文件时清；用户自己
@@ -486,10 +486,10 @@ impl AppAdapter for CodexAdapter {
             .get_mut("model_providers")
             .and_then(|value| value.as_table_mut())
         else {
-            bail!("Codex 中没有外部条目 {entry_key}。");
+            return Err(entry_not_found_error("Codex", entry_key));
         };
         if providers_table.remove(entry_key).is_none() {
-            bail!("Codex 中没有外部条目 {entry_key}。");
+            return Err(entry_not_found_error("Codex", entry_key));
         }
 
         Ok(vec![(path, serialize_toml(&root)?)])

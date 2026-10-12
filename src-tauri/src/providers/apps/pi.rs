@@ -2,7 +2,7 @@
 // 多 Provider 并存：新增 reins- 条目；默认值写 settings.json。
 
 use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Result, bail};
 use serde_json::{Map as JsonMap, Value as JsonValue};
@@ -10,8 +10,8 @@ use serde_json::{Map as JsonMap, Value as JsonValue};
 use super::dialect::{PI_AI_PROTOCOL, PI_AI_REASONING};
 use super::{
     AppAdapter, AppCapability, Environment, display_path, ensure_protocol_supported,
-    external_entry, pi_models_path, pi_settings_path, read_json_object, registration_key,
-    serialize_json,
+    entry_not_found_error, external_entry, modified_entry_error, pi_models_path, pi_settings_path,
+    read_json_object, registration_key, serialize_json, unrecognized_entry_error,
 };
 use crate::providers::types::{
     ApplyProviderInput, ProviderAppId, ProviderAppState, ProviderProtocol, ReasoningLevel,
@@ -19,6 +19,24 @@ use crate::providers::types::{
 };
 
 pub(crate) struct PiAdapter;
+
+// 默认 Provider/Model/ThinkingLevel 三元组随删除清空;只有 settings 真正
+// 被修改时才写回,避免凭空创建 settings.json。reins- 条目与外部条目两条
+// 删除路径共用。
+fn clear_default_refs(
+    settings: &mut JsonMap<String, JsonValue>,
+    settings_path: &Path,
+    entry_key: &str,
+    files: &mut Vec<(PathBuf, String)>,
+) -> Result<()> {
+    if settings.get("defaultProvider").and_then(JsonValue::as_str) == Some(entry_key) {
+        settings.remove("defaultProvider");
+        settings.remove("defaultModel");
+        settings.remove("defaultThinkingLevel");
+        files.push((settings_path.to_path_buf(), serialize_json(settings)?));
+    }
+    Ok(())
+}
 
 // Pi 的思考等级选择器只对 thinkingLevelMap 里显式声明的模型开放
 // xhigh/max 档（pi getSupportedThinkingLevels：值 null 禁用该档，
@@ -234,7 +252,6 @@ impl AppAdapter for PiAdapter {
             (settings_path, serialize_json(&settings)?),
         ])
     }
-
     fn remove(
         &self,
         env: &Environment,
@@ -251,28 +268,19 @@ impl AppAdapter for PiAdapter {
         let registration = registration_key(provider_id);
 
         let mut settings = read_json_object(&settings_path)?;
-        // 默认 Provider 仍指向该平台时随移除清掉 apply 写入的默认三元组；
-        // 只有 settings 真正被修改时才写回，避免凭空创建 settings.json。
         let mut files: Vec<(PathBuf, String)> = Vec::new();
-        if settings.get("defaultProvider").and_then(JsonValue::as_str)
-            == Some(registration.as_str())
-        {
-            settings.remove("defaultProvider");
-            settings.remove("defaultModel");
-            settings.remove("defaultThinkingLevel");
-            files.push((settings_path, serialize_json(&settings)?));
-        }
+        clear_default_refs(&mut settings, &settings_path, &registration, &mut files)?;
 
         let Some(providers_table) = root.get_mut("providers").and_then(JsonValue::as_object_mut)
         else {
-            bail!("Pi 中没有可识别的 {registration} 条目。");
+            return Err(unrecognized_entry_error("Pi", &registration));
         };
         let entry = providers_table.get(&registration);
         let Some(entry) = entry else {
-            bail!("Pi 中没有可识别的 {registration} 条目。");
+            return Err(unrecognized_entry_error("Pi", &registration));
         };
         if entry.get("baseUrl").and_then(JsonValue::as_str).is_none() {
-            bail!("条目 {registration} 已被手工修改，无法自动识别，请手动处理。");
+            return Err(modified_entry_error(&registration));
         }
         providers_table.remove(&registration);
         if providers_table.is_empty() {
@@ -297,21 +305,14 @@ impl AppAdapter for PiAdapter {
 
         let mut settings = read_json_object(&settings_path)?;
         let mut files: Vec<(PathBuf, String)> = Vec::new();
-        // 与 reins- 条目移除一致：默认 Provider 指向被删条目时随删除清空；
-        // 只有 settings 真正被修改时才写回。
-        if settings.get("defaultProvider").and_then(JsonValue::as_str) == Some(entry_key) {
-            settings.remove("defaultProvider");
-            settings.remove("defaultModel");
-            settings.remove("defaultThinkingLevel");
-            files.push((settings_path, serialize_json(&settings)?));
-        }
+        clear_default_refs(&mut settings, &settings_path, entry_key, &mut files)?;
 
         let Some(providers_table) = root.get_mut("providers").and_then(JsonValue::as_object_mut)
         else {
-            bail!("Pi 中没有外部条目 {entry_key}。");
+            return Err(entry_not_found_error("Pi", entry_key));
         };
         if providers_table.remove(entry_key).is_none() {
-            bail!("Pi 中没有外部条目 {entry_key}。");
+            return Err(entry_not_found_error("Pi", entry_key));
         }
         if providers_table.is_empty() {
             root.remove("providers");

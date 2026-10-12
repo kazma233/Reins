@@ -24,9 +24,9 @@ use serde_json::{Map as JsonMap, Value as JsonValue};
 
 use super::dialect::OPENCODE_PROTOCOL;
 use super::{
-    AppAdapter, AppCapability, Environment, ensure_protocol_supported, external_entry,
-    opencode_candidate_paths, read_json_object, read_jsonc_object, registration_key,
-    serialize_json,
+    AppAdapter, AppCapability, Environment, ensure_protocol_supported, entry_not_found_error,
+    external_entry, modified_entry_error, opencode_candidate_paths, read_json_object,
+    read_jsonc_object, registration_key, serialize_json, unrecognized_entry_error,
 };
 use crate::providers::types::{
     ApplyProviderInput, ProviderAppEntry, ProviderAppId, ProviderAppState, ProviderProtocol,
@@ -204,17 +204,22 @@ fn entry_from_provider_value(
 }
 
 // 从单个文件根里移除注册键：v2 providers 与 v1 provider 两个节点都查，
-// 并清掉指向该键的顶层 model。调用方负责可识别性校验。
+// 并清掉指向该键的顶层 model。调用方负责可识别性校验；返回是否发生了
+// 修改,外部条目路径靠它判断「键是否存在」。
 fn remove_registration_from(
     root: &mut JsonMap<String, JsonValue>,
     registration: &str,
-) -> Result<()> {
+) -> Result<bool> {
+    let mut changed = false;
     for node in ["providers", "provider"] {
         let Some(table) = root.get_mut(node).and_then(JsonValue::as_object_mut) else {
             continue;
         };
-        if table.remove(registration).is_some() && table.is_empty() {
-            root.remove(node);
+        if table.remove(registration).is_some() {
+            changed = true;
+            if table.is_empty() {
+                root.remove(node);
+            }
         }
     }
     let prefix = format!("{registration}/");
@@ -224,8 +229,9 @@ fn remove_registration_from(
         .is_some_and(|model| model.starts_with(&prefix))
     {
         root.remove("model");
+        changed = true;
     }
-    Ok(())
+    Ok(changed)
 }
 
 impl AppAdapter for OpencodeAdapter {
@@ -547,7 +553,7 @@ impl AppAdapter for OpencodeAdapter {
                             .is_some()
                     });
                     if !recognized {
-                        bail!("条目 {registration} 已被手工修改，无法自动识别，请手动处理。");
+                        return Err(modified_entry_error(&registration));
                     }
                 }
             }
@@ -558,7 +564,7 @@ impl AppAdapter for OpencodeAdapter {
             outputs.push((path, serialize_json(&root)?));
         }
         if !found {
-            bail!("OpenCode 中没有可识别的 {registration} 条目。");
+            return Err(unrecognized_entry_error("OpenCode", &registration));
         }
         Ok(outputs)
     }
@@ -576,37 +582,16 @@ impl AppAdapter for OpencodeAdapter {
             if !path.exists() {
                 continue;
             }
-            // 与 reins- 条目移除一致：默认模型指向被删条目时随删除清空。
-            // 外部条目可能同时出现在两个文件里（低优先级那份本就不生效），
-            // 一并删除。
-            let mut changed = false;
-            let prefix = format!("{entry_key}/");
-            if root
-                .get("model")
-                .and_then(JsonValue::as_str)
-                .is_some_and(|model| model.starts_with(&prefix))
-            {
-                root.remove("model");
-                changed = true;
-            }
-            for node in ["providers", "provider"] {
-                let Some(table) = root.get_mut(node).and_then(JsonValue::as_object_mut) else {
-                    continue;
-                };
-                if table.remove(entry_key).is_some() {
-                    changed = true;
-                    if table.is_empty() {
-                        root.remove(node);
-                    }
-                }
-            }
-            if changed {
+            // 与 reins- 条目移除同一助手:默认模型指向被删条目时随删除清空,
+            // 两个节点都删。外部条目可能同时出现在两个文件里(低优先级那份
+            // 本就不生效),一并删除。
+            if remove_registration_from(&mut root, entry_key)? {
                 outputs.push((path, serialize_json(&root)?));
                 removed = true;
             }
         }
         if !removed {
-            bail!("OpenCode 中没有外部条目 {entry_key}。");
+            return Err(entry_not_found_error("OpenCode", entry_key));
         }
         Ok(outputs)
     }
