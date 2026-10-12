@@ -14,7 +14,7 @@ use super::types::{
     ProviderAppId, ProviderAppState, ProviderProtocol, ReasoningEffortWrite, ReasoningLevel,
     ResolvedProvider,
 };
-use crate::support::fs::{display_path, user_home_dir, write_atomic, write_atomic_private};
+use crate::support::fs::{display_path, write_atomic, write_atomic_private};
 use dialect::{ProtocolDialect, ReasoningDialect};
 
 pub(crate) mod claude;
@@ -72,36 +72,27 @@ pub(crate) struct AppCapability {
 
 // 模型元数据维度：required_model_fields 用它做应用门控，
 // unwritten_model_fields 用它声明该工具不写入哪些元数据。
-// ReasoningLevels 只在前者有意义（等级选择本身经弹窗默认档写入），
-// 暂无工具引用，保留待 unverified 项验证。
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[allow(dead_code)]
 pub(crate) enum ModelField {
-    ContextWindow,
     MaxOutputTokens,
     SupportsImages,
     Reasoning,
-    ReasoningLevels,
 }
 
 impl ModelField {
     pub(crate) fn label(self) -> &'static str {
         match self {
-            ModelField::ContextWindow => "上下文窗口",
             ModelField::MaxOutputTokens => "最大输出",
             ModelField::SupportsImages => "图像输入",
             ModelField::Reasoning => "推理能力",
-            ModelField::ReasoningLevels => "思考等级",
         }
     }
 
     fn is_present(self, model: &super::types::ProviderModelRecord) -> bool {
         match self {
-            ModelField::ContextWindow => model.context_window.is_some(),
             ModelField::MaxOutputTokens => model.max_output_tokens.is_some(),
             ModelField::SupportsImages => model.supports_images.is_some(),
             ModelField::Reasoning => model.reasoning.is_some(),
-            ModelField::ReasoningLevels => model.reasoning_levels.is_some(),
         }
     }
 }
@@ -541,10 +532,6 @@ pub(crate) fn empty_state(app: ProviderAppId, config_paths: Vec<PathBuf>) -> Pro
 // settings.json）在这里显式拼接。
 // ---------------------------------------------------------------------------
 
-fn home_dir() -> Result<PathBuf> {
-    user_home_dir().ok_or_else(|| anyhow::anyhow!("无法解析 HOME 目录。"))
-}
-
 pub(crate) fn codex_home_dir(env: &Environment) -> Result<PathBuf> {
     env.resolve_required(Redirect::CodexHome)
 }
@@ -562,18 +549,17 @@ pub(crate) fn claude_settings_path(env: &Environment) -> Result<PathBuf> {
     Ok(claude_config_dir(env)?.join("settings.json"))
 }
 
-// OpenCode 在 Windows 上不认 XDG_CONFIG_HOME（v2.0.16 实测，官方文档未写
-// 差异），统一按 HOME/.config 解析，避免与工具实际读取位置分叉。
-pub(crate) fn opencode_config_dir() -> Result<PathBuf> {
-    Ok(home_dir()?.join(".config").join("opencode"))
-}
-
 // opencode.json 与 opencode.jsonc 都会被 OpenCode 加载并按顶层键合并，
 // 后者覆盖前者（v2.0.18 config/discovery.ts + config.ts findLast）；
-// 顺序即优先级：低 → 高。
-pub(crate) fn opencode_candidate_paths() -> Result<Vec<PathBuf>> {
-    let dir = opencode_config_dir()?;
-    Ok(vec![dir.join("opencode.json"), dir.join("opencode.jsonc")])
+// 顺序即优先级：低 → 高。基名从 agents 清单派生（与 codex/grok 同一条
+// 路径来源），jsonc 是清单不表达的工具加载语义，按同目录兄弟候选枚举。
+// OpenCode 在 Windows 上不认 XDG_CONFIG_HOME（v2.0.16 实测，官方文档未写
+// 差异）；清单登记的就是 HOME 相对路径，派生结果与该行为一致。
+pub(crate) fn opencode_candidate_paths(env: &Environment) -> Result<Vec<PathBuf>> {
+    let base = environment::mcp_config_path(env, ProviderAppId::Opencode)
+        .ok_or_else(|| anyhow::anyhow!("OpenCode 配置路径未在 agents 清单登记"))?;
+    let jsonc = base.with_extension("jsonc");
+    Ok(vec![base, jsonc])
 }
 
 // jsonc 容忍注释与尾逗号，用 json5 解析；行为与 read_json_object 对齐。

@@ -37,8 +37,8 @@ pub(crate) struct OpencodeAdapter;
 
 // 按低→高优先级加载两个候选文件；缺失文件返回空对象，是否真实存在以
 // path.exists() 判断。.jsonc 走 json5 解析（容忍注释）。
-fn load_config_files() -> Result<Vec<(PathBuf, JsonMap<String, JsonValue>)>> {
-    opencode_candidate_paths()?
+fn load_config_files(env: &Environment) -> Result<Vec<(PathBuf, JsonMap<String, JsonValue>)>> {
+    opencode_candidate_paths(env)?
         .into_iter()
         .map(|path| {
             let root = if is_jsonc(&path) {
@@ -212,6 +212,21 @@ fn entry_from_provider_value(
     }
 }
 
+// OpenCode 配置里的两个承载节点:v2 的 providers 与 v1 的 provider,读两
+// 个、删删两个、写只写 v2——这条规则以前靠四处字面量维持一致。
+const NODES: [&str; 2] = ["providers", "provider"];
+
+// 条目的连接信息:v2 在 settings.baseURL,v1 在 options.baseURL。识别只看
+// 「任一节有」;is_v2 的分支要区分的只是 package/npm 等其余字段。
+fn entry_base_url(entry: &JsonValue) -> Option<&str> {
+    ["settings", "options"].iter().find_map(|section| {
+        entry
+            .get(*section)
+            .and_then(|section| section.get("baseURL"))
+            .and_then(JsonValue::as_str)
+    })
+}
+
 // 从单个文件根里移除注册键：v2 providers 与 v1 provider 两个节点都查，
 // 并清掉指向该键的顶层 model。调用方负责可识别性校验；返回是否发生了
 // 修改,外部条目路径靠它判断「键是否存在」。
@@ -220,7 +235,7 @@ fn remove_registration_from(
     registration: &str,
 ) -> Result<bool> {
     let mut changed = false;
-    for node in ["providers", "provider"] {
+    for node in NODES {
         let Some(table) = root.get_mut(node).and_then(JsonValue::as_object_mut) else {
             continue;
         };
@@ -248,8 +263,8 @@ impl AppAdapter for OpencodeAdapter {
         ProviderAppId::Opencode
     }
 
-    fn config_paths(&self, _env: &Environment) -> Result<Vec<PathBuf>> {
-        opencode_candidate_paths()
+    fn config_paths(&self, env: &Environment) -> Result<Vec<PathBuf>> {
+        opencode_candidate_paths(env)
     }
 
     fn capability(&self) -> AppCapability {
@@ -285,8 +300,7 @@ impl AppAdapter for OpencodeAdapter {
         env: &Environment,
         providers: &BTreeMap<String, ResolvedProvider>,
     ) -> Result<ProviderAppState> {
-        let _ = env;
-        let files = load_config_files()?;
+        let files = load_config_files(env)?;
         let existing: Vec<PathBuf> = files
             .iter()
             .filter(|(path, _)| path.exists())
@@ -295,7 +309,7 @@ impl AppAdapter for OpencodeAdapter {
         let state_paths = if existing.is_empty() {
             // 两个候选都不存在时展示默认写入目标。
             vec![
-                opencode_candidate_paths()?
+                opencode_candidate_paths(env)?
                     .first()
                     .expect("候选非空")
                     .clone(),
@@ -326,7 +340,8 @@ impl AppAdapter for OpencodeAdapter {
                 continue;
             }
             let file_name = file_display_name(path);
-            for (node, is_v2) in [("providers", true), ("provider", false)] {
+            // NODES 序即版本序:providers=v2、provider=v1。
+            for (node, is_v2) in NODES.iter().copied().zip([true, false]) {
                 let Some(table) = root.get(node).and_then(JsonValue::as_object) else {
                     continue;
                 };
@@ -344,19 +359,13 @@ impl AppAdapter for OpencodeAdapter {
                 for (key, value) in table {
                     let (base_url, package, models) = if is_v2 {
                         (
-                            value
-                                .get("settings")
-                                .and_then(|settings| settings.get("baseURL"))
-                                .and_then(JsonValue::as_str),
+                            entry_base_url(value),
                             value.get("package").and_then(JsonValue::as_str),
                             value.get("models").and_then(JsonValue::as_object),
                         )
                     } else {
                         (
-                            value
-                                .get("options")
-                                .and_then(|options| options.get("baseURL"))
-                                .and_then(JsonValue::as_str),
+                            entry_base_url(value),
                             value.get("npm").and_then(JsonValue::as_str),
                             value.get("models").and_then(JsonValue::as_object),
                         )
@@ -390,9 +399,8 @@ impl AppAdapter for OpencodeAdapter {
         plan: &ApplyProviderInput,
         api_key: &str,
     ) -> Result<Vec<(PathBuf, String)>> {
-        let _ = env;
         ensure_protocol_supported(self, provider)?;
-        let mut files = load_config_files()?;
+        let mut files = load_config_files(env)?;
         let registration = registration_key(&provider.id);
         // 写入目标：已存在的最高优先级文件（与 OpenCode 自身更新器的选择
         // 一致）；都不存在时创建 opencode.json。
@@ -508,7 +516,7 @@ impl AppAdapter for OpencodeAdapter {
             if index == target_index || !path.exists() {
                 continue;
             }
-            let has_registration = ["providers", "provider"].iter().any(|node| {
+            let has_registration = NODES.iter().any(|node| {
                 root.get(*node)
                     .and_then(|node| node.get(registration.as_str()))
                     .is_some()
@@ -529,17 +537,16 @@ impl AppAdapter for OpencodeAdapter {
         provider_id: &str,
         provider: Option<&ResolvedProvider>,
     ) -> Result<Vec<(PathBuf, String)>> {
-        let _ = env;
         let _ = provider;
         let registration = registration_key(provider_id);
-        let files = load_config_files()?;
+        let files = load_config_files(env)?;
         let mut outputs = Vec::new();
         let mut found = false;
         for (path, mut root) in files {
             if !path.exists() {
                 continue;
             }
-            let contains_registration = ["providers", "provider"].iter().any(|node| {
+            let contains_registration = NODES.iter().any(|node| {
                 root.get(*node)
                     .and_then(|node| node.get(registration.as_str()))
                     .is_some()
@@ -549,21 +556,13 @@ impl AppAdapter for OpencodeAdapter {
             }
             // 只删内容仍可识别的条目：baseURL 必须是字符串；两个节点里的
             // 同名条目都要通过校验后再动文件。
-            for node in ["providers", "provider"] {
+            for node in NODES {
                 if let Some(entry) = root
                     .get(node)
                     .and_then(|node| node.get(registration.as_str()))
+                    && entry_base_url(entry).is_none()
                 {
-                    let recognized = ["settings", "options"].iter().any(|section| {
-                        entry
-                            .get(*section)
-                            .and_then(|settings| settings.get("baseURL"))
-                            .and_then(JsonValue::as_str)
-                            .is_some()
-                    });
-                    if !recognized {
-                        return Err(modified_entry_error(&registration));
-                    }
+                    return Err(modified_entry_error(&registration));
                 }
             }
             found = true;
@@ -583,8 +582,7 @@ impl AppAdapter for OpencodeAdapter {
         env: &Environment,
         entry_key: &str,
     ) -> Result<Vec<(PathBuf, String)>> {
-        let _ = env;
-        let files = load_config_files()?;
+        let files = load_config_files(env)?;
         let mut outputs = Vec::new();
         let mut removed = false;
         for (path, mut root) in files {
