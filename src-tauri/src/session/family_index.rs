@@ -36,6 +36,13 @@ pub(crate) trait FamilyRow {
     /// Secondary member-sort key (root path spelling for Claude, session id
     /// otherwise).
     fn member_tie_breaker(&self) -> Cow<'_, str>;
+
+    /// 行自身的 root 声明(claude 的 root 形态转录):members 里可能出现
+    /// root 类行(孤儿回退等),删除计划的 meta 推导靠它排除。多数来源
+    /// 没有行级 root 概念,默认 false。
+    fn member_is_root(&self) -> bool {
+        false
+    }
 }
 
 #[derive(Clone, Debug)]

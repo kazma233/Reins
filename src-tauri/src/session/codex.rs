@@ -18,9 +18,9 @@ use super::reader_engine::{
     RowErrorPolicy, scan_files,
 };
 use super::{
-    ContentBlock, DeletePlanAction, SessionEvent, SessionMessage, SessionOverview, SessionSummary,
+    ContentBlock, DeletePlanAction, SessionEvent, SessionMessage, SessionSummary,
     SessionTokenUsage, SourceApp, SummaryAccumulator, TimelineRecord, UsageHourBuckets,
-    delete::run_official_cli,
+    delete::{DeletePlanInput, run_official_cli},
 };
 
 #[derive(Clone, Debug)]
@@ -238,8 +238,9 @@ pub(crate) fn delete_session(source_session_id: &str) -> Result<()> {
 
 // 预演逐 id 列出官方命令;执行侧"已不在 state 库则跳过"是命令层面的幂等
 // 细节,预演仍展示完整意图。
-pub(crate) fn delete_plan(overview: &SessionOverview) -> Result<Vec<DeletePlanAction>> {
-    Ok(super::delete::delete_target_session_ids(overview)
+pub(crate) fn delete_plan(input: &DeletePlanInput) -> Result<Vec<DeletePlanAction>> {
+    Ok(input
+        .session_ids()
         .into_iter()
         .map(|id| DeletePlanAction::RunCli {
             program: "codex".to_string(),

@@ -5,9 +5,10 @@ use std::process::Command;
 
 use anyhow::{Context, Result, bail};
 
+use super::family_index::{Family, FamilyRow};
 use crate::state::session_index::SessionIndexState;
 
-use super::model::{DeletePlan, DeletePlanAction, SessionOverview};
+use super::model::{DeletePlan, DeletePlanAction};
 use super::sources::{self, DELETE_UNSUPPORTED_LABEL, DeletePolicy};
 use super::{DeleteSessionResult, SourceApp};
 
@@ -80,36 +81,73 @@ pub(crate) fn delete_session_inner(
     })
 }
 
-// 删除目标 id 的统一推导:会话组有 agent 条目时逐个删,没有(单会话来源或
-// 尚无 agent 视图)退回 root id;去重保持首见顺序。
-pub(crate) fn delete_target_session_ids(overview: &SessionOverview) -> Vec<String> {
-    let ids = if overview.agents.is_empty() {
-        vec![overview.summary.source_session_id.clone()]
-    } else {
-        overview
-            .agents
-            .iter()
-            .map(|agent| agent.session_id.clone())
-            .collect()
-    };
-
-    let mut seen = HashSet::new();
-    ids.into_iter()
-        .filter(|id| seen.insert(id.clone()))
-        .collect()
+// 删除预演的结构化输入:family 的非渲染折叠。plan 的成员级推导(id 清单、
+// 成员文件/目录、root 排除)只认这里,不再从 overview 的展示名册与路径
+// 字符串反推。
+pub(crate) struct DeletePlanInput {
+    /// family 根可被解析的 id(执行侧官方命令与 sidecar 路径都用它)。
+    pub(crate) root_id: String,
+    /// root 打头,成员序;root 行 is_root=true。
+    pub(crate) members: Vec<PlanMember>,
 }
 
-// 删除预演:动作清单与说明文案都取自来源注册表,前端只渲染。不支持删除的
-// 来源不解析 overview(其 overview 对预演没有价值,跳过更稳);可删来源的
-// id 解析与 overview 解析失败沿 delete_session_inner 同样的错误传播。
+pub(crate) struct PlanMember {
+    pub(crate) id: String,
+    pub(crate) path: PathBuf,
+    pub(crate) is_root: bool,
+}
+
+impl DeletePlanInput {
+    /// 全部 Deleter 共用的唯一折叠:root 行打头,is_root 同时认行自身声明。
+    /// 成员全集保留、不去重——同 id 的续跑段各有自己的文件,plan 的文件
+    /// 清单不能丢路径;唯一例外是「声明为 root 且与 root 同 id」的行,那是
+    /// claude 分组把 root 另存一份后残留在 members 里的重复,root 文件已由
+    /// 打头的 root 行携带。
+    pub(crate) fn from_family<Row: FamilyRow>(family: &Family<Row>) -> Self {
+        let root_id = family.root.member_id().to_string();
+        let mut members = Vec::with_capacity(family.members.len() + 1);
+        members.push(PlanMember {
+            id: root_id.clone(),
+            path: family.root.member_path().as_ref().to_path_buf(),
+            is_root: true,
+        });
+        for row in &family.members {
+            if row.member_is_root() && row.member_id() == root_id {
+                continue;
+            }
+            members.push(PlanMember {
+                id: row.member_id().to_string(),
+                path: row.member_path().as_ref().to_path_buf(),
+                is_root: row.member_is_root(),
+            });
+        }
+        Self { root_id, members }
+    }
+
+    /// 删除目标 id 的统一推导:全体成员 id 全局保序去重(root 先见)。
+    /// 与展示名册 family_agents 的 Root 标签去重是同一条规则的两个消费方
+    /// ——名册保留同 id 的回退条目用于展示,删除面只删一次。
+    pub(crate) fn session_ids(&self) -> Vec<String> {
+        let mut seen = HashSet::new();
+        self.members
+            .iter()
+            .map(|member| member.id.clone())
+            .filter(|id| seen.insert(id.clone()))
+            .collect()
+    }
+}
+
+// 删除预演:动作清单与说明文案都取自来源注册表,前端只渲染。plan 的输入
+// 是 family 的结构化折叠(delete_plan_input),不经渲染 DTO;不支持删除的
+// 来源不解析 family(其 family 对预演没有价值,跳过更稳)。
 pub(crate) fn get_delete_plan_inner(
     source_app: SourceApp,
     source_session_id: &str,
 ) -> Result<DeletePlan> {
     match sources::spec(source_app).delete {
         DeletePolicy::Deleter { plan, copy, .. } => {
-            let overview = super::reader(source_app).parse_overview(source_session_id)?;
-            let actions = plan(&overview)?;
+            let input = super::reader(source_app).delete_plan_input(source_session_id)?;
+            let actions = plan(&input)?;
 
             Ok(DeletePlan {
                 source_app,
@@ -160,5 +198,89 @@ mod tests {
         assert!(root.exists());
 
         fs::remove_dir_all(&root).ok();
+    }
+
+    struct FoldRow {
+        id: &'static str,
+        is_root: bool,
+    }
+
+    impl FamilyRow for FoldRow {
+        fn member_path(&self) -> std::borrow::Cow<'_, Path> {
+            std::borrow::Cow::Owned(PathBuf::from(format!("/x/{}.jsonl", self.id)))
+        }
+
+        fn family_root_id(&self) -> &str {
+            self.id
+        }
+
+        fn member_id(&self) -> &str {
+            self.id
+        }
+
+        fn member_created_at(&self) -> Option<i64> {
+            None
+        }
+
+        fn member_updated_at(&self) -> Option<i64> {
+            None
+        }
+
+        fn member_tie_breaker(&self) -> std::borrow::Cow<'_, str> {
+            std::borrow::Cow::Borrowed(self.id)
+        }
+
+        fn member_is_root(&self) -> bool {
+            self.is_root
+        }
+    }
+
+    // 折叠契约:root 行打头且 is_root=true;成员全集保留(同 id 的续跑段
+    // 各有自己的文件,plan 的文件清单不能丢路径),唯一例外是 claude 分组
+    // 残留在 members 里的重复 root 行(声明 root 且同 id);session_ids
+    // 全局保序去重。
+    #[test]
+    fn from_family_keeps_all_members_and_dedups_session_ids() {
+        let family = Family {
+            root: FoldRow {
+                id: "root",
+                is_root: true,
+            },
+            members: vec![
+                // codex resume 段形态:同 id、不声明 root。
+                FoldRow {
+                    id: "root",
+                    is_root: false,
+                },
+                // claude 分组残留形态:同 id、声明 root。
+                FoldRow {
+                    id: "root",
+                    is_root: true,
+                },
+                FoldRow {
+                    id: "child",
+                    is_root: false,
+                },
+            ],
+        };
+
+        let input = DeletePlanInput::from_family(&family);
+
+        assert_eq!(input.root_id, "root");
+        assert_eq!(input.members.len(), 3);
+        assert!(input.members[0].is_root);
+        assert!(!input.members[1].is_root);
+        assert_eq!(
+            input
+                .members
+                .iter()
+                .map(|member| member.path.display().to_string())
+                .collect::<Vec<_>>(),
+            vec!["/x/root.jsonl", "/x/root.jsonl", "/x/child.jsonl"]
+        );
+        assert_eq!(
+            input.session_ids(),
+            vec!["root".to_string(), "child".to_string()]
+        );
     }
 }

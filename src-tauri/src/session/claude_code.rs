@@ -15,8 +15,9 @@ use super::reader_engine::{
     FamilyReader, FamilySpec, Freshness, MarkerShape, MemberTimeline, RowErrorPolicy, scan_files,
 };
 use super::{
-    ContentBlock, DeletePlanAction, SessionEvent, SessionMessage, SessionOverview, SessionSummary,
+    ContentBlock, DeletePlanAction, SessionEvent, SessionMessage, SessionSummary,
     SessionTokenUsage, SourceApp, SummaryAccumulator, TimelineRecord, UsageHourBuckets,
+    delete::DeletePlanInput,
 };
 
 #[derive(Clone, Debug)]
@@ -55,6 +56,10 @@ impl FamilyRow for ClaudeSessionRow {
     // pre-engine ordering.
     fn member_tie_breaker(&self) -> std::borrow::Cow<'_, str> {
         std::borrow::Cow::Owned(self.path.display().to_string())
+    }
+
+    fn member_is_root(&self) -> bool {
+        self.is_root
     }
 }
 
@@ -234,34 +239,34 @@ pub(crate) fn delete_session(source_session_id: &str) -> Result<()> {
     Ok(())
 }
 
-// delete_session 的预演,动作与顺序对齐删除实现:成员文件 → subagent 元数据
-// → 三个 sidecar 目录。sidecar 保持 ~ 前缀拼写,由前端渲染为 $HOME 形式。
-pub(crate) fn delete_plan(overview: &SessionOverview) -> Result<Vec<DeletePlanAction>> {
-    let session_id = &overview.summary.source_session_id;
-    let mut actions = overview
-        .source_paths
+// delete_session 的预演,动作与顺序对齐删除实现:成员文件 → 非 root 成员的
+// .meta.json(与执行侧同口径:所有非 root 成员"存在才删",预演按完整意图
+// 列出)→ 三个 sidecar 目录。sidecar 保持 ~ 前缀拼写,由前端渲染为 $HOME 形式。
+pub(crate) fn delete_plan(input: &DeletePlanInput) -> Result<Vec<DeletePlanAction>> {
+    let mut actions = input
+        .members
         .iter()
-        .map(|path| DeletePlanAction::RemoveFile { path: path.clone() })
+        .map(|member| DeletePlanAction::RemoveFile {
+            path: member.path.display().to_string(),
+        })
         .collect::<Vec<_>>();
 
-    // subagent 转录的同名 .meta.json 元数据只在路径形态上可推导,与执行侧
-    // "存在才删"的差别由用户在确认框看到的是完整意图保证。成员路径来自
-    // 目录扫描,Windows 上是反斜杠,判定走 Path 组件而非 "/" 字符串匹配。
-    for path in &overview.source_paths {
-        let as_path = Path::new(path);
-        let in_subagents = as_path
-            .components()
-            .any(|component| component.as_os_str() == "subagents");
-        if in_subagents && as_path.extension().is_some_and(|ext| ext == "jsonl") {
-            actions.push(DeletePlanAction::RemoveFile {
-                path: format!("{}.meta.json", path.strip_suffix(".jsonl").unwrap_or(path)),
-            });
+    for member in &input.members {
+        if member.is_root {
+            continue;
         }
+        actions.push(DeletePlanAction::RemoveFile {
+            path: member
+                .path
+                .with_extension("meta.json")
+                .display()
+                .to_string(),
+        });
     }
 
     for dir in ["projects", "session-env", "file-history"] {
         actions.push(DeletePlanAction::RemoveDirectory {
-            path: format!("~/.claude/{dir}/{session_id}"),
+            path: format!("~/.claude/{dir}/{}", input.root_id),
         });
     }
 

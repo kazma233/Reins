@@ -45,6 +45,13 @@ pub(crate) trait SessionReader: Sync {
 
     fn parse_overview(&self, source_session_id: &str) -> Result<SessionOverview>;
 
+    // 删除预演的结构化输入(DeletePlanInput):family 的非渲染折叠。不支持
+    // 删除的来源走默认实现——注册表里的 Unsupported 分支不会调到这里,报错
+    // 只是把"来源不支持"与"会话不存在"保持可区分。
+    fn delete_plan_input(&self, _source_session_id: &str) -> Result<delete::DeletePlanInput> {
+        bail!("该来源不支持删除")
+    }
+
     fn parse_messages_page(
         &self,
         source_session_id: &str,

@@ -8,7 +8,8 @@ use std::thread;
 
 use anyhow::{Result, anyhow};
 
-use super::model::{DeletePlanAction, SessionOverview, SourceApp, UsageSourceStats};
+use super::delete::DeletePlanInput;
+use super::model::{DeletePlanAction, SourceApp, UsageSourceStats};
 use super::usage_stats::{self, UsageKind};
 use super::{SessionReader, claude_code, codex, dsh, grokbuild, opencode, pi, zcode};
 
@@ -30,7 +31,7 @@ pub(crate) const DELETE_UNSUPPORTED_LABEL: &str = "不支持删除";
 pub(crate) enum DeletePolicy {
     Deleter {
         delete: fn(&str) -> Result<()>,
-        plan: fn(&SessionOverview) -> Result<Vec<DeletePlanAction>>,
+        plan: fn(&DeletePlanInput) -> Result<Vec<DeletePlanAction>>,
         copy: DeleteCopy,
     },
     Unsupported {

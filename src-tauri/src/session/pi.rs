@@ -13,7 +13,7 @@ use super::reader_engine::{self, MemberTimeline, event_page, message_page};
 use super::{
     ContentBlock, DeletePlanAction, SessionAgent, SessionEvent, SessionEventPage, SessionFileEntry,
     SessionMessage, SessionMessagePage, SessionOverview, SessionReader, SessionSummary,
-    SessionTokenUsage, SourceApp, SummaryAccumulator, UsageHourBuckets,
+    SessionTokenUsage, SourceApp, SummaryAccumulator, UsageHourBuckets, delete::DeletePlanInput,
 };
 
 /// 按 sessions 根构造的读取器：持有该根下的全部缓存。
@@ -115,6 +115,19 @@ impl SessionReader for PiBackend {
     fn parse_summary(&self, source_session_id: &str) -> Result<SessionSummary> {
         let reader = self.reader()?;
         reader.summary(&reader.resolve_session_path(source_session_id)?)
+    }
+
+    // Pi 的删除单位就是单个 transcript 文件,family 折叠出 root 一条。
+    fn delete_plan_input(&self, source_session_id: &str) -> Result<super::delete::DeletePlanInput> {
+        let path = self.reader()?.resolve_session_path(source_session_id)?;
+        Ok(super::delete::DeletePlanInput {
+            root_id: source_session_id.to_string(),
+            members: vec![super::delete::PlanMember {
+                id: source_session_id.to_string(),
+                path,
+                is_root: true,
+            }],
+        })
     }
 
     fn parse_overview(&self, source_session_id: &str) -> Result<SessionOverview> {
@@ -331,11 +344,13 @@ pub(crate) fn delete_session(source_session_id: &str) -> Result<()> {
 }
 
 // Pi 的删除单位就是单个 transcript 文件,预演与执行一致。
-pub(crate) fn delete_plan(overview: &SessionOverview) -> Result<Vec<DeletePlanAction>> {
-    Ok(overview
-        .source_paths
+pub(crate) fn delete_plan(input: &DeletePlanInput) -> Result<Vec<DeletePlanAction>> {
+    Ok(input
+        .members
         .iter()
-        .map(|path| DeletePlanAction::RemoveFile { path: path.clone() })
+        .map(|member| DeletePlanAction::RemoveFile {
+            path: member.path.display().to_string(),
+        })
         .collect())
 }
 

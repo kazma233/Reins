@@ -1,12 +1,228 @@
-use super::grokbuild::{fixture as grok_fixture, history as grok_history, subagent_fixture};
 use super::*;
+use crate::session::delete::{DeletePlanInput, PlanMember};
 use crate::session::model::DeletePlanAction;
 
-// 删除预演是前端确认框的新契约:动作序列(含顺序)必须与迁移前的
-// deleteCommandPreview 输出一致,这里逐来源钉住。
+// 删除预演是前端确认框的契约:动作序列(含顺序)逐来源钉住。plan 是
+// DeletePlanInput 上的纯推导,直接手构输入直测;family → input 的折叠接缝
+// 由文末的端到端用例(真后端 → get_delete_plan_inner)与 delete.rs 内的
+// from_family 单测共同覆盖。
 
-// 路径动作来自目录扫描(Windows 反斜杠),期望值由夹具 join 构造(拼写随
-// 构造方式);断言的是动作序列本身,比较前统一分隔符。
+fn input(root_id: &str, members: Vec<PlanMember>) -> DeletePlanInput {
+    DeletePlanInput {
+        root_id: root_id.to_string(),
+        members,
+    }
+}
+
+fn member(id: &str, path: &str, is_root: bool) -> PlanMember {
+    PlanMember {
+        id: id.to_string(),
+        path: PathBuf::from(path),
+        is_root,
+    }
+}
+
+#[test]
+fn claude_code_delete_plan_lists_members_meta_then_sidecars() {
+    let input = input(
+        "root-session",
+        vec![
+            member(
+                "root-session",
+                "/home/u/.claude/projects/demo-project/root-session.jsonl",
+                true,
+            ),
+            member(
+                "child-session",
+                "/home/u/.claude/projects/demo-project/subagents/agent-child-session.jsonl",
+                false,
+            ),
+        ],
+    );
+
+    let actions = session::claude_code::delete_plan(&input).unwrap();
+
+    assert_eq!(
+        actions,
+        vec![
+            DeletePlanAction::RemoveFile {
+                path: "/home/u/.claude/projects/demo-project/root-session.jsonl".to_string()
+            },
+            DeletePlanAction::RemoveFile {
+                path: "/home/u/.claude/projects/demo-project/subagents/agent-child-session.jsonl"
+                    .to_string()
+            },
+            // 非 root 成员的 .meta.json 与执行侧同口径(所有非 root 成员),
+            // 预演按完整意图列出。
+            DeletePlanAction::RemoveFile {
+                path:
+                    "/home/u/.claude/projects/demo-project/subagents/agent-child-session.meta.json"
+                        .to_string()
+            },
+            DeletePlanAction::RemoveDirectory {
+                path: "~/.claude/projects/root-session".to_string()
+            },
+            DeletePlanAction::RemoveDirectory {
+                path: "~/.claude/session-env/root-session".to_string()
+            },
+            DeletePlanAction::RemoveDirectory {
+                path: "~/.claude/file-history/root-session".to_string()
+            },
+        ]
+    );
+}
+
+#[test]
+fn codex_delete_plan_runs_official_cli_per_session_id() {
+    let input = input(
+        "44444444-4444-4444-8444-444444444444",
+        vec![
+            member(
+                "44444444-4444-4444-8444-444444444444",
+                "/x/root.jsonl",
+                true,
+            ),
+            member(
+                "55555555-5555-4555-8555-555555555555",
+                "/x/child.jsonl",
+                false,
+            ),
+            // resume 段与原始段同 id:id 面只删一次。
+            member(
+                "44444444-4444-4444-8444-444444444444",
+                "/x/root-resume.jsonl",
+                false,
+            ),
+        ],
+    );
+
+    let actions = session::codex::delete_plan(&input).unwrap();
+
+    assert_eq!(
+        actions,
+        vec![
+            DeletePlanAction::RunCli {
+                program: "codex".to_string(),
+                args: vec![
+                    "delete".to_string(),
+                    "--force".to_string(),
+                    "44444444-4444-4444-8444-444444444444".to_string()
+                ]
+            },
+            DeletePlanAction::RunCli {
+                program: "codex".to_string(),
+                args: vec![
+                    "delete".to_string(),
+                    "--force".to_string(),
+                    "55555555-5555-4555-8555-555555555555".to_string()
+                ]
+            },
+        ]
+    );
+}
+
+#[test]
+fn opencode_delete_plan_runs_official_cli_per_session_id() {
+    let input = input(
+        "ses_plan_root",
+        vec![
+            member("ses_plan_root", "/x/root", true),
+            member("ses_plan_child", "/x/child", false),
+        ],
+    );
+
+    let actions = session::opencode::delete_plan(&input).unwrap();
+
+    assert_eq!(
+        actions,
+        vec![
+            DeletePlanAction::RunCli {
+                program: "opencode".to_string(),
+                args: vec![
+                    "session".to_string(),
+                    "delete".to_string(),
+                    "ses_plan_root".to_string()
+                ]
+            },
+            DeletePlanAction::RunCli {
+                program: "opencode".to_string(),
+                args: vec![
+                    "session".to_string(),
+                    "delete".to_string(),
+                    "ses_plan_child".to_string()
+                ]
+            },
+        ]
+    );
+}
+
+#[test]
+fn grokbuild_delete_plan_mixes_cli_dirs_and_sqlite() {
+    let input = input(
+        "grok-parent",
+        vec![
+            member(
+                "grok-parent",
+                "/h/.grok/sessions/not-a-cwd/grok-parent/summary.json",
+                true,
+            ),
+            member(
+                "grok-child",
+                "/h/.grok/sessions/not-a-cwd/grok-child/summary.json",
+                false,
+            ),
+        ],
+    );
+
+    let actions = session::grokbuild::delete_plan(&input).unwrap();
+
+    assert_eq!(
+        actions,
+        vec![
+            DeletePlanAction::RunCli {
+                program: "grok".to_string(),
+                args: vec![
+                    "sessions".to_string(),
+                    "delete".to_string(),
+                    "grok-parent".to_string()
+                ]
+            },
+            // root 自己的目录由官方命令负责,不进动作清单。
+            DeletePlanAction::RemoveDirectory {
+                path: "/h/.grok/sessions/not-a-cwd/grok-child".to_string()
+            },
+            DeletePlanAction::Sqlite {
+                db_path: "~/.grok/sessions/session_search.sqlite".to_string(),
+                sql: "DELETE FROM session_docs WHERE session_id IN ('grok-child');".to_string()
+            },
+        ]
+    );
+}
+
+#[test]
+fn pi_delete_plan_removes_the_transcript_file() {
+    let input = input(
+        "pi-plan",
+        vec![member(
+            "pi-plan",
+            "/h/.pi/agent/sessions/--tmp-pi-project--/2026-09-04T10-00-00-000Z_pi-plan.jsonl",
+            true,
+        )],
+    );
+
+    let actions = session::pi::delete_plan(&input).unwrap();
+
+    assert_eq!(
+        actions,
+        vec![DeletePlanAction::RemoveFile {
+            path: "/h/.pi/agent/sessions/--tmp-pi-project--/2026-09-04T10-00-00-000Z_pi-plan.jsonl"
+                .to_string()
+        }]
+    );
+}
+
+// 端到端接缝:真后端(引擎 family → delete_plan_input 折叠)→ plan。夹具
+// 的期望路径随构造方式拼写,Windows 上是反斜杠,比较前统一分隔符。
 fn display(path: &Path) -> String {
     path.display().to_string().replace('\\', "/")
 }
@@ -27,7 +243,7 @@ fn normalized(actions: Vec<DeletePlanAction>) -> Vec<DeletePlanAction> {
 }
 
 #[test]
-fn claude_code_delete_plan_lists_members_meta_then_sidecars() -> Result<()> {
+fn claude_delete_plan_folds_real_family_and_lists_members_meta_sidecars() -> Result<()> {
     let temp_home = env::temp_dir().join(format!("reins-test-{}", Uuid::new_v4()));
     fs::create_dir_all(&temp_home)?;
     let _guard = TestEnvGuard::set_home(&temp_home);
@@ -89,172 +305,7 @@ fn claude_code_delete_plan_lists_members_meta_then_sidecars() -> Result<()> {
     Ok(())
 }
 
-#[test]
-fn codex_delete_plan_runs_official_cli_per_session_id() -> Result<()> {
-    let temp_home = env::temp_dir().join(format!("reins-test-{}", Uuid::new_v4()));
-    fs::create_dir_all(&temp_home)?;
-    let _guard = TestEnvGuard::set_home(&temp_home);
-
-    let root_id = "44444444-4444-4444-8444-444444444444";
-    let child_id = "55555555-5555-4555-8555-555555555555";
-    seed_codex_session(&temp_home, root_id)?;
-    let child_path = temp_home
-        .join(".codex/sessions/2026/04/21")
-        .join(format!("rollout-2026-04-21T15-00-00-{child_id}.jsonl"));
-    write_jsonl(
-        &child_path,
-        &[json!({
-            "timestamp": "2026-04-21T15:00:00.000Z",
-            "type": "session_meta",
-            "payload": {
-                "id": child_id,
-                "cwd": "/tmp/workspace",
-                "source": { "subagent": { "thread_spawn": { "parent_thread_id": root_id } } }
-            }
-        })],
-    )?;
-
-    let plan = session::delete::get_delete_plan_inner(SourceApp::Codex, root_id)?;
-
-    assert!(plan.supported);
-    assert_eq!(
-        plan.actions,
-        vec![
-            DeletePlanAction::RunCli {
-                program: "codex".to_string(),
-                args: vec![
-                    "delete".to_string(),
-                    "--force".to_string(),
-                    root_id.to_string()
-                ]
-            },
-            DeletePlanAction::RunCli {
-                program: "codex".to_string(),
-                args: vec![
-                    "delete".to_string(),
-                    "--force".to_string(),
-                    child_id.to_string()
-                ]
-            },
-        ]
-    );
-
-    Ok(())
-}
-
-#[test]
-fn opencode_delete_plan_runs_official_cli_per_session_id() -> Result<()> {
-    let temp_home = env::temp_dir().join(format!("reins-test-{}", Uuid::new_v4()));
-    fs::create_dir_all(&temp_home)?;
-    let _guard = TestEnvGuard::set_home(&temp_home);
-
-    let root_id = "ses_plan_root";
-    let child_id = "ses_plan_child";
-    seed_opencode_family(root_id, child_id)?;
-
-    let plan = session::delete::get_delete_plan_inner(SourceApp::OpenCode, root_id)?;
-
-    assert!(plan.supported);
-    assert_eq!(
-        plan.actions,
-        vec![
-            DeletePlanAction::RunCli {
-                program: "opencode".to_string(),
-                args: vec![
-                    "session".to_string(),
-                    "delete".to_string(),
-                    root_id.to_string()
-                ]
-            },
-            DeletePlanAction::RunCli {
-                program: "opencode".to_string(),
-                args: vec![
-                    "session".to_string(),
-                    "delete".to_string(),
-                    child_id.to_string()
-                ]
-            },
-        ]
-    );
-
-    Ok(())
-}
-
-#[test]
-fn grokbuild_delete_plan_mixes_cli_dirs_and_sqlite() -> Result<()> {
-    let temp_home = env::temp_dir().join(format!("reins-test-{}", Uuid::new_v4()));
-    fs::create_dir_all(&temp_home)?;
-    let _guard = TestEnvGuard::set_home(&temp_home);
-
-    let parent_path = grok_fixture(&temp_home, "grok-parent")?;
-    grok_history(&parent_path)?;
-    subagent_fixture(
-        &temp_home,
-        "grok-parent",
-        "grok-child",
-        "at1.delete",
-        "Child answer",
-    )?;
-
-    let plan = session::delete::get_delete_plan_inner(SourceApp::GrokBuild, "grok-parent")?;
-
-    // sourcePaths 来自 canonicalize 后的索引扫描,期望值同样走 canonicalize。
-    let child_dir = display(&support::fs::canonicalize(
-        &temp_home.join(".grok/sessions/not-a-cwd/grok-child"),
-    )?);
-
-    assert!(plan.supported);
-    assert_eq!(
-        normalized(plan.actions),
-        vec![
-            DeletePlanAction::RunCli {
-                program: "grok".to_string(),
-                args: vec![
-                    "sessions".to_string(),
-                    "delete".to_string(),
-                    "grok-parent".to_string()
-                ]
-            },
-            DeletePlanAction::RemoveDirectory { path: child_dir },
-            DeletePlanAction::Sqlite {
-                db_path: "~/.grok/sessions/session_search.sqlite".to_string(),
-                sql: "DELETE FROM session_docs WHERE session_id IN ('grok-child');".to_string()
-            },
-        ]
-    );
-
-    Ok(())
-}
-
-#[test]
-fn pi_delete_plan_removes_the_transcript_file() -> Result<()> {
-    let temp_home = env::temp_dir().join(format!("reins-test-{}", Uuid::new_v4()));
-    fs::create_dir_all(&temp_home)?;
-    let _guard = TestEnvGuard::set_home(&temp_home);
-    let selected = temp_home
-        .join(".pi/agent/sessions/--tmp-pi-project--/2026-09-04T10-00-00-000Z_pi-plan.jsonl");
-    write_jsonl(
-        &selected,
-        &[json!({
-            "type": "session", "version": 3, "id": "pi-plan",
-            "timestamp": "2026-09-04T10:00:00.000Z", "cwd": "/tmp/pi-project"
-        })],
-    )?;
-
-    let plan = session::delete::get_delete_plan_inner(SourceApp::Pi, "pi-plan")?;
-
-    assert!(plan.supported);
-    assert_eq!(
-        normalized(plan.actions),
-        vec![DeletePlanAction::RemoveFile {
-            path: display(&selected)
-        }]
-    );
-
-    Ok(())
-}
-
-// 不支持删除的来源不需要转录夹具:Unsupported 分支不解析 overview。
+// 不支持删除的来源不需要转录夹具:Unsupported 分支不解析 family。
 #[test]
 fn unsupported_sources_plan_hides_delete_with_notice() -> Result<()> {
     let zcode_plan = session::delete::get_delete_plan_inner(SourceApp::Zcode, "unused")?;

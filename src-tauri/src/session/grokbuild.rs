@@ -13,7 +13,8 @@ use serde_json::{Value, json};
 use super::{
     ContentBlock, DeletePlanAction, SessionEvent, SessionEventPage, SessionFileEntry,
     SessionMessage, SessionMessagePage, SessionOverview, SessionReader, SessionSummary,
-    SessionTokenUsage, SourceApp, UsageHourBuckets, delete::run_official_cli,
+    SessionTokenUsage, SourceApp, UsageHourBuckets,
+    delete::{DeletePlanInput, run_official_cli},
 };
 
 use super::family_index::{Family, FamilyIndex, FamilyRow};
@@ -827,6 +828,12 @@ impl SessionReader for GrokBuildBackend {
         let family = family_for_id(source_session_id)?;
         Ok(family_summary(&family))
     }
+
+    fn delete_plan_input(&self, source_session_id: &str) -> Result<super::delete::DeletePlanInput> {
+        Ok(super::delete::DeletePlanInput::from_family(&family_for_id(
+            source_session_id,
+        )?))
+    }
     fn parse_overview(&self, source_session_id: &str) -> Result<SessionOverview> {
         let family = family_for_id(source_session_id)?;
         Ok(SessionOverview {
@@ -926,44 +933,39 @@ pub(crate) fn delete_session(source_session_id: &str) -> Result<()> {
 
 // delete_session 的预演:root 交官方命令,官方够不到的子会话目录与搜索
 // 索引行走本地清理;root 自身的目录与索引行由官方命令负责,不进动作清单。
-pub(crate) fn delete_plan(overview: &SessionOverview) -> Result<Vec<DeletePlanAction>> {
-    let root_id = &overview.summary.source_session_id;
-
+pub(crate) fn delete_plan(input: &DeletePlanInput) -> Result<Vec<DeletePlanAction>> {
     let mut actions = vec![DeletePlanAction::RunCli {
         program: "grok".to_string(),
         args: vec![
             "sessions".to_string(),
             "delete".to_string(),
-            root_id.clone(),
+            input.root_id.clone(),
         ],
     }];
 
-    // sourcePaths 指向各会话目录内的文件,取父目录去重(首见顺序)即成员
-    // 会话目录;再排除 root 自己的目录。成员路径来自目录扫描,Windows 上
-    // 是反斜杠,推导走 Path 而非 "/" 字符串切分。
+    // 成员会话目录 = 成员转录的父目录,去重保首见序;root 自己的目录由官方
+    // 命令清理,不进动作清单。
     let mut session_dirs = Vec::<String>::new();
-    for path in &overview.source_paths {
-        if let Some(parent) = Path::new(path).parent() {
-            let dir = parent.display().to_string();
+    for member in &input.members {
+        if member.is_root {
+            continue;
+        }
+        if let Some(dir) = member.path.parent() {
+            let dir = dir.display().to_string();
             if !session_dirs.iter().any(|seen| seen == &dir) {
                 session_dirs.push(dir);
             }
         }
     }
     for dir in session_dirs {
-        let is_root_dir = Path::new(&dir)
-            .file_name()
-            .and_then(|name| name.to_str())
-            .is_some_and(|name| name == root_id);
-        if !is_root_dir {
-            actions.push(DeletePlanAction::RemoveDirectory { path: dir });
-        }
+        actions.push(DeletePlanAction::RemoveDirectory { path: dir });
     }
 
     // 搜索索引只清本地删除的子会话行;SQL 单引号转义规则与 sqlite 一致。
-    let child_ids = super::delete::delete_target_session_ids(overview)
+    let child_ids = input
+        .session_ids()
         .into_iter()
-        .filter(|id| id != root_id)
+        .filter(|id| id != &input.root_id)
         .collect::<Vec<_>>();
     if !child_ids.is_empty() {
         let ids = child_ids

@@ -618,6 +618,12 @@ impl<R: FamilySpec> SessionReader for ReaderEngine<R> {
         })
     }
 
+    fn delete_plan_input(&self, source_session_id: &str) -> Result<super::delete::DeletePlanInput> {
+        Ok(super::delete::DeletePlanInput::from_family(
+            &self.family_for_id(source_session_id)?,
+        ))
+    }
+
     fn parse_messages_page(
         &self,
         source_session_id: &str,
@@ -715,6 +721,12 @@ impl<R: FamilySpec> SessionReader for FamilyReader<R> {
 
     fn parse_overview(&self, source_session_id: &str) -> Result<SessionOverview> {
         self.engine()?.parse_overview(source_session_id)
+    }
+
+    fn delete_plan_input(&self, source_session_id: &str) -> Result<super::delete::DeletePlanInput> {
+        Ok(super::delete::DeletePlanInput::from_family(
+            &self.engine()?.family_for_id(source_session_id)?,
+        ))
     }
 
     fn parse_messages_page(
