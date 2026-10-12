@@ -723,7 +723,18 @@ pub(crate) struct SkillLinkAssociation {
     pub(crate) source_path: String,
     // source 根目录可能重叠，文件系统无法证明唯一归属。
     pub(crate) matched_source_ids: Vec<String>,
+    // 各归属来源根下的相对路径:Windows 前缀/大小写口径只在 Rust 侧算一次
+    // (与安装面同一套 relative_to_source_root),前端展示直接取用。
+    pub(crate) source_relatives: Vec<SkillSourceRelative>,
     pub(crate) state: SkillLinkState,
+}
+
+#[derive(Clone, Debug, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../src/features/workspace/generated/")]
+pub(crate) struct SkillSourceRelative {
+    pub(crate) source_id: String,
+    pub(crate) relative_path: String,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, TS)]

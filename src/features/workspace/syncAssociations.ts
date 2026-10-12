@@ -96,30 +96,19 @@ export function canRemoveSkillLink(link: SkillLinkAssociation): boolean {
   return link.state === "unmanaged";
 }
 
-function normalizePathForDisplay(path: string): { value: string; windows: boolean } {
-  let value = path.trim().replace(/\\/g, "/");
-  if (value.startsWith("//?/UNC/")) value = `//${value.slice("//?/UNC/".length)}`;
-  else if (value.startsWith("//?/")) value = value.slice("//?/".length);
-
-  const windows = /^[A-Za-z]:\//.test(value) || value.startsWith("//");
-  if (value.length > 1) value = value.replace(/\/+$/, "");
-  return { value, windows };
-}
-
-export function skillLinkSourcePath(sourcePath: string, sourceRoot?: string): string {
-  if (!sourceRoot?.trim()) return sourcePath;
-
-  const source = normalizePathForDisplay(sourcePath);
-  const root = normalizePathForDisplay(sourceRoot);
-  const compareSource = source.windows || root.windows ? source.value.toLowerCase() : source.value;
-  const compareRoot = source.windows || root.windows ? root.value.toLowerCase() : root.value;
-
-  if (compareSource === compareRoot) return ".";
-  if (compareRoot === "/") {
-    return compareSource.startsWith("/") ? source.value.slice(1) || "." : sourcePath;
-  }
-  if (!compareSource.startsWith(`${compareRoot}/`)) return sourcePath;
-  return source.value.slice(root.value.length + 1) || ".";
+// 展示链接的源路径:按当前来源取后端统一下发的相对路径(与安装面同一套
+// Windows/大小写口径),查不到(非归属来源、未指定)退回绝对路径。此前的
+// 前端归一化(Windows 前缀剥离、大小写折叠、尾斜杠清理)是对后端 classify
+// 已算出值的重实现,已删。
+export function skillLinkSourcePath(
+  link: SkillLinkAssociation,
+  currentSourceId?: string,
+): string {
+  if (!currentSourceId) return link.sourcePath;
+  return (
+    link.sourceRelatives.find((relative) => relative.sourceId === currentSourceId)
+      ?.relativePath ?? link.sourcePath
+  );
 }
 
 export function pendingSkillLinkCleanupCount(links: SkillLinkAssociation[]): number {

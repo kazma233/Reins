@@ -47,6 +47,13 @@ export function parseTargetId(targetId: AgentTargetId): TargetAddress {
   return { projectId, agentId };
 }
 
+// 地址的正向拼装:与 parseTargetId 互逆,组成同一对格式所有者。此前
+// `${projectId}:${agentId}` 手拼散在五处,格式知识(第一个 `:` 是分隔符)
+// 只在拆分侧可见——后端 validate_project_id 禁 `:` 的保证在拼装处不可见。
+export function formatTargetId(projectId: string, agentId: string): AgentTargetId {
+  return `${projectId}:${agentId}` as AgentTargetId;
+}
+
 // target id 的展示形式：全局 target 就是 agent 名，
 // 项目 target 带项目前缀，两者都用展示名而不是配置里的原始 id。
 export function formatTargetLabel(targetId: AgentTargetId) {

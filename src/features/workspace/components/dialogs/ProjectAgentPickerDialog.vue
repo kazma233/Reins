@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import DialogShell from "@shared/ui/DialogShell.vue";
-import { formatTargetName } from "../../model";
+import { formatTargetId, formatTargetName } from "../../model";
 import type { AgentTargetId, McpTransport, TargetConfigView } from "../../types";
 import type { ProjectAgentPickerDiff } from "../../composables/useProjectAgentPicker";
 
@@ -45,7 +45,7 @@ function agentButtonTitle(agent: TargetConfigView): string {
 }
 
 function agentButtonClass(agent: TargetConfigView): string {
-  const compositeId = `${props.projectId}:${agent.id}` as AgentTargetId;
+  const compositeId = formatTargetId(props.projectId, agent.id);
   return [
     "secondary-button",
     "manager-target-button",

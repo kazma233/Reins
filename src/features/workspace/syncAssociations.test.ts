@@ -19,6 +19,7 @@ function makeLink(state: SkillLinkAssociation["state"], matchedSourceIds: string
     destinationPath: "/target/alpha",
     sourcePath: "/source/alpha",
     matchedSourceIds,
+    sourceRelatives: [],
     state,
   };
 }
@@ -142,14 +143,19 @@ describe("skill link association presentation", () => {
     expect(canRemoveSkillLink(makeLink("sourceMissing", ["source-a"]))).toBe(false);
   });
 
-  it("shows the source path relative to the current source root", () => {
-    expect(skillLinkSourcePath("/source/alpha", "/source")).toBe("alpha");
-    expect(skillLinkSourcePath("/source/nested/alpha", "/source/")).toBe("nested/alpha");
-    expect(skillLinkSourcePath("C:\\Source\\alpha", "c:\\source")).toBe("alpha");
-  });
-
-  it("keeps paths from other roots intact", () => {
-    expect(skillLinkSourcePath("/other/alpha", "/source")).toBe("/other/alpha");
-    expect(skillLinkSourcePath("/source/alpha")).toBe("/source/alpha");
+  it("takes the current source's relative path from the backend payload", () => {
+    // 相对路径由后端 classify 统一算出(与安装面同一套口径),前端只按
+    // 当前来源查表;查不到退回绝对路径。
+    const link: SkillLinkAssociation = {
+      ...makeLink("linked", ["source-a", "source-b"]),
+      sourceRelatives: [
+        { sourceId: "source-a", relativePath: "nested/alpha" },
+        { sourceId: "source-b", relativePath: "elsewhere/alpha" },
+      ],
+    };
+    expect(skillLinkSourcePath(link, "source-a")).toBe("nested/alpha");
+    expect(skillLinkSourcePath(link, "source-b")).toBe("elsewhere/alpha");
+    expect(skillLinkSourcePath(link, "source-c")).toBe("/source/alpha");
+    expect(skillLinkSourcePath(link)).toBe("/source/alpha");
   });
 });

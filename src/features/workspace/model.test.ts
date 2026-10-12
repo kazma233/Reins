@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { AGENT_IDS } from "@shared/lib/agent-labels";
 import {
   DEFAULT_PROJECT_FORM,
+  formatTargetId,
   formatTargetLabel,
   formatTargetName,
   groupTargetIds,
@@ -60,6 +61,17 @@ describe("parseTargetId", () => {
 
     // 第二段含 `:` 后端照样接受：split_once 后两段都非空即为项目地址。
     expect(parseTargetId("a:b:codex")).toEqual({ projectId: "a", agentId: "b:codex" });
+  });
+});
+
+describe("formatTargetId", () => {
+  it("round-trips through parseTargetId", () => {
+    // 与 parseTargetId 互逆是这对函数存在的意义:格式只有这一对所有者。
+    expect(parseTargetId(formatTargetId("web-apps", "codex"))).toEqual({
+      projectId: "web-apps",
+      agentId: "codex",
+    });
+    expect(formatTargetId("reins", "pi")).toBe("reins:pi" as AgentTargetId);
   });
 });
 

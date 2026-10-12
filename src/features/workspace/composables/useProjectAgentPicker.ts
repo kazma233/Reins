@@ -2,6 +2,7 @@ import { computed, reactive } from "vue";
 import { applyMcpToTarget, removeMcpFromTarget } from "../api";
 import {
   createProjectAgentPickerDialogState,
+  formatTargetId,
   formatTargetLabel,
   type ProjectAgentPickerDialogState,
 } from "../model";
@@ -72,7 +73,8 @@ export function useProjectAgentPicker() {
     const toAdd: AgentTargetId[] = [];
     const toRemove: AgentTargetId[] = [];
     for (const agent of agents) {
-      const compositeId = `${state.projectId}:${agent.id}` as AgentTargetId;
+      // 无项目 id 时 agents 本身为空,这里只是让类型闭合。
+      const compositeId = formatTargetId(state.projectId ?? "", agent.id);
       const isDesired = desired.has(compositeId);
       const isInstalled = pickerInstalledAgentIds.value.has(compositeId);
       if (isDesired && !isInstalled) toAdd.push(compositeId);
@@ -106,7 +108,7 @@ export function useProjectAgentPicker() {
   function toggleProjectAgentPickerAgent(agentId: AgentTargetId) {
     const state = projectAgentPickerDialog;
     if (!state.projectId) return;
-    const compositeId = `${state.projectId}:${agentId}` as AgentTargetId;
+    const compositeId = formatTargetId(state.projectId, agentId);
     state.desiredAgentIds = state.desiredAgentIds.includes(compositeId)
       ? state.desiredAgentIds.filter((id) => id !== compositeId)
       : [...state.desiredAgentIds, compositeId];

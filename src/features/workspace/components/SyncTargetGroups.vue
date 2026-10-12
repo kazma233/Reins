@@ -18,7 +18,6 @@ type SyncTargetGroupsProps = {
   busy: boolean;
   currentSourceId?: string;
   sourceLabels?: Record<string, string>;
-  sourceRoot?: string;
   selectedTargetIds: Set<string>;
   targets: SyncTargetOption[];
 };
@@ -133,7 +132,7 @@ const groups = computed(() => groupSyncTargets(props.targets));
                   class="manager-sync-target-link__source"
                 >{{ skillLinkSourceLabel(link, currentSourceId, sourceLabels) }}</span>
                 <span class="manager-sync-target-link__path" :title="link.sourcePath">
-                  {{ skillLinkSourcePath(link.sourcePath, sourceRoot) }}
+                  {{ skillLinkSourcePath(link, currentSourceId) }}
                 </span>
               </span>
               <span :class="`manager-sync-target-link__state manager-sync-target-link__state--${skillLinkStateInfo(link.state).tone}`">

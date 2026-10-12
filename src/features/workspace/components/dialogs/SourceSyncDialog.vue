@@ -259,6 +259,10 @@ function dropLinks(targetIds: Set<string>, shouldDrop: (link: SkillLinkAssociati
 
 // 移除勾选目标上属于当前来源的软链接。弹窗保持打开，列表就地更新，方便接着
 // 同步或逐条清理。
+// 后端回执(每条带精确的 destination)就是删除事实,就地更新按它过滤;
+// 归属判定(matchedSourceIds)只留给预选等纯展示用途,不再用来重推后端
+// 删了什么——两条口径一旦分叉,列表就会与盘上事实静默不一致。
+// destination 含 target 自己的 skills 目录,全局唯一,单键足够。
 async function handleRemoveSync() {
   const source = props.source;
   if (!source || selectedTargetIds.value.size === 0) return;
@@ -276,7 +280,8 @@ async function handleRemoveSync() {
             : "没有需要移除的软链接。",
         failed: false,
       });
-      dropLinks(removedTargetIds, (link) => link.matchedSourceIds.includes(source.id));
+      const removed = new Set(result.removed.map((item) => item.destinationPath));
+      dropLinks(removedTargetIds, (link) => removed.has(link.destinationPath));
     },
     onError: (message) => {
       reportResult({ text: message, failed: true });
@@ -496,7 +501,6 @@ async function handleRefreshSource() {
               :busy="busy"
               :current-source-id="source?.id"
               :source-labels="sourceLabels"
-              :source-root="sourceRoot"
               :selected-target-ids="selectedTargetIds"
               :targets="targets"
               @remove-link="handleRemoveLink"

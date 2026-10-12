@@ -10,7 +10,7 @@ import { useProjectMutations } from "../../composables/useProjectMutations";
 import { useTargetMutations } from "../../composables/useTargetMutations";
 import { useWorkspaceState } from "../../composables/useWorkspaceState";
 import { useWorkspaceStore } from "../../stores/workspace";
-import { formatTargetLabel } from "../../model";
+import { formatTargetId, formatTargetLabel } from "../../model";
 import { useSkillDirLinks } from "../../skillDirLink";
 
 const store = useWorkspaceStore();
@@ -193,12 +193,12 @@ const configProjects = computed(() => configDocument.value?.config?.projects ?? 
                           <span>{{ target.skillDir }}</span>
                         </span>
                         <span
-                          v-if="skillDirLink(`${project.id}:${target.id}`)"
+                          v-if="skillDirLink(formatTargetId(project.id, target.id))"
                           class="manager-target-row__link"
                         >
                           <span class="manager-target-row__pill pill--info">软链接</span>
                           <span class="manager-target-row__place">
-                            {{ skillDirLink(`${project.id}:${target.id}`)?.place }}
+                            {{ skillDirLink(formatTargetId(project.id, target.id))?.place }}
                           </span>
                         </span>
                         <span v-if="target.configPath"><strong>mcp</strong><span>{{ target.configPath }} ({{ target.mcpConfigPrefix }})</span></span>

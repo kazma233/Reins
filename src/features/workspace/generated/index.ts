@@ -22,6 +22,7 @@ export * from "./SkillLinkAssociation";
 export * from "./SkillLinkState";
 export * from "./SkillSourceConfigView";
 export * from "./SkillSourceMutationInput";
+export * from "./SkillSourceRelative";
 export * from "./SkillSyncItem";
 export * from "./SourceSyncConflict";
 export * from "./SourceSyncInput";

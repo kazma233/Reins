@@ -1,5 +1,6 @@
 import { computed } from "vue";
 
+import { formatTargetId } from "./model";
 import type { WorkspaceInspection } from "./generated/WorkspaceInspection";
 import type { SkillDirLinkView } from "./generated/SkillDirLinkView";
 
@@ -20,7 +21,7 @@ export function buildSkillDirLinkMap(
   }
   for (const project of inspection.projects) {
     for (const agent of project.agents) {
-      if (agent.skillDirLink) map.set(`${project.id}:${agent.id}`, agent.skillDirLink);
+      if (agent.skillDirLink) map.set(formatTargetId(project.id, agent.id), agent.skillDirLink);
     }
   }
   return map;

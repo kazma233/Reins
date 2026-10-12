@@ -215,6 +215,13 @@ fn classify_skill_link(
         destination_path: display_path(destination),
         source_path: display_path(&source_path),
         matched_source_ids,
+        source_relatives: matches
+            .iter()
+            .map(|(source, relative_path)| SkillSourceRelative {
+                source_id: source.id.clone(),
+                relative_path: relative_path.to_string_lossy().to_string(),
+            })
+            .collect(),
         state,
     }
 }
