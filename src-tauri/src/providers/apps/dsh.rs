@@ -17,7 +17,8 @@ use serde_yaml::{Mapping, Value as YamlValue};
 use super::dialect::{PI_AI_PROTOCOL, PI_AI_REASONING};
 use super::{
     AppAdapter, AppCapability, Environment, ModelField, display_path, ensure_protocol_supported,
-    entry_not_found_error, external_entry, registration_key, unrecognized_entry_error,
+    entry_not_found_error, external_entry, modified_entry_error, registration_key,
+    unrecognized_entry_error,
 };
 use crate::providers::types::{
     ApplyProviderInput, ProviderAppId, ProviderAppState, ProviderProtocol, ReasoningLevel,
@@ -532,8 +533,13 @@ impl AppAdapter for DshAdapter {
         }
         let mut profile_ops = dsh_patch::read_ops(&profile_patch)?;
         let mut providers_table = llm_providers(find_row(&profile_ops, "llm-pi-ai"));
-        if providers_table.get(&key(&registration)).is_none() {
+        let Some(entry) = providers_table.get(&key(&registration)) else {
             return Err(unrecognized_entry_error("dsh", &registration));
+        };
+        // 只删内容仍可识别的条目:必须带 baseURL(apply 必写,与 pi 的
+        // pi-ai 路由同型);用户改过的漂移配置不自动删。
+        if entry.get("baseURL").and_then(YamlValue::as_str).is_none() {
+            return Err(modified_entry_error(&registration));
         }
         providers_table.remove(&key(&registration));
 

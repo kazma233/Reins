@@ -2167,6 +2167,46 @@ fn dsh_remove_rejects_missing_entry() -> Result<()> {
     Ok(())
 }
 
+// dsh 的可识别守卫:手工改过(去掉 baseURL)的 reins- 路由不自动删,与其余
+// 四家同口径(apply 必写 baseURL,pi-ai 方言同源)。
+#[test]
+fn dsh_remove_rejects_modified_entry() -> Result<()> {
+    let isolated = Isolated::new()?;
+    isolated.seed_provider(
+        "p1",
+        ProviderProtocol::OpenaiChatCompletions,
+        "https://p1.test/v1",
+    )?;
+    isolated.apply("p1", ProviderAppId::Dsh, &["model-a"], "model-a", None)?;
+
+    // 篡改:去掉 reins-p1 路由的 baseURL,模拟用户手工改过内容。
+    let global = dsh_llm_patch();
+    let mut root: serde_yaml::Value = serde_yaml::from_str(&read_text(&global))?;
+    let providers = root[0]["config"]["providers"]
+        .as_mapping_mut()
+        .expect("apply 后应有 providers 表");
+    let route = providers
+        .get_mut(&serde_yaml::Value::String("reins-p1".into()))
+        .and_then(|value| value.as_mapping_mut())
+        .expect("reins-p1 路由应存在");
+    route.remove(&serde_yaml::Value::String("baseURL".into()));
+    fs::write(&global, serde_yaml::to_string(&root)?)?;
+
+    let error =
+        remove_provider_from_app_inner(&isolated.store, &isolated.env, "p1", ProviderAppId::Dsh)
+            .expect_err("手工改过的条目应报错");
+    assert!(error.to_string().contains("已被手工修改"));
+    // 守卫生效时条目保持原样,不被静默删除。
+    let root: serde_yaml::Value = serde_yaml::from_str(&read_text(&global))?;
+    assert!(
+        root[0]["config"]["providers"]
+            .get(&serde_yaml::Value::String("reins-p1".into()))
+            .is_some(),
+        "拒绝移除时不应动配置"
+    );
+    Ok(())
+}
+
 #[test]
 fn dsh_remove_external_clears_entry_and_default() -> Result<()> {
     let isolated = Isolated::new()?;
