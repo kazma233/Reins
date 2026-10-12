@@ -710,7 +710,7 @@ fn claude_honors_claude_config_dir() -> Result<()> {
 #[test]
 fn opencode_apply_adds_entry_and_remove_clears_default_model() -> Result<()> {
     let isolated = Isolated::new()?;
-    let path = opencode_candidate_paths()?[0].clone();
+    let path = opencode_candidate_paths(&isolated.env)?[0].clone();
     fs::create_dir_all(path.parent().unwrap())?;
     fs::write(
         &path,
@@ -759,7 +759,7 @@ fn opencode_apply_adds_entry_and_remove_clears_default_model() -> Result<()> {
 #[test]
 fn opencode_apply_anthropic_uses_native_anthropic_package() -> Result<()> {
     let isolated = Isolated::new()?;
-    let path = opencode_candidate_paths()?[0].clone();
+    let path = opencode_candidate_paths(&isolated.env)?[0].clone();
     fs::create_dir_all(path.parent().unwrap())?;
     fs::write(&path, json!({}).to_string())?;
     isolated.seed_provider_with_models(
@@ -794,7 +794,7 @@ fn opencode_apply_anthropic_uses_native_anthropic_package() -> Result<()> {
 #[test]
 fn opencode_reapply_keeps_reasoning_settings() -> Result<()> {
     let isolated = Isolated::new()?;
-    let path = opencode_candidate_paths()?[0].clone();
+    let path = opencode_candidate_paths(&isolated.env)?[0].clone();
     fs::create_dir_all(path.parent().unwrap())?;
     fs::write(&path, json!({}).to_string())?;
     isolated.seed_provider_with_models(
@@ -833,7 +833,7 @@ fn opencode_reapply_keeps_reasoning_settings() -> Result<()> {
 #[test]
 fn opencode_reads_back_thinking_budget_level() -> Result<()> {
     let isolated = Isolated::new()?;
-    let path = opencode_candidate_paths()?[0].clone();
+    let path = opencode_candidate_paths(&isolated.env)?[0].clone();
     fs::create_dir_all(path.parent().unwrap())?;
     fs::write(&path, json!({}).to_string())?;
     isolated.seed_provider_with_models(
@@ -871,7 +871,7 @@ fn opencode_reads_back_thinking_budget_level() -> Result<()> {
 #[test]
 fn opencode_apply_responses_uses_openai_responses_package() -> Result<()> {
     let isolated = Isolated::new()?;
-    let path = opencode_candidate_paths()?[0].clone();
+    let path = opencode_candidate_paths(&isolated.env)?[0].clone();
     fs::create_dir_all(path.parent().unwrap())?;
     fs::write(&path, json!({}).to_string())?;
     isolated.seed_provider_with_models(
@@ -907,7 +907,7 @@ fn opencode_apply_responses_uses_openai_responses_package() -> Result<()> {
 #[test]
 fn opencode_apply_writes_model_limit_and_capabilities() -> Result<()> {
     let isolated = Isolated::new()?;
-    let path = opencode_candidate_paths()?[0].clone();
+    let path = opencode_candidate_paths(&isolated.env)?[0].clone();
     fs::create_dir_all(path.parent().unwrap())?;
     fs::write(&path, json!({}).to_string())?;
     isolated.seed_provider_with_models(
@@ -933,7 +933,7 @@ fn opencode_apply_writes_model_limit_and_capabilities() -> Result<()> {
 #[test]
 fn opencode_apply_omits_incomplete_limit_and_narrows_modalities() -> Result<()> {
     let isolated = Isolated::new()?;
-    let path = opencode_candidate_paths()?[0].clone();
+    let path = opencode_candidate_paths(&isolated.env)?[0].clone();
     fs::create_dir_all(path.parent().unwrap())?;
     fs::write(&path, json!({}).to_string())?;
     isolated.store.upsert(ProviderUpsertInput {
@@ -968,7 +968,7 @@ fn opencode_apply_omits_incomplete_limit_and_narrows_modalities() -> Result<()> 
 #[test]
 fn opencode_apply_writes_reasoning_effort_or_thinking_budget() -> Result<()> {
     let isolated = Isolated::new()?;
-    let path = opencode_candidate_paths()?[0].clone();
+    let path = opencode_candidate_paths(&isolated.env)?[0].clone();
     fs::create_dir_all(path.parent().unwrap())?;
     fs::write(&path, json!({}).to_string())?;
 
@@ -1029,7 +1029,7 @@ fn opencode_apply_writes_reasoning_effort_or_thinking_budget() -> Result<()> {
 #[test]
 fn opencode_inspect_reads_both_v1_and_v2_nodes() -> Result<()> {
     let isolated = Isolated::new()?;
-    let path = opencode_candidate_paths()?[0].clone();
+    let path = opencode_candidate_paths(&isolated.env)?[0].clone();
     fs::create_dir_all(path.parent().unwrap())?;
     fs::write(
         &path,
@@ -1081,7 +1081,7 @@ fn opencode_inspect_reads_both_v1_and_v2_nodes() -> Result<()> {
 #[test]
 fn opencode_reads_and_writes_jsonc_when_only_jsonc_exists() -> Result<()> {
     let isolated = Isolated::new()?;
-    let jsonc = opencode_candidate_paths()?[1].clone();
+    let jsonc = opencode_candidate_paths(&isolated.env)?[1].clone();
     fs::create_dir_all(jsonc.parent().unwrap())?;
     fs::write(
         &jsonc,
@@ -1104,7 +1104,7 @@ fn opencode_reads_and_writes_jsonc_when_only_jsonc_exists() -> Result<()> {
     assert_eq!(written["model"], "reins-p1/model-a");
     assert!(written["providers"]["reins-p1"].is_object());
     // 未另建 opencode.json。
-    assert!(!opencode_candidate_paths()?[0].clone().exists());
+    assert!(!opencode_candidate_paths(&isolated.env)?[0].clone().exists());
     Ok(())
 }
 
@@ -1118,7 +1118,7 @@ fn opencode_jsonc_takes_precedence_and_apply_migrates_registration() -> Result<(
     isolated.apply("p1", ProviderAppId::Opencode, &["model-a"], "model-a", None)?;
 
     // 用户随后创建了 opencode.jsonc（只定义 providers 键）。
-    let jsonc = opencode_candidate_paths()?[1].clone();
+    let jsonc = opencode_candidate_paths(&isolated.env)?[1].clone();
     fs::write(
         &jsonc,
         json!({"providers": {"manual": {
@@ -1150,8 +1150,9 @@ fn opencode_jsonc_takes_precedence_and_apply_migrates_registration() -> Result<(
 
     // 再次应用：写入 .jsonc，.json 里的旧键清掉。
     isolated.apply("p1", ProviderAppId::Opencode, &["model-a"], "model-a", None)?;
-    let json_root: JsonValue =
-        serde_json::from_str(&read_text(&opencode_candidate_paths()?[0].clone()))?;
+    let json_root: JsonValue = serde_json::from_str(&read_text(
+        &opencode_candidate_paths(&isolated.env)?[0].clone(),
+    ))?;
     let jsonc_root: JsonValue = serde_json::from_str(&read_text(&jsonc))?;
     assert!(
         json_root
@@ -2514,7 +2515,7 @@ fn codex_remove_external_clears_active_provider() -> Result<()> {
 #[test]
 fn opencode_remove_external_clears_default_model() -> Result<()> {
     let isolated = Isolated::new()?;
-    let path = opencode_candidate_paths()?[0].clone();
+    let path = opencode_candidate_paths(&isolated.env)?[0].clone();
     fs::create_dir_all(path.parent().unwrap())?;
     fs::write(
         &path,
