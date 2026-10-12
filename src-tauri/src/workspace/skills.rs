@@ -139,9 +139,18 @@ pub(super) fn build_sync_target_options_with_sources(
         } else {
             scan_target_skill_links(skill_dir, sources)?
         };
+        let (project_id, agent_id) = match &reference {
+            TargetRef::Global(id) => (None, id.0.clone()),
+            TargetRef::Project {
+                project_id,
+                agent_id,
+            } => (Some(project_id.clone()), agent_id.0.clone()),
+        };
         let id = reference.composite_id();
         options.push(SyncTargetOption {
             id: id.clone(),
+            project_id,
+            agent_id,
             label: id,
             skill_dir: display_path(skill_dir),
             linked_target_id,

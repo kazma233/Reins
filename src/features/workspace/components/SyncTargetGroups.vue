@@ -11,12 +11,7 @@ import {
   skillLinkSourcePath,
   skillLinkStateInfo,
 } from "../syncAssociations";
-
-type SyncTargetGroup = {
-  id: string;
-  label: string;
-  targets: SyncTargetOption[];
-};
+import { groupSyncTargets } from "../syncTargetGroups";
 
 type SyncTargetGroupsProps = {
   busy: boolean;
@@ -43,27 +38,7 @@ function isCurrentSourceLink(link: SkillLinkAssociation): boolean {
   return Boolean(props.currentSourceId && link.matchedSourceIds.includes(props.currentSourceId));
 }
 
-const groups = computed<SyncTargetGroup[]>(() => {
-  const targets = props.targets;
-  const globalTargets = targets.filter((target) => !target.id.includes(":"));
-  const projectGroups = new Map<string, SyncTargetOption[]>();
-  for (const target of targets) {
-    const colonPos = target.id.indexOf(":");
-    if (colonPos < 0) continue;
-    const projectId = target.id.substring(0, colonPos);
-    const existing = projectGroups.get(projectId);
-    if (existing) existing.push(target);
-    else projectGroups.set(projectId, [target]);
-  }
-  const result: SyncTargetGroup[] = [];
-  if (globalTargets.length > 0) {
-    result.push({ id: "global", label: "全局目标", targets: globalTargets });
-  }
-  for (const [projectId, projectTargets] of projectGroups) {
-    result.push({ id: `project:${projectId}`, label: `项目 ${projectId}`, targets: projectTargets });
-  }
-  return result;
-});
+const groups = computed(() => groupSyncTargets(props.targets));
 </script>
 
 <template>

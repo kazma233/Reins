@@ -24,7 +24,10 @@ function makeLink(state: SkillLinkAssociation["state"], matchedSourceIds: string
 }
 
 function makeTarget(overrides: Partial<SyncTargetOption> & { id: string }): SyncTargetOption {
+  const separator = overrides.id.indexOf(":");
   return {
+    projectId: separator > 0 ? overrides.id.slice(0, separator) : null,
+    agentId: separator > 0 ? overrides.id.slice(separator + 1) : overrides.id,
     label: overrides.id,
     skillDir: `/targets/${overrides.id}`,
     links: [],

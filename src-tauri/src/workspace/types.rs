@@ -843,7 +843,12 @@ pub(crate) struct SourceSyncConflict {
 #[serde(rename_all = "camelCase")]
 #[ts(export, export_to = "../../src/features/workspace/generated/")]
 pub(crate) struct SyncTargetOption {
+    // 复合地址（`project:agent`）与它的两段。地址是稳定的关联键，两段让前端
+    // 不必自己拆串——此前前端为了分组不得不按 `:` 反解，拆错一次就静默归错组。
     pub(crate) id: String,
+    #[ts(optional = nullable)]
+    pub(crate) project_id: Option<String>,
+    pub(crate) agent_id: String,
     pub(crate) label: String,
     pub(crate) skill_dir: String,
     // When the skill_dir is a symlink that points at another managed target's
