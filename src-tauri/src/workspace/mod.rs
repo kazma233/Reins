@@ -602,9 +602,11 @@ fn parse_manager_config(
         for agent_name in raw_project.agents.keys() {
             let agent_id = normalize_target_id(agent_name)?;
             let defaults = agent_defaults.iter().find(|d| d.id == agent_id);
+            // 回退落点用规范化后的 id：`agent_name` 是 YAML 原文（可能是 `Codex`），
+            // 用它拼路径会造出一个 `Codex/skills` 空目录，与工具实际读的位置不一致。
             let skill_dir = defaults
                 .map(|d| d.skill_dir.clone())
-                .unwrap_or_else(|| project_path.join(agent_name).join("skills"));
+                .unwrap_or_else(|| project_path.join(&agent_id.0).join("skills"));
             agents.insert(
                 agent_id.clone(),
                 ResolvedTargetConfig {

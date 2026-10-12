@@ -1225,6 +1225,37 @@ fn project_id_rejects_colon_and_slash() -> Result<()> {
     Ok(())
 }
 
+// agent 名在 config.yaml 里写成大写（或带下划线）时，id 会被规范成小写连字符，
+// 落点回退必须用规范化后的 id：否则会凭空造出一个 `<project>/Codex/skills`
+// 空目录，用户真正在用的 `<project>/codex/skills` 不被识别。
+#[test]
+fn project_agent_dir_follows_normalized_agent_id() -> Result<()> {
+    let root = TestDir::new("project-agent-normalized")?;
+    let store = WorkspaceConfigStore::at(root.path()).with_env(Environment::from_env());
+    let project_path = root.path().join("my-app");
+    fs::write(
+        store.config_path(),
+        format!(
+            "projects:\n  my-app:\n    path: {}\n    agents:\n      Custom: {{}}\n",
+            project_path.display()
+        ),
+    )?;
+
+    let config = store.parse()?;
+    let target = config
+        .target(&TargetRef::Project {
+            project_id: "my-app".to_string(),
+            agent_id: AgentTargetId("custom".to_string()),
+        })
+        .expect("规范化后的 id 应能寻址到该 target");
+
+    // 没有内置项目布局的 agent 走回退路径：目录名必须是规范化后的 id。
+    assert_eq!(target.skill_dir, project_path.join("custom/skills"));
+    assert_eq!(target.config_path, None);
+
+    Ok(())
+}
+
 #[test]
 fn pi_mcp_apply_read_remove_roundtrip() -> Result<()> {
     let root = TestDir::new("pi-mcp-roundtrip")?;
