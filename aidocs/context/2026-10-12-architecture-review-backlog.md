@@ -1,7 +1,7 @@
 # 架构评审待办清单
 
 - 日期：2026-10-12
-- 状态：待办（第 1、2、3 项已完成；剩余按建议顺序排列：C11 → C14 → C4 → C3 → C6 → C9 → C7）
+- 状态：待办（第 1、2、3、4 项已完成；剩余按建议顺序排列：C9 → C7）
 - 实施顺序的建议依据：C11 最小（一条断言把注释变成被守卫的事实）；C14 收益/风险比最高且清单自己这么排（mcp 表单照抄 providers 的已验证形态，行级校验目前零直接测试）；C4 最重但解掉它之后 session 域测试才可能并行（18 处 `TestEnvGuard` 把测试钉在进程 HOME 上）
 
 来源：2026-10-11 的架构加深评审（workspace / session / providers / 前端四路扫描 + ADR 交叉验证）。已完成项见文末；以下是剩余候选。文中行号为评审时快照，实施前以当前代码为准。
@@ -102,8 +102,9 @@
 ### 7. C6 · 删除侧线的散落机械
 
 - 域：session；强度：Worth exploring（两个 Windows 真 bug 已修，结构问题仍在）
-- 问题：官方 CLI 删除运行器 ×3（`codex.rs:207-234`、`opencode.rs:312-334`、`grokbuild.rs:979-1002`）；`prune_empty_parents` ×3 且已漂移（`claude_code.rs:670` 缺 `current != root` 保护，可能删掉 `~/.claude/projects` 根——`pi.rs:1152` 与 `grokbuild.rs:1045` 有保护）；删除计划从展示字符串反推（`delete.rs:31-46` 从 overview.agents 推 id；grokbuild / claude 的字符串手术已在 2026-10-11 改为 Path 组件推导，但 plan 输入仍是渲染 DTO）。
-- 方向：执行侧收「CLI 运行器 + prune」两个小件（prune 边界单点，claude 的分叉被迫显式决策）；预演侧让 plan 拿与执行侧同源的结构化成员数据。
+- 状态：**已完成**（2026-10-12，见 `decisions/2026-10-12-delete-sidecar-deepening.md`）。
+- 问题（修复前）：官方 CLI 删除运行器 ×3（`codex.rs:207-234`、`opencode.rs:312-334`、`grokbuild.rs:979-1002`）；`prune_empty_parents` ×3 且已漂移（`claude_code.rs:670` 缺 `current != root` 保护，可能删掉 `~/.claude/projects` 根——`pi.rs:1152` 与 `grokbuild.rs:1045` 有保护）；删除计划从展示字符串反推（`delete.rs:31-46` 从 overview.agents 推 id；grokbuild / claude 的字符串手术已在 2026-10-11 改为 Path 组件推导，但 plan 输入仍是渲染 DTO）。
+- 已做：执行侧 `run_official_cli` 与 `prune_empty_parents` 收进 `session/delete.rs`（claude 补上 root 保护，行为修复有回归用例红-绿验证）；预演侧 `DeletePolicy::Deleter` 的 plan 改收 `DeletePlanInput`（family 的非渲染折叠，`SessionReader::delete_plan_input` 接缝），五家 plan 的字符串手术消失，claude 的 meta 预演镜像执行侧（预演可见变化，见决策文档）。plan 测试改手构输入直测。
 
 ### 8. C9 · reins 条目生命周期策略
 
