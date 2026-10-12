@@ -249,12 +249,7 @@ impl GrokIndex {
 }
 
 pub(crate) fn root() -> Result<PathBuf> {
-    crate::support::fs::grok_home_path(
-        std::env::var_os("GROK_HOME"),
-        crate::support::fs::user_home_dir(),
-    )
-    .map(|home| home.join("sessions"))
-    .context("Unable to determine Grok Build home")
+    super::spec_root(SourceApp::GrokBuild).map(|home| home.join("sessions"))
 }
 
 #[derive(Deserialize)]
@@ -1121,11 +1116,7 @@ fn run_official_delete(session_id: &str) -> Result<()> {
 // 会话数据由 grok home 内的 CLI 写入，删除优先用同源二进制；home 内没有
 // （如数据目录搬迁后）退回 PATH 上的 grok。
 fn grok_binary() -> Result<Command> {
-    let home = crate::support::fs::grok_home_path(
-        std::env::var_os("GROK_HOME"),
-        crate::support::fs::user_home_dir(),
-    )
-    .context("Unable to determine Grok Build home")?;
+    let home = super::spec_root(SourceApp::GrokBuild)?;
     let home_binary = home.join("bin").join("grok");
     if home_binary.is_file() {
         return Ok(Command::new(home_binary));

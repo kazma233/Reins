@@ -421,24 +421,6 @@ pub(crate) struct TargetDefaults {
     pub(crate) config_type: McpConfigType,
 }
 
-#[cfg(test)]
-use crate::support::fs::grok_home_path;
-
-#[cfg(test)]
-#[test]
-fn grokbuild_home_uses_environment_before_home_default() {
-    let home = PathBuf::from("/synthetic-home");
-    let custom = PathBuf::from("/custom-grok");
-    assert_eq!(
-        grok_home_path(None, Some(home.clone())),
-        Some(home.join(".grok"))
-    );
-    assert_eq!(
-        grok_home_path(Some(custom.clone().into_os_string()), Some(home)),
-        Some(custom)
-    );
-}
-
 pub(crate) fn target_presets_inner(env: &Environment) -> Vec<TargetPreset> {
     let defaults = builtin_target_defaults_map(env);
     crate::agents::AGENTS

@@ -244,3 +244,115 @@ fn zcode_engine_without_session_table_lists_empty() -> Result<()> {
     fs::remove_dir_all(&dir).ok();
     Ok(())
 }
+
+// 重定向后的会话根:读取器走 agents 清单的 GlobalRoot(重定向优先、HOME
+// 兜底),与 workspace/providers 同一条路径来源——设了变量的用户在三个域
+// 看到同一份数据。codex 侧的行为证据:CODEX_HOME 重定向时官方 CLI 把
+// sessions/年/月/日 树建在重定向目录下(2026-10-12 实测);claude 侧见
+// global-root-env-redirect ADR;dsh 侧本机无 CLI,实现按同型处理,
+// sessions 是否随迁标 unverified。
+#[test]
+fn codex_reader_follows_codex_home_redirect() -> Result<()> {
+    let home = env::temp_dir().join(format!("reins-test-{}", Uuid::new_v4()));
+    let redirect = env::temp_dir().join(format!("reins-test-{}", Uuid::new_v4()));
+    fs::create_dir_all(&home)?;
+    fs::create_dir_all(&redirect)?;
+    let _guard = crate::test_support::TestEnvGuard::set_home(&home);
+    unsafe { env::set_var("CODEX_HOME", &redirect) };
+
+    // 会话种在重定向根下;旧实现读 HOME/.codex,列表会是空。
+    let session_id = "44444444-4444-4444-8444-444444444444";
+    let transcript = redirect
+        .join("sessions/2026/04/21")
+        .join(format!("rollout-2026-04-21T12-00-00-{session_id}.jsonl"));
+    super::write_jsonl(
+        &transcript,
+        &[json!({
+            "timestamp": "2026-04-21T12:00:00.000Z",
+            "type": "session_meta",
+            "payload": { "id": session_id, "cwd": "/tmp/workspace" }
+        })],
+    )?;
+
+    // 重定向变量即整个根:官方 CLI 实测把 sessions/年/月/日 树建在变量
+    // 目录下,.codex 只是 HOME 兜底时的缺省名。
+    assert_eq!(crate::session::codex::root()?, redirect);
+    let entries = crate::session::reader(crate::session::model::SourceApp::Codex).list_entries()?;
+    assert_eq!(entries.len(), 1, "CODEX_HOME 下的会话应被列出");
+    assert_eq!(entries[0].source_session_id, session_id);
+
+    fs::remove_dir_all(&home).ok();
+    fs::remove_dir_all(&redirect).ok();
+    Ok(())
+}
+
+#[test]
+fn claude_reader_follows_claude_config_dir_redirect() -> Result<()> {
+    let home = env::temp_dir().join(format!("reins-test-{}", Uuid::new_v4()));
+    let redirect = env::temp_dir().join(format!("reins-test-{}", Uuid::new_v4()));
+    fs::create_dir_all(&home)?;
+    fs::create_dir_all(&redirect)?;
+    let _guard = crate::test_support::TestEnvGuard::set_home(&home);
+    unsafe { env::set_var("CLAUDE_CONFIG_DIR", &redirect) };
+
+    let transcript = redirect
+        .join("projects/demo-project")
+        .join("redirected-session.jsonl");
+    super::write_jsonl(
+        &transcript,
+        &[json!({
+            "timestamp": "2026-04-21T12:00:00.000Z",
+            "sessionId": "redirected-session",
+            "type": "user",
+            "message": { "content": "Main task" }
+        })],
+    )?;
+
+    let entries =
+        crate::session::reader(crate::session::model::SourceApp::ClaudeCode).list_entries()?;
+    assert_eq!(entries.len(), 1, "CLAUDE_CONFIG_DIR 下的会话应被列出");
+    assert_eq!(entries[0].source_session_id, "redirected-session");
+
+    fs::remove_dir_all(&home).ok();
+    fs::remove_dir_all(&redirect).ok();
+    Ok(())
+}
+
+#[test]
+fn dsh_root_resolves_dsh_home_redirect() -> Result<()> {
+    let home = env::temp_dir().join(format!("reins-test-{}", Uuid::new_v4()));
+    let redirect = env::temp_dir().join(format!("reins-test-{}", Uuid::new_v4()));
+    fs::create_dir_all(&home)?;
+    fs::create_dir_all(&redirect)?;
+    let _guard = crate::test_support::TestEnvGuard::set_home(&home);
+    unsafe { env::set_var("DSH_HOME", &redirect) };
+
+    // 本机无 dsh CLI 可落真会话,断言根解析走重定向即实现口径(变量值即
+    // 整个根,与 workspace/providers 的 DSH_HOME 语义同一份)。
+    assert_eq!(crate::session::dsh::root()?, redirect);
+    assert_eq!(
+        crate::session::dsh::sessions_root()?,
+        redirect.join("sessions")
+    );
+
+    fs::remove_dir_all(&home).ok();
+    fs::remove_dir_all(&redirect).ok();
+    Ok(())
+}
+
+#[test]
+fn debug_redirect_roots() {
+    let home = env::temp_dir().join("reins-debug-home");
+    let redirect = env::temp_dir().join("reins-debug-redirect");
+    fs::create_dir_all(&home).unwrap();
+    let _guard = crate::test_support::TestEnvGuard::set_home(&home);
+    unsafe { env::set_var("CODEX_HOME", &redirect) };
+    unsafe { env::set_var("DSH_HOME", &redirect) };
+    println!("codex root = {:?}", crate::session::codex::root());
+    println!("dsh root = {:?}", crate::session::dsh::root());
+    let env = crate::support::environment::Environment::from_env();
+    println!("env.codex_home = {:?}", env.codex_home);
+    println!("env.dsh_home = {:?}", env.dsh_home);
+    unsafe { env::remove_var("CODEX_HOME") };
+    unsafe { env::remove_var("DSH_HOME") };
+}

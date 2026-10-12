@@ -23,9 +23,7 @@ pub(crate) static BACKEND: FamilyReader<DshSpec> = FamilyReader::new(DshSpec, se
 
 // 可用性看 ~/.dsh/sessions 而不是 ~/.dsh 本身;不读 .credentials.yaml 等其他内容。
 pub(crate) fn root() -> Result<PathBuf> {
-    Ok(crate::support::fs::user_home_dir()
-        .context("Unable to determine home directory")?
-        .join(".dsh"))
+    super::spec_root(SourceApp::Dsh)
 }
 
 pub(crate) fn sessions_root() -> Result<PathBuf> {

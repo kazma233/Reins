@@ -208,9 +208,7 @@ pub(crate) fn engine_at(root: PathBuf, store_dir: PathBuf) -> ReaderEngine<Codex
 }
 
 pub(crate) fn root() -> Result<PathBuf> {
-    Ok(crate::support::fs::user_home_dir()
-        .context("Unable to determine home directory")?
-        .join(".codex"))
+    super::spec_root(SourceApp::Codex)
 }
 
 pub(crate) fn delete_session(source_session_id: &str) -> Result<()> {

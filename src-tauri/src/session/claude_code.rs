@@ -206,9 +206,7 @@ pub(crate) fn engine_at(
 }
 
 pub(crate) fn root() -> Result<PathBuf> {
-    Ok(crate::support::fs::user_home_dir()
-        .context("Unable to determine home directory")?
-        .join(".claude"))
+    super::spec_root(SourceApp::ClaudeCode)
 }
 
 pub(crate) fn delete_session(source_session_id: &str) -> Result<()> {

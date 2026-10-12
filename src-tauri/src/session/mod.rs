@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, anyhow, bail};
 
 pub(crate) mod catalog;
 pub(crate) mod commands;
@@ -102,6 +102,20 @@ pub(crate) fn sqlite_table_exists(connection: &rusqlite::Connection, table: &str
         })
         .with_context(|| format!("Failed to inspect sqlite table {table}"))?;
     Ok(exists.is_some())
+}
+
+// 来源会话根的统一解析:走 agents 清单的 GlobalRoot(重定向优先、HOME
+// 兜底),与 workspace/providers 同一条路径来源——设了 CODEX_HOME 之类的
+// 重定向后,三个域看到同一份数据。pi 例外:它的根有官方 sessionDir 链等
+// 特有契约,留在 pi.rs(行为本身已认重定向)。
+pub(crate) fn spec_root(app: SourceApp) -> Result<PathBuf> {
+    let env = crate::support::environment::Environment::from_env();
+    crate::agents::spec_by_source_app(app)
+        .expect("registered in AGENTS")
+        .global
+        .root
+        .resolve(&env)
+        .ok_or_else(|| anyhow!("Unable to determine home directory"))
 }
 
 pub(crate) fn clear_all_caches() -> Result<()> {
