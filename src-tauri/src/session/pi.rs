@@ -320,7 +320,7 @@ impl PiReader {
 
         fs::remove_file(&path).with_context(|| format!("Failed to delete {}", path.display()))?;
         // 显式配置的会话根不能被 prune 掉（保护在 prune_empty_parents 内）。
-        prune_empty_parents(self.sessions_root.clone(), path.parent());
+        super::delete::prune_empty_parents(self.sessions_root.clone(), path.parent());
         self.clear_cache()
     }
 }
@@ -1165,25 +1165,5 @@ fn new_entry_id(used_ids: &mut HashSet<String>) -> String {
         if used_ids.insert(id.clone()) {
             return id;
         }
-    }
-}
-
-fn prune_empty_parents(root: PathBuf, start: Option<&Path>) {
-    let Some(mut current) = start.map(Path::to_path_buf) else {
-        return;
-    };
-
-    while current.starts_with(&root) && current != root {
-        let is_empty = fs::read_dir(&current)
-            .ok()
-            .and_then(|mut entries| entries.next())
-            .is_none();
-        if !is_empty || fs::remove_dir(&current).is_err() {
-            break;
-        }
-        let Some(parent) = current.parent() else {
-            break;
-        };
-        current = parent.to_path_buf();
     }
 }

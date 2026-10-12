@@ -226,7 +226,10 @@ pub(crate) fn delete_session(source_session_id: &str) -> Result<()> {
     remove_dir_if_exists(&root()?.join("projects").join(&root_session_id))?;
     remove_dir_if_exists(&root()?.join("session-env").join(&root_session_id))?;
     remove_dir_if_exists(&root()?.join("file-history").join(&root_session_id))?;
-    prune_empty_parents(root()?.join("projects"), family.root.member_path().parent());
+    super::delete::prune_empty_parents(
+        root()?.join("projects"),
+        family.root.member_path().parent(),
+    );
     BACKEND.engine()?.clear()?;
     Ok(())
 }
@@ -665,30 +668,4 @@ fn remove_dir_if_exists(path: &Path) -> Result<()> {
     }
 
     Ok(())
-}
-
-fn prune_empty_parents(root: PathBuf, start: Option<&Path>) {
-    let Some(mut current) = start.map(Path::to_path_buf) else {
-        return;
-    };
-
-    while current.starts_with(&root) {
-        let is_empty = fs::read_dir(&current)
-            .ok()
-            .and_then(|mut entries| entries.next())
-            .is_none();
-
-        if !is_empty {
-            break;
-        }
-
-        if fs::remove_dir(&current).is_err() {
-            break;
-        }
-
-        let Some(parent) = current.parent() else {
-            break;
-        };
-        current = parent.to_path_buf();
-    }
 }

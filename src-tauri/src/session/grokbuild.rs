@@ -918,7 +918,7 @@ pub(crate) fn delete_session(source_session_id: &str) -> Result<()> {
     let sessions_root = crate::support::fs::canonicalize(&root()?)?;
     for row in &family.members {
         if let Some(dir) = row.member_path().as_ref().parent().and_then(Path::parent) {
-            prune_empty_parents(sessions_root.clone(), Some(dir));
+            super::delete::prune_empty_parents(sessions_root.clone(), Some(dir));
         }
     }
     Ok(())
@@ -1028,30 +1028,4 @@ fn delete_search_index_rows(family: &Family<Row>) -> Result<()> {
             })?;
     }
     Ok(())
-}
-
-fn prune_empty_parents(sessions_root: PathBuf, start: Option<&Path>) {
-    let Some(mut current) = start.map(Path::to_path_buf) else {
-        return;
-    };
-
-    while current.starts_with(&sessions_root) && current != sessions_root {
-        let is_empty = fs::read_dir(&current)
-            .ok()
-            .and_then(|mut entries| entries.next())
-            .is_none();
-
-        if !is_empty {
-            break;
-        }
-
-        if fs::remove_dir(&current).is_err() {
-            break;
-        }
-
-        let Some(parent) = current.parent() else {
-            break;
-        };
-        current = parent.to_path_buf();
-    }
 }

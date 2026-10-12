@@ -1,4 +1,6 @@
 use std::collections::HashSet;
+use std::fs;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use anyhow::{Context, Result, bail};
@@ -33,6 +35,31 @@ pub(crate) fn run_official_cli(what: &str, command: &mut Command) -> Result<()> 
         stdout.trim(),
         stderr.trim()
     )
+}
+
+// 从 start 沿父链清理删空后的目录,root 本身不清理:root 是来源的会话扫描
+// 根(pi 的会话根可由用户显式配置,claude 的 projects/ 是 CLI 的目录骨架),
+// 删掉会让下一次扫描落空。
+pub(crate) fn prune_empty_parents(root: PathBuf, start: Option<&Path>) {
+    let Some(mut current) = start.map(Path::to_path_buf) else {
+        return;
+    };
+
+    while current.starts_with(&root) && current != root {
+        let is_empty = fs::read_dir(&current)
+            .ok()
+            .and_then(|mut entries| entries.next())
+            .is_none();
+
+        if !is_empty || fs::remove_dir(&current).is_err() {
+            break;
+        }
+
+        let Some(parent) = current.parent() else {
+            break;
+        };
+        current = parent.to_path_buf();
+    }
 }
 
 pub(crate) fn delete_session_inner(
@@ -107,5 +134,31 @@ pub(crate) fn get_delete_plan_inner(
             command_label: DELETE_UNSUPPORTED_LABEL.to_string(),
             actions: Vec::<DeletePlanAction>::new(),
         }),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use uuid::Uuid;
+
+    // root 不被清理是这份实现存在的理由(pi 显式配置的会话根、claude 的
+    // projects 目录骨架都靠它活),直测钉住。
+    #[test]
+    fn prune_empty_parents_stops_at_the_root() {
+        let root = std::env::temp_dir().join(format!("reins-prune-{}", Uuid::new_v4()));
+        let nested = root.join("a/b");
+        fs::create_dir_all(&nested).unwrap();
+
+        prune_empty_parents(root.clone(), Some(&nested));
+        assert!(!nested.exists());
+        assert!(!root.join("a").exists());
+        assert!(root.exists(), "扫描根本身不能被 prune 掉");
+
+        // start 就是 root:同样不动 root。
+        prune_empty_parents(root.clone(), Some(&root));
+        assert!(root.exists());
+
+        fs::remove_dir_all(&root).ok();
     }
 }

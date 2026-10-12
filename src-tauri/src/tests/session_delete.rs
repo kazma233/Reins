@@ -188,6 +188,49 @@ fn deleting_claude_family_removes_transcripts_and_side_dirs() -> Result<()> {
     Ok(())
 }
 
+// 回归:没有子代理的会话,转录直接放在项目目录里;删除后项目目录删空被
+// prune,projects 扫描根必须保留(旧实现缺 root 保护,会把 projects 一起删掉)。
+#[test]
+fn deleting_claude_session_keeps_projects_root_when_project_dir_empties() -> Result<()> {
+    let temp_home = env::temp_dir().join(format!("reins-test-{}", Uuid::new_v4()));
+    fs::create_dir_all(&temp_home)?;
+    let _guard = TestEnvGuard::set_home(&temp_home);
+
+    let root_id = "solo-session";
+    let project_dir = temp_home.join(".claude/projects/solo-project");
+    let root_path = project_dir.join(format!("{root_id}.jsonl"));
+    let side_dir = temp_home.join(".claude/projects").join(root_id);
+    fs::create_dir_all(&side_dir)?;
+
+    write_jsonl(
+        &root_path,
+        &[json!({
+            "timestamp": "2026-04-21T12:00:00.000Z",
+            "sessionId": root_id,
+            "type": "user",
+            "message": { "content": "Solo task" }
+        })],
+    )?;
+
+    let result = session::delete::delete_session_inner(
+        &state::session_index::SessionIndexState::default(),
+        SourceApp::ClaudeCode,
+        root_id,
+    )?;
+
+    assert_eq!(result.deleted_session_id, root_id);
+    assert!(!root_path.exists());
+    assert!(!side_dir.exists());
+    assert!(!project_dir.exists(), "删空的项目目录应被 prune");
+    assert!(
+        temp_home.join(".claude/projects").exists(),
+        "projects 扫描根本身不能被 prune 掉"
+    );
+
+    fs::remove_dir_all(&temp_home).ok();
+    Ok(())
+}
+
 #[test]
 fn deleting_pi_session_removes_only_the_selected_file() -> Result<()> {
     let temp_home = env::temp_dir().join(format!("reins-test-{}", Uuid::new_v4()));
