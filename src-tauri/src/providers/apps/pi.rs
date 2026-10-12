@@ -41,8 +41,10 @@ fn clear_default_refs(
 // Pi 的思考等级选择器只对 thinkingLevelMap 里显式声明的模型开放
 // xhigh/max 档（pi getSupportedThinkingLevels：值 null 禁用该档，
 // xhigh/max 缺键即不可选），因此模型的 reasoning_levels 必须逐档下发，
-// 否则 Reins 应用的推理模型在 Pi 里最高只能选到 high。键是 Pi 档位名，
-// 值是该档实际发给 API 的 effort（off 档为 none，Pi 各协议的缺省值）。
+// 否则 Reins 应用的推理模型在 Pi 里最高只能选到 high。键是 Pi 档位名
+// （reasoning_dialect 的拼写），值是该档实际发给 API 的 effort（off 档
+// 为 none，Pi 各协议的缺省值）——值侧是独立于方言表的第二套拼写，
+// 不得「顺手统一」成 dialect.spell。
 fn thinking_level_map(levels: &[ReasoningLevel]) -> JsonValue {
     let mut map = JsonMap::new();
     for level in ReasoningLevel::all() {

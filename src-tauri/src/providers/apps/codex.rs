@@ -64,7 +64,13 @@ fn catalog_efforts(
 // supports_parallel_tool_calls 已在 0.158.0 删除、不再写；系统提示用
 // model_messages.instructions_template（0.158.0 起的规范形式，旧顶层
 // base_instructions 只是保留的 legacy 提升路径），visibility=list 让模型进选择器。
-fn build_catalog(provider: &ResolvedProvider, plan: &ApplyProviderInput) -> Result<String> {
+// dialect 从 apply(方法)传入:目录文件里的档位拼写与 config.toml 的
+// model_reasoning_effort 同源,都走方言表,反读(parse)才正反闭合。
+fn build_catalog(
+    provider: &ResolvedProvider,
+    plan: &ApplyProviderInput,
+    dialect: &'static super::dialect::ReasoningDialect,
+) -> Result<String> {
     let mut models = Vec::new();
     for (index, model_id) in plan.model_ids.iter().enumerate() {
         let model = provider
@@ -79,7 +85,7 @@ fn build_catalog(provider: &ResolvedProvider, plan: &ApplyProviderInput) -> Resu
             "description": format!("{}（{}）", model.label, provider.label),
             "supported_reasoning_levels": efforts
                 .iter()
-                .map(|level| json!({ "effort": level.as_str(), "description": "" }))
+                .map(|level| json!({ "effort": dialect.spell(*level), "description": "" }))
                 .collect::<Vec<_>>(),
             "shell_type": "default",
             "visibility": "list",
@@ -103,7 +109,7 @@ fn build_catalog(provider: &ResolvedProvider, plan: &ApplyProviderInput) -> Resu
         }
         if let Some(level) = plan.default_reasoning_level {
             if efforts.contains(&level) {
-                entry["default_reasoning_level"] = json!(level.as_str());
+                entry["default_reasoning_level"] = json!(dialect.spell(level));
             }
         }
         models.push(entry);
@@ -355,7 +361,7 @@ impl AppAdapter for CodexAdapter {
             Some(level) => {
                 root_table.insert(
                     "model_reasoning_effort".to_string(),
-                    TomlValue::String(level.as_str().to_string()),
+                    TomlValue::String(self.reasoning_dialect().spell(level).to_string()),
                 );
             }
             None => {
@@ -368,7 +374,10 @@ impl AppAdapter for CodexAdapter {
         }
 
         Ok(vec![
-            (catalog_path, build_catalog(provider, plan)?),
+            (
+                catalog_path,
+                build_catalog(provider, plan, self.reasoning_dialect())?,
+            ),
             (path, serialize_toml(&root)?),
         ])
     }

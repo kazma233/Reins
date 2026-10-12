@@ -105,7 +105,13 @@ fn thinking_budget_tokens(level: ReasoningLevel) -> i64 {
 }
 
 // 模型条目里的思考设置；openai 系与 anthropic 包写法不同（见上）。
-fn reasoning_settings(protocol: ProviderProtocol, level: ReasoningLevel) -> JsonValue {
+// dialect 从 apply(方法)传入:reasoningEffort 的拼写正(re这里)反
+// (current_reasoning_level)同源,都走方言表。
+fn reasoning_settings(
+    protocol: ProviderProtocol,
+    level: ReasoningLevel,
+    dialect: &'static super::dialect::ReasoningDialect,
+) -> JsonValue {
     let mut settings = JsonMap::new();
     match protocol {
         ProviderProtocol::AnthropicMessages => {
@@ -122,7 +128,7 @@ fn reasoning_settings(protocol: ProviderProtocol, level: ReasoningLevel) -> Json
         _ => {
             settings.insert(
                 "reasoningEffort".to_string(),
-                JsonValue::String(level.as_str().to_string()),
+                JsonValue::String(dialect.spell(level).to_string()),
             );
         }
     }
@@ -149,7 +155,10 @@ fn level_from_thinking_budget(budget_tokens: i64) -> Option<ReasoningLevel> {
 // 反读默认模型条目里的思考设置（openai 系 settings.reasoningEffort、
 // anthropic 包 settings.thinking）；默认模型不是 Reins 条目或没有该字段
 // 时留空，不猜等级。
-fn current_reasoning_level(root: &JsonMap<String, JsonValue>) -> Option<ReasoningLevel> {
+fn current_reasoning_level(
+    root: &JsonMap<String, JsonValue>,
+    dialect: &'static super::dialect::ReasoningDialect,
+) -> Option<ReasoningLevel> {
     let (provider_key, model_key) = root
         .get("model")
         .and_then(JsonValue::as_str)?
@@ -161,7 +170,7 @@ fn current_reasoning_level(root: &JsonMap<String, JsonValue>) -> Option<Reasonin
         .and_then(|models| models.get(model_key))
         .and_then(|model| model.get("settings"))?;
     if let Some(value) = settings.get("reasoningEffort").and_then(JsonValue::as_str) {
-        return ReasoningLevel::parse(value);
+        return dialect.parse(value);
     }
     let thinking = settings.get("thinking")?;
     if thinking.get("type").and_then(JsonValue::as_str) == Some("disabled") {
@@ -309,7 +318,7 @@ impl AppAdapter for OpencodeAdapter {
             }
         }
         // 应用弹窗据此预选；反读值只用于回显，不参与漂移判定。
-        state.default_reasoning_level = current_reasoning_level(&merged);
+        state.default_reasoning_level = current_reasoning_level(&merged, self.reasoning_dialect());
         let default_model = merged.get("model").and_then(JsonValue::as_str);
 
         for (path, root) in &files {
@@ -443,7 +452,7 @@ impl AppAdapter for OpencodeAdapter {
                     if let Some(level) = plan.default_reasoning_level {
                         model_entry.insert(
                             "settings".to_string(),
-                            reasoning_settings(provider.protocol, level),
+                            reasoning_settings(provider.protocol, level, self.reasoning_dialect()),
                         );
                     } else if let Some(settings) = previous_models
                         .as_ref()
