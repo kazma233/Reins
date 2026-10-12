@@ -80,7 +80,12 @@ fn persistence_child_helper() -> Result<()> {
         return Ok(());
     }
     let path = Path::new("/tmp/some-transcript.jsonl");
-    session::summary_cache::store(SourceApp::Codex, path, 100, &cached_summary());
+    session::summary_cache::SummaryDb::at_store_dir()?.store(
+        SourceApp::Codex,
+        path,
+        100,
+        &cached_summary(),
+    );
     Ok(())
 }
 
@@ -103,8 +108,9 @@ fn persistence_survives_process_restart() -> Result<()> {
     );
 
     let path = Path::new("/tmp/some-transcript.jsonl");
-    let loaded =
-        session::summary_cache::load(SourceApp::Codex, path, 100).expect("cache hit after restart");
+    let loaded = session::summary_cache::SummaryDb::at_store_dir()?
+        .load(SourceApp::Codex, path, 100)
+        .expect("cache hit after restart");
     assert_eq!(loaded.title, "persistent title");
 
     fs::remove_dir_all(&temp_home).ok();

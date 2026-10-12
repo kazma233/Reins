@@ -100,7 +100,8 @@ pub(crate) fn clear_all_caches() -> Result<()> {
         spec.reader.clear_cache()?;
     }
     // 持久缓存一并清空：用户触发的刷新是"全量重建"的逃生通道。
-    summary_cache::clear_all();
+    // 持久摘要跨来源共用同一份库文件，所以清一次即覆盖所有用到它的来源。
+    summary_cache::SummaryDb::at_store_dir()?.clear_all();
     usage_day_cache::clear_all();
     Ok(())
 }

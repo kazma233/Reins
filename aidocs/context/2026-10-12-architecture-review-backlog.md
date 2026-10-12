@@ -41,32 +41,22 @@
 - 提交：`9fdfe82`（机械重构）、`803e523`（project id 字符集）、`21b4696`
   （项目 agent 落点回退）、`a79bd4d`（契约带上两段，前端不再拆地址）。
 
-### 4. C4 · pi 的手搓缓存机械迁引擎部件
+### 4. C4 · pi 的手搓缓存机械迁引擎部件 · 已完成
 
-- 域：session；强度：Strong
-- **2026-10-12 调查后的范围修正**（实施前必读）：
-  - **迁移形态已有现成答案**：引擎侧 `FamilyReader`（`reader_engine.rs:656-701`）就是
-    「按 root 解析 + 每实例缓存」的形态——`root: fn() -> Result<PathBuf>` + `slot:
-    Mutex<Option<(PathBuf, Arc<ReaderEngine>)>>`，**换根即整实例重建**（有直测
-    `family_reader_rebuilds_engine_when_root_changes`）。5 家已经这么做了；只有 pi
-    与 grokbuild 是 unit struct。pi 照抄即可，不必新设计。三个部件都能对上号：
-    `DualHalfCache`（时间线）、`CachedIndex`+`Freshness`（索引，`Freshness::Fingerprint`
-    变体就是给指纹口径准备的）、`SummaryMemCache`（三级摘要，连 SQLite 持久层都已
-    有实例级 `SummaryDb::at(dir)`，pi 现在还在调模块级全局连接）。
-  - **性能收益是假的**：全套测试 1.18–1.24s，会话域 129 个测试共占约 0.45s。原先写的
-    「解掉 TestEnvGuard 后 session 域测试才可能并行」不成立——最多省 0.45s。
-  - **真实收益是正确性，且范围比原描述大**：实测把 `TestEnvGuard` 的串行锁去掉后
-    **82 个测试失败**（359 passed），分布跨 6 个域：`tests::pi` 18、`providers::tests`
-    17、`tests::grokbuild` 12、`tests::session_*` 26、`session::summary_cache` 2、
-    各 1 个 reader/engine。也就是说这 82 个测试**靠串行锁才能过**，它们事实上共享
-    进程级可变状态。pi 的静态缓存只是其中一处，单迁移 pi 解决不了这 82 个。
-  - 因此建议拆成两项：**C4 保持原意**（pi 迁引擎部件、删约 100 行重复机械，一次可
-    验证的改动）；另立一项「测试隔离去进程环境依赖」（根因是进程 HOME 与环境变量
-    作为隔离手段，涉及 providers / session / grokbuild / pi 四域的构造方式）。
-- 问题：pi 保留约 100 行私房机械（3 个 static + 锁助手 `pi.rs:54-72`、index 缓存 + 指纹 `228-284`、三级摘要回填 `340-373`），引擎里已有同构部件（`reader_engine.rs:286-342` SummaryMemCache、`358-361` CachedIndex）；指纹函数与 `dsh.rs:823-837` 逐字孪生。pi 测试还被进程 HOME + 全局锁钉死（18 处 TestEnvGuard），不能并行。
-- 方向：把 `DualHalfCache` 的借用模式推广到指纹目录缓存与 SummaryMemCache，pi 按实例持有部件；HOME 重开语义逐字保留。
-- ADR：构成对 `2026-10-08-reader-engine.md` 决策 6「pi 摘要缓存保持现状」的修订，应记录而非默默改。
-
+- 域：session；强度：Strong；完成于 2026-10-12
+- 落地：`PiBackend` 从 unit struct 改为「static 前置 + 按 root 缓存实例」，形态照抄引擎的
+  `FamilyReader`（`slot: Mutex<Option<(PathBuf, Arc<PiReader>)>>`，换根即整实例重建）；
+  三个部件全部改用引擎实现：时间线 → `DualHalfCache`、索引 → 实例内
+  `Mutex<Option<CachedIndex>>`（root 由实例表达，`source_key` 字段删除）、三级摘要 →
+  `SummaryMemCache`。顺带把 `summary_cache` 的**进程级全局连接**整个删掉（`CONNECTION`
+  静态、模块级 `load`/`store`/`clear_all`/`with_connection`/`cache_dir`），调用点全部改到
+  实例级 `SummaryDb`（新增 `at_store_dir()` 与 `clear_all()`），跨进程持久化测试也改用实例 API。
+- 验证：cargo test 441 passed（行为逐条对齐，既有 `session_cache` / `session_delete` /
+  `pi` 用例全部原样通过）；fmt 与 clippy 保持基线 73。
+- **未验证（如实记录）**：本轮曾尝试加一条「换根后不命中旧缓存」的测试，但它**在旧实现上
+  同样通过**——时间线缓存按绝对路径做键，两个 home 的路径天然不同，本来就不会撞，所以该
+  测试证明不了迁移的必要性，已按「不为不成立的主张留测试」删除。这次迁移的收益是结构性的
+  （删掉进程级可变状态与重复机械），不是由一个失败用例驱动。
 ### 5. C14 · workspace/model.ts 收深（(b) 已完成）
 
 - 域：workspace 前端；强度：Worth exploring；(b) 完成于 2026-10-12

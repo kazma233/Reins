@@ -11,7 +11,7 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::{LazyLock, Mutex};
+use std::sync::Mutex;
 
 use anyhow::{Context, Result};
 use rusqlite::Connection;
@@ -22,9 +22,6 @@ use super::model::{SessionSummary, SourceApp};
 // 旧版本库文件整体失效，新版本从空库全量重建一次。
 const DB_FILE_NAME: &str = "session-summary-cache_v2.db";
 
-static CONNECTION: LazyLock<Mutex<Option<(PathBuf, Connection)>>> =
-    LazyLock::new(|| Mutex::new(None));
-
 /// 实例级句柄:目录随读取器引擎实例注入(测试传临时目录),连接惰性打开。
 /// SQL 与全局层同源,两张脸共享同一份库文件格式。
 pub(crate) struct SummaryDb {
@@ -33,6 +30,13 @@ pub(crate) struct SummaryDb {
 }
 
 impl SummaryDb {
+    /// 生产路径的库目录（`~/.reins`）：引擎与 pi 实例都从这里取，口径只有一处。
+    pub(crate) fn at_store_dir() -> Result<Self> {
+        let home =
+            crate::support::fs::user_home_dir().context("Unable to determine home directory")?;
+        Ok(Self::at(home.join(".reins")))
+    }
+
     pub(crate) fn at(dir: PathBuf) -> Self {
         Self {
             dir,
@@ -66,6 +70,18 @@ impl SummaryDb {
         }
     }
 
+    /// 清空整表（用户触发的刷新是「全量重建」的逃生通道）。
+    /// 跨来源共用同一份库文件，所以清一次即覆盖所有用到持久摘要的来源。
+    pub(crate) fn clear_all(&self) {
+        let result = self.with_connection(|connection| {
+            connection.execute("DELETE FROM session_summary_cache", [])?;
+            Ok(())
+        });
+        if let Err(error) = result {
+            crate::logger::log_error(format!("summary cache clear failed: {error}"));
+        }
+    }
+
     fn with_connection<T>(&self, operation: impl FnOnce(&Connection) -> Result<T>) -> Result<T> {
         let mut guard = self
             .connection
@@ -77,30 +93,6 @@ impl SummaryDb {
         }
 
         operation(guard.as_ref().expect("connection was just ensured"))
-    }
-}
-
-pub(crate) fn load(source_app: SourceApp, path: &Path, mtime: i64) -> Option<SessionSummary> {
-    with_connection(|connection| lookup_summary(connection, source_app, path, mtime)).ok()
-}
-
-pub(crate) fn store(source_app: SourceApp, path: &Path, mtime: i64, summary: &SessionSummary) {
-    let result =
-        with_connection(|connection| insert_summary(connection, source_app, path, mtime, summary));
-
-    if let Err(error) = result {
-        crate::logger::log_error(format!("summary cache store failed: {error}"));
-    }
-}
-
-pub(crate) fn clear_all() {
-    let result = with_connection(|connection| {
-        connection.execute("DELETE FROM session_summary_cache", [])?;
-        Ok(())
-    });
-
-    if let Err(error) = result {
-        crate::logger::log_error(format!("summary cache clear failed: {error}"));
     }
 }
 
@@ -142,12 +134,6 @@ fn insert_summary(
         rusqlite::params![source_app.as_str(), path_key(path), mtime, summary_json],
     )?;
     Ok(())
-}
-
-fn cache_dir() -> Result<PathBuf> {
-    Ok(crate::support::fs::user_home_dir()
-        .context("Unable to determine home directory")?
-        .join(".reins"))
 }
 
 fn open_connection(dir: &Path) -> Result<Connection> {
@@ -201,28 +187,6 @@ fn remove_stale_db_files(dir: &Path) {
     }
 }
 
-fn with_connection<T>(operation: impl FnOnce(&Connection) -> Result<T>) -> Result<T> {
-    let dir = cache_dir()?;
-    let mut guard = CONNECTION
-        .lock()
-        .map_err(|_| anyhow::anyhow!("summary cache connection lock was poisoned"))?;
-
-    // 测试会切换 HOME 覆盖；目录变化时必须重开连接，避免读写到上一个环境的库。
-    if guard
-        .as_ref()
-        .is_some_and(|(cached_dir, _)| *cached_dir != dir)
-    {
-        *guard = None;
-    }
-
-    if guard.is_none() {
-        let connection = open_connection(&dir)?;
-        *guard = Some((dir, connection));
-    }
-
-    operation(&guard.as_ref().expect("connection was just ensured").1)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -247,19 +211,22 @@ mod tests {
         std::fs::create_dir_all(&temp_home).unwrap();
         let _guard = crate::test_support::TestEnvGuard::set_home(&temp_home);
 
+        let db = SummaryDb::at_store_dir().unwrap();
         let path = std::path::Path::new("/tmp/some-transcript.jsonl");
 
         // mtime 未变时命中，变化后失效。
-        store(SourceApp::Codex, path, 100, &summary("cached title"));
-        let loaded = load(SourceApp::Codex, path, 100).expect("cache hit");
+        db.store(SourceApp::Codex, path, 100, &summary("cached title"));
+        let loaded = db.load(SourceApp::Codex, path, 100).expect("cache hit");
         assert_eq!(loaded.title, "cached title");
-        assert!(load(SourceApp::Codex, path, 101).is_none());
+        assert!(db.load(SourceApp::Codex, path, 101).is_none());
 
         // 覆盖写入后按新 mtime 命中。
-        store(SourceApp::Codex, path, 200, &summary("updated title"));
-        let reloaded = load(SourceApp::Codex, path, 200).expect("cache hit after update");
+        db.store(SourceApp::Codex, path, 200, &summary("updated title"));
+        let reloaded = db
+            .load(SourceApp::Codex, path, 200)
+            .expect("cache hit after update");
         assert_eq!(reloaded.title, "updated title");
-        assert!(load(SourceApp::Codex, path, 100).is_none());
+        assert!(db.load(SourceApp::Codex, path, 100).is_none());
 
         std::fs::remove_dir_all(&temp_home).ok();
     }
@@ -270,10 +237,11 @@ mod tests {
         std::fs::create_dir_all(&temp_home).unwrap();
         let _guard = crate::test_support::TestEnvGuard::set_home(&temp_home);
 
+        let db = SummaryDb::at_store_dir().unwrap();
         let path = std::path::Path::new("/tmp/some-transcript.jsonl");
-        store(SourceApp::Codex, path, 100, &summary("codex title"));
+        db.store(SourceApp::Codex, path, 100, &summary("codex title"));
 
-        assert!(load(SourceApp::ClaudeCode, path, 100).is_none());
+        assert!(db.load(SourceApp::ClaudeCode, path, 100).is_none());
 
         std::fs::remove_dir_all(&temp_home).ok();
     }
@@ -284,11 +252,12 @@ mod tests {
         std::fs::create_dir_all(&temp_home).unwrap();
         let _guard = crate::test_support::TestEnvGuard::set_home(&temp_home);
 
+        let db = SummaryDb::at_store_dir().unwrap();
         let path = std::path::Path::new("/tmp/some-transcript.jsonl");
-        store(SourceApp::Codex, path, 100, &summary("codex title"));
-        clear_all();
+        db.store(SourceApp::Codex, path, 100, &summary("codex title"));
+        db.clear_all();
 
-        assert!(load(SourceApp::Codex, path, 100).is_none());
+        assert!(db.load(SourceApp::Codex, path, 100).is_none());
 
         std::fs::remove_dir_all(&temp_home).ok();
     }
@@ -310,8 +279,9 @@ mod tests {
             std::fs::write(cache_dir.join(stale), b"stale").unwrap();
         }
 
+        let db = SummaryDb::at_store_dir().unwrap();
         let path = std::path::Path::new("/tmp/some-transcript.jsonl");
-        store(SourceApp::Codex, path, 100, &summary("codex title"));
+        db.store(SourceApp::Codex, path, 100, &summary("codex title"));
 
         let remaining = std::fs::read_dir(&cache_dir)
             .unwrap()

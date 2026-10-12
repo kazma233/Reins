@@ -3,7 +3,7 @@ use std::env;
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
-use std::sync::{LazyLock, Mutex};
+use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result, anyhow, bail};
 use serde_json::{Value, json};
@@ -16,21 +16,73 @@ use super::{
     SessionTokenUsage, SourceApp, SummaryAccumulator, UsageHourBuckets,
 };
 
-pub(crate) struct PiBackend;
-
-pub(crate) static BACKEND: PiBackend = PiBackend;
-
-#[derive(Clone)]
-struct PiSummaryCacheEntry {
-    updated_at: i64,
-    summary: SessionSummary,
+/// 按 sessions 根构造的读取器：持有该根下的全部缓存。
+///
+/// 形态与引擎的 `FamilyReader` 一致——static 前置只存「根解析函数」，
+/// 实例按 root 缓存在 slot 里，**换根即整实例重建**（测试切 home 不需要
+/// 手工清缓存，也不再有进程级可变状态）。
+pub(crate) struct PiBackend {
+    slot: Mutex<Option<(PathBuf, Arc<PiReader>)>>,
 }
 
-#[derive(Clone)]
-struct PiIndexCacheEntry {
-    source_key: String,
+pub(crate) static BACKEND: PiBackend = PiBackend {
+    slot: Mutex::new(None),
+};
+
+impl PiBackend {
+    // 每次调用重新解析根（与迁移前一致），根变了就重建实例。
+    fn reader(&self) -> Result<Arc<PiReader>> {
+        let root = sessions_root()?;
+        let mut slot = self
+            .slot
+            .lock()
+            .map_err(|_| anyhow!("Pi reader slot lock was poisoned"))?;
+
+        if let Some((cached_root, reader)) = slot.as_ref()
+            && *cached_root == root
+        {
+            return Ok(reader.clone());
+        }
+
+        let reader = Arc::new(PiReader::new(root.clone())?);
+        *slot = Some((root, reader.clone()));
+        Ok(reader)
+    }
+}
+
+// 一个根下的缓存与读取逻辑。三个部件都来自引擎，不再手搓：
+//   timeline → DualHalfCache
+//   index    → Mutex<Option<CachedIndex>>（root 就是实例本身，键只剩指纹）
+//   summary  → SummaryMemCache（内存 → SQLite → 整文件解析三级回填）
+pub(crate) struct PiReader {
+    sessions_root: PathBuf,
+    timeline: reader_engine::DualHalfCache,
+    cached_index: Mutex<Option<CachedIndex>>,
+    summaries: reader_engine::SummaryMemCache,
+}
+
+struct CachedIndex {
     fingerprint: String,
     entries: Vec<SessionFileEntry>,
+}
+
+impl PiReader {
+    fn new(sessions_root: PathBuf) -> Result<Self> {
+        // 持久缓存目录随实例解析:测试切根即换库，与既有全局层同一份库文件格式。
+        let store_dir = crate::support::fs::user_home_dir()
+            .map(|home| home.join(".reins"))
+            .ok_or_else(|| anyhow!("Unable to determine home directory"))?;
+        Ok(Self {
+            sessions_root,
+            timeline: reader_engine::DualHalfCache::new("Pi timeline".to_string()),
+            cached_index: Mutex::new(None),
+            summaries: reader_engine::SummaryMemCache::new(
+                SourceApp::Pi,
+                "Pi summary".to_string(),
+                crate::session::summary_cache::SummaryDb::at(store_dir),
+            ),
+        })
+    }
 }
 
 #[derive(Clone)]
@@ -51,46 +103,25 @@ struct PiEntry {
     value: Value,
 }
 
-static PI_TIMELINE_CACHE: LazyLock<reader_engine::DualHalfCache> =
-    LazyLock::new(|| reader_engine::DualHalfCache::new("Pi timeline".to_string()));
-static PI_INDEX_CACHE: LazyLock<Mutex<Option<PiIndexCacheEntry>>> =
-    LazyLock::new(|| Mutex::new(None));
-static PI_SUMMARY_CACHE: LazyLock<Mutex<HashMap<String, PiSummaryCacheEntry>>> =
-    LazyLock::new(|| Mutex::new(HashMap::new()));
-
-fn lock_index_cache() -> Result<std::sync::MutexGuard<'static, Option<PiIndexCacheEntry>>> {
-    PI_INDEX_CACHE
-        .lock()
-        .map_err(|_| anyhow!("Pi index cache lock was poisoned"))
-}
-
-fn lock_summary_cache()
--> Result<std::sync::MutexGuard<'static, HashMap<String, PiSummaryCacheEntry>>> {
-    PI_SUMMARY_CACHE
-        .lock()
-        .map_err(|_| anyhow!("Pi summary cache lock was poisoned"))
-}
-
 impl SessionReader for PiBackend {
     fn list_entries(&self) -> Result<Vec<SessionFileEntry>> {
-        Ok(index()?.entries)
+        self.reader()?.index()
     }
 
     fn clear_cache(&self) -> Result<()> {
-        PI_TIMELINE_CACHE.clear()?;
-        lock_summary_cache()?.clear();
-        *lock_index_cache()? = None;
-        Ok(())
+        self.reader()?.clear_cache()
     }
 
     fn parse_summary(&self, source_session_id: &str) -> Result<SessionSummary> {
-        cached_summary(&resolve_session_path(source_session_id)?)
+        let reader = self.reader()?;
+        reader.summary(&reader.resolve_session_path(source_session_id)?)
     }
 
     fn parse_overview(&self, source_session_id: &str) -> Result<SessionOverview> {
-        let path = resolve_session_path(source_session_id)?;
-        let summary = cached_summary(&path)?;
-        let timeline = cached_timeline(&path)?;
+        let reader = self.reader()?;
+        let path = reader.resolve_session_path(source_session_id)?;
+        let summary = reader.summary(&path)?;
+        let timeline = reader.timeline(&path)?;
         let header = read_header(&path)?;
 
         Ok(SessionOverview {
@@ -112,7 +143,8 @@ impl SessionReader for PiBackend {
         offset: usize,
         limit: usize,
     ) -> Result<SessionMessagePage> {
-        let timeline = cached_timeline(&resolve_session_path(source_session_id)?)?;
+        let reader = self.reader()?;
+        let timeline = reader.timeline(&reader.resolve_session_path(source_session_id)?)?;
         Ok(message_page(&timeline.messages, offset, limit))
     }
 
@@ -122,24 +154,99 @@ impl SessionReader for PiBackend {
         offset: usize,
         limit: usize,
     ) -> Result<SessionEventPage> {
-        let timeline = cached_timeline(&resolve_session_path(source_session_id)?)?;
+        let reader = self.reader()?;
+        let timeline = reader.timeline(&reader.resolve_session_path(source_session_id)?)?;
         Ok(event_page(&timeline.events, offset, limit))
     }
 }
 
-// id → transcript 路径的内部解析:索引反查(header id)未命中再线性扫
-// sessions 目录。trait 不再暴露路径,这是 pi 自己的实现细节。
-fn resolve_session_path(source_session_id: &str) -> Result<PathBuf> {
-    if let Some(path) = index()?
-        .entries
-        .into_iter()
-        .find(|entry| entry.source_session_id == source_session_id)
-        .map(|entry| entry.path)
-    {
-        return Ok(path);
+impl PiReader {
+    fn clear_cache(&self) -> Result<()> {
+        self.timeline.clear()?;
+        self.summaries.clear()?;
+        *self
+            .cached_index
+            .lock()
+            .map_err(|_| anyhow!("Pi index cache lock was poisoned"))? = None;
+        Ok(())
     }
 
-    find_session_file(source_session_id)
+    // 索引：指纹就是新鲜度（root 由实例本身表达，不再另存 source_key）。
+    fn index(&self) -> Result<Vec<SessionFileEntry>> {
+        let files = enumerate_pi_files(&self.sessions_root)?;
+        let fingerprint = sessions_fingerprint(&files)?;
+
+        if let Some(entry) = self
+            .cached_index
+            .lock()
+            .map_err(|_| anyhow!("Pi index cache lock was poisoned"))?
+            .as_ref()
+            .filter(|entry| entry.fingerprint == fingerprint)
+        {
+            return Ok(entry.entries.clone());
+        }
+
+        let mut entries = files
+            .into_iter()
+            .filter_map(|path| {
+                let header = read_header(&path).ok()?;
+                let sort_timestamp = file_mtime(&path).ok()?;
+                Some(SessionFileEntry {
+                    source_session_id: header.id,
+                    path,
+                    sort_timestamp,
+                    summary: None,
+                })
+            })
+            .collect::<Vec<_>>();
+        super::sort_entries(&mut entries);
+
+        let entry = CachedIndex {
+            fingerprint,
+            entries,
+        };
+        let entries = entry.entries.clone();
+        *self
+            .cached_index
+            .lock()
+            .map_err(|_| anyhow!("Pi index cache lock was poisoned"))? = Some(entry);
+        Ok(entries)
+    }
+
+    // 三级摘要：内存 → SQLite 持久层 → 整文件解析，回填逐级进行（引擎部件）。
+    fn summary(&self, path: &Path) -> Result<SessionSummary> {
+        self.summaries.load(path, parse_full_summary)
+    }
+
+    fn timeline(&self, path: &Path) -> Result<MemberTimeline> {
+        self.timeline.load(
+            crate::support::fs::path_key(path),
+            file_mtime(path)?,
+            || {
+                let document = read_document(path)?;
+                Ok(build_timeline(&document.header, &document.entries))
+            },
+        )
+    }
+
+    // id → transcript 路径的内部解析:索引反查(header id)未命中再线性扫目录。
+    fn resolve_session_path(&self, source_session_id: &str) -> Result<PathBuf> {
+        self.index()?
+            .into_iter()
+            .find(|entry| entry.source_session_id == source_session_id)
+            .map(|entry| entry.path)
+            .or_else(|| {
+                enumerate_pi_files(&self.sessions_root)
+                    .ok()?
+                    .into_iter()
+                    .find(|path| {
+                        read_header(path)
+                            .map(|header| header.id == source_session_id)
+                            .unwrap_or(false)
+                    })
+            })
+            .ok_or_else(|| anyhow!("Could not find Pi session file for {source_session_id}"))
+    }
 }
 
 pub(crate) fn root() -> Result<PathBuf> {
@@ -195,25 +302,32 @@ fn expand_configured_path(value: &str) -> Result<PathBuf> {
     Ok(resolve_configured_path(value, &cwd, &home))
 }
 
-pub(crate) fn delete_session(source_session_id: &str) -> Result<()> {
-    let path = resolve_session_path(source_session_id)?;
-    let sessions_root_path = sessions_root()?;
-    let canonical_sessions_root =
-        crate::support::fs::canonicalize(&sessions_root_path).unwrap_or(sessions_root_path);
-    let target = crate::support::fs::canonicalize(&path)
-        .with_context(|| format!("Failed to resolve Pi session {}", path.display()))?;
-    if !target.starts_with(&canonical_sessions_root)
-        || target.extension().and_then(|ext| ext.to_str()) != Some("jsonl")
-    {
-        bail!(
-            "Refusing to delete a file outside the Pi sessions directory: {}",
-            path.display()
-        );
-    }
+impl PiReader {
+    fn delete_session(&self, source_session_id: &str) -> Result<()> {
+        let path = self.resolve_session_path(source_session_id)?;
+        let canonical_sessions_root = crate::support::fs::canonicalize(&self.sessions_root)
+            .unwrap_or_else(|_| self.sessions_root.clone());
+        let target = crate::support::fs::canonicalize(&path)
+            .with_context(|| format!("Failed to resolve Pi session {}", path.display()))?;
+        if !target.starts_with(&canonical_sessions_root)
+            || target.extension().and_then(|ext| ext.to_str()) != Some("jsonl")
+        {
+            bail!(
+                "Refusing to delete a file outside the Pi sessions directory: {}",
+                path.display()
+            );
+        }
 
-    fs::remove_file(&path).with_context(|| format!("Failed to delete {}", path.display()))?;
-    prune_empty_parents(sessions_root()?, path.parent());
-    BACKEND.clear_cache()
+        fs::remove_file(&path).with_context(|| format!("Failed to delete {}", path.display()))?;
+        // 显式配置的会话根不能被 prune 掉（保护在 prune_empty_parents 内）。
+        prune_empty_parents(self.sessions_root.clone(), path.parent());
+        self.clear_cache()
+    }
+}
+
+// sources 注册表要的函数指针：经 static 前置取实例后删除。
+pub(crate) fn delete_session(source_session_id: &str) -> Result<()> {
+    BACKEND.reader()?.delete_session(source_session_id)
 }
 
 // Pi 的删除单位就是单个 transcript 文件,预演与执行一致。
@@ -223,44 +337,6 @@ pub(crate) fn delete_plan(overview: &SessionOverview) -> Result<Vec<DeletePlanAc
         .iter()
         .map(|path| DeletePlanAction::RemoveFile { path: path.clone() })
         .collect())
-}
-
-fn index() -> Result<PiIndexCacheEntry> {
-    let sessions_root = sessions_root()?;
-    let source_key = sessions_root.display().to_string();
-    let files = enumerate_pi_files(&sessions_root)?;
-    let fingerprint = sessions_fingerprint(&files)?;
-
-    if let Some(entry) = lock_index_cache()?
-        .as_ref()
-        .filter(|entry| entry.source_key == source_key && entry.fingerprint == fingerprint)
-        .cloned()
-    {
-        return Ok(entry);
-    }
-
-    let mut entries = files
-        .into_iter()
-        .filter_map(|path| {
-            let header = read_header(&path).ok()?;
-            let sort_timestamp = file_mtime(&path).ok()?;
-            Some(SessionFileEntry {
-                source_session_id: header.id,
-                path,
-                sort_timestamp,
-                summary: None,
-            })
-        })
-        .collect::<Vec<_>>();
-    super::sort_entries(&mut entries);
-
-    let entry = PiIndexCacheEntry {
-        source_key,
-        fingerprint,
-        entries,
-    };
-    *lock_index_cache()? = Some(entry.clone());
-    Ok(entry)
 }
 
 fn enumerate_pi_files(root: &Path) -> Result<Vec<PathBuf>> {
@@ -324,52 +400,6 @@ fn read_header(path: &Path) -> Result<PiHeader> {
         version,
         value,
     })
-}
-
-fn find_session_file(source_session_id: &str) -> Result<PathBuf> {
-    enumerate_pi_files(&sessions_root()?)?
-        .into_iter()
-        .find(|path| {
-            read_header(path)
-                .ok()
-                .is_some_and(|header| header.id == source_session_id)
-        })
-        .ok_or_else(|| anyhow!("Could not find Pi session file for {source_session_id}"))
-}
-
-fn cached_summary(path: &Path) -> Result<SessionSummary> {
-    let key = crate::support::fs::path_key(path);
-    let updated_at = file_mtime(path)?;
-
-    if let Some(summary) = lock_summary_cache()?
-        .get(&key)
-        .filter(|entry| entry.updated_at == updated_at)
-        .map(|entry| entry.summary.clone())
-    {
-        return Ok(summary);
-    }
-
-    if let Some(summary) = super::summary_cache::load(SourceApp::Pi, path, updated_at) {
-        lock_summary_cache()?.insert(
-            key,
-            PiSummaryCacheEntry {
-                updated_at,
-                summary: summary.clone(),
-            },
-        );
-        return Ok(summary);
-    }
-
-    let summary = parse_full_summary(path)?;
-    lock_summary_cache()?.insert(
-        key,
-        PiSummaryCacheEntry {
-            updated_at,
-            summary: summary.clone(),
-        },
-    );
-    super::summary_cache::store(SourceApp::Pi, path, updated_at, &summary);
-    Ok(summary)
 }
 
 fn parse_full_summary(path: &Path) -> Result<SessionSummary> {
@@ -1111,17 +1141,6 @@ fn sanitize_pi_user_blocks(blocks: Vec<ContentBlock>) -> Vec<ContentBlock> {
             .then_some(block)
         })
         .collect()
-}
-
-fn cached_timeline(path: &Path) -> Result<MemberTimeline> {
-    PI_TIMELINE_CACHE.load(
-        crate::support::fs::path_key(path),
-        file_mtime(path)?,
-        || {
-            let document = read_document(path)?;
-            Ok(build_timeline(&document.header, &document.entries))
-        },
-    )
 }
 
 fn resolve_configured_path(value: &str, cwd: &Path, home: &Path) -> PathBuf {
