@@ -13,7 +13,6 @@ export * from "./McpTargetInspection";
 export * from "./McpTargetMutationResult";
 export * from "./McpTargetPreviewResult";
 export * from "./McpTransport";
-export * from "./PathInspection";
 export * from "./ProjectConfigView";
 export * from "./ProjectInspection";
 export * from "./ProjectMutationInput";

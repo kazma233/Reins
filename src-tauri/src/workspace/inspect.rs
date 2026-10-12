@@ -7,9 +7,9 @@ use serde_json::Value as JsonValue;
 
 use super::mcp_formats::mcp_format_writer;
 use super::{
-    AgentTargetId, McpConfigType, McpInspection, McpTargetInspection, PathInspection,
-    ProjectInspection, ResolvedManagerConfig, ResolvedMcpConfig, ResolvedTargetConfig,
-    SkillDirLinkView, TargetInspection, TargetRef, WorkspaceInspection, parse_manager_config,
+    AgentTargetId, McpConfigType, McpInspection, McpTargetInspection, ProjectInspection,
+    ResolvedManagerConfig, ResolvedMcpConfig, ResolvedTargetConfig, SkillDirLinkView,
+    TargetInspection, TargetRef, WorkspaceInspection, parse_manager_config,
     read_existing_mcp_entries,
 };
 use crate::support::environment::Environment;
@@ -52,17 +52,9 @@ pub(crate) fn inspect_app_state_document(
         .values()
         .map(|target| TargetInspection {
             id: target.id.clone(),
-            skill_dir: PathInspection {
-                path: super::display_path(&target.skill_dir),
-                exists: target.skill_dir.exists(),
-            },
             skill_dir_link: link_of(&target.id.0).map(|(link, target)| SkillDirLinkView {
                 linked_target_id: link.linked_target_id.clone(),
                 link_target: super::display_path(target),
-            }),
-            config_path: target.config_path.as_ref().map(|path| PathInspection {
-                path: super::display_path(path),
-                exists: path.exists(),
             }),
         })
         .collect();
@@ -79,10 +71,6 @@ pub(crate) fn inspect_app_state_document(
         .values()
         .map(|project| ProjectInspection {
             id: project.id.clone(),
-            path: PathInspection {
-                path: super::display_path(&project.project_path),
-                exists: project.project_path.exists(),
-            },
             agents: project
                 .agents
                 .values()
@@ -94,19 +82,11 @@ pub(crate) fn inspect_app_state_document(
                     .composite_id();
                     TargetInspection {
                         id: target.id.clone(),
-                        skill_dir: PathInspection {
-                            path: super::display_path(&target.skill_dir),
-                            exists: target.skill_dir.exists(),
-                        },
                         skill_dir_link: link_of(&composite_id).map(|(link, link_target)| {
                             SkillDirLinkView {
                                 linked_target_id: link.linked_target_id.clone(),
                                 link_target: super::display_path(link_target),
                             }
-                        }),
-                        config_path: target.config_path.as_ref().map(|path| PathInspection {
-                            path: super::display_path(path),
-                            exists: path.exists(),
                         }),
                     }
                 })
@@ -161,7 +141,7 @@ fn inspect_mcp_target(
 
     // 落点状态只有「有没有找到同名条目」两态：agent 与 MCP 都没有启停开关，
     // 配置在盘上就是生效的。
-    let (state, detail, config_exists) = if let Some(config_path) = config_path {
+    let (state, detail) = if let Some(config_path) = config_path {
         match read_existing_mcp_entries_cached(mcp_entry_cache, target, config_path, env) {
             Ok(existing) => {
                 // 条目 key 的归类由各 config type 的 writer 声明（dsh 为清洗后
@@ -177,19 +157,14 @@ fn inspect_mcp_target(
                     "present" => "目标配置里已经存在同名条目。".to_string(),
                     _ => "目标配置里还没有同名条目。".to_string(),
                 };
-                (state, detail, config_path.exists())
+                (state, detail)
             }
-            Err(error) => (
-                "error".to_string(),
-                format!("读取目标配置失败：{error}"),
-                config_path.exists(),
-            ),
+            Err(error) => ("error".to_string(), format!("读取目标配置失败：{error}")),
         }
     } else {
         (
             "unconfigured".to_string(),
             "当前 target 还没有 MCP 配置文件路径。".to_string(),
-            false,
         )
     };
 
@@ -199,8 +174,6 @@ fn inspect_mcp_target(
             TargetRef::Global(_) => None,
             TargetRef::Project { project_id, .. } => Some(project_id.clone()),
         },
-        config_path: config_path.map(|path| super::display_path(path)),
-        config_exists,
         state,
         detail,
     })

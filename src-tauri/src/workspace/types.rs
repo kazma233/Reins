@@ -333,7 +333,6 @@ pub(crate) struct WorkspaceInspection {
 #[ts(export, export_to = "../../src/features/workspace/generated/")]
 pub(crate) struct ProjectInspection {
     pub(crate) id: String,
-    pub(crate) path: PathInspection,
     pub(crate) agents: Vec<TargetInspection>,
 }
 
@@ -342,20 +341,10 @@ pub(crate) struct ProjectInspection {
 #[ts(export, export_to = "../../src/features/workspace/generated/")]
 pub(crate) struct TargetInspection {
     pub(crate) id: AgentTargetId,
-    pub(crate) skill_dir: PathInspection,
     // 落点是软链接时的归属：谁提供内容、文件实际在哪。列表视图据此提示
     // 「这个落点不是它自己的目录」，与同步弹窗同一个数据源头。
     #[ts(optional = nullable)]
     pub(crate) skill_dir_link: Option<SkillDirLinkView>,
-    pub(crate) config_path: Option<PathInspection>,
-}
-
-#[derive(Clone, Debug, Serialize, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../src/features/workspace/generated/")]
-pub(crate) struct PathInspection {
-    pub(crate) path: String,
-    pub(crate) exists: bool,
 }
 
 #[derive(Clone, Debug, Serialize, TS)]
@@ -374,8 +363,6 @@ pub(crate) struct McpTargetInspection {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[ts(optional = nullable)]
     pub(crate) project_id: Option<String>,
-    pub(crate) config_path: Option<String>,
-    pub(crate) config_exists: bool,
     pub(crate) state: String,
     pub(crate) detail: String,
 }

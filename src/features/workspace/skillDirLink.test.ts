@@ -21,27 +21,20 @@ describe("target list skill dir attribution", () => {
         targets: [
           {
             id: "codex",
-            skillDir: { path: "/home/.codex/skills", exists: true },
             skillDirLink: null,
-            configPath: null,
           },
           {
             id: "alias",
-            skillDir: { path: "/home/alias/skills", exists: true },
             skillDirLink: { linkedTargetId: "codex", linkTarget: "/home/.codex/skills" },
-            configPath: null,
           },
         ],
         projects: [
           {
             id: "my-app",
-            path: { path: "/code/my-app", exists: true },
             agents: [
               {
                 id: "claude",
-                skillDir: { path: "/code/my-app/.claude/skills", exists: true },
                 skillDirLink: { linkedTargetId: null, linkTarget: "/external/skills" },
-                configPath: null,
               },
             ],
           },
