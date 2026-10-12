@@ -106,6 +106,10 @@ const groups = computed(() => groupSyncTargets(props.targets));
             <span v-if="skillDirOwnerLabel(target)" class="manager-sync-target-row__link">
               {{ skillDirOwnerLabel(target) }}
             </span>
+            <!-- 链接指向的原始目的地：让用户知道这个别名到底挂在哪儿。 -->
+            <span v-if="target.skillDirLinkTarget" class="manager-sync-target-row__link">
+              {{ target.skillDirLinkTarget }}
+            </span>
           </span>
         </label>
 

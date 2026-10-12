@@ -50,12 +50,16 @@ describe("target list skill dir attribution", () => {
     );
 
     expect(skillDirLinkLookup(map, "codex")).toBeNull();
-    expect(skillDirLinkLookup(map, "alias")).toEqual({ note: "内容属 codex" });
+    expect(skillDirLinkLookup(map, "alias")).toEqual({
+      note: "内容属 codex",
+      place: "/home/.codex/skills",
+    });
     // 项目级按 `project:agent` 取，与后端 inspection 的 id 口径一致；链接另一端
     // 不是受管 target 时也要有说明，否则用户看不到它为什么不参与同步。
-    // 叫不出属主时，路径是唯一能回答「内容在哪」的信息。
+    // 叫不出属主时没有归属文案，但链接目的地照样给出：用户仍需要知道它指向哪。
     expect(skillDirLinkLookup(map, "my-app:claude")).toEqual({
-      note: "内容在 /external/skills",
+      note: null,
+      place: "/external/skills",
     });
   });
 

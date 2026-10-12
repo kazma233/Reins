@@ -73,13 +73,10 @@ export function skillDirIsAlias(target: SyncTargetOption): boolean {
   return Boolean(target.skillDirLinkTarget ?? target.linkedTargetId);
 }
 
-// 该 target 的技能目录属于谁：能命名就写属主的地址，否则写链接指向的目录
-// （叫不出名字时，路径是唯一能回答「内容在哪」的信息）。
+// 该 target 的技能目录属于谁；叫不出属主时为空（此时只有链接目的地说得上话）。
 export function skillDirOwnerLabel(target: SyncTargetOption): string | null {
-  if (!skillDirIsAlias(target)) return null;
-  return target.linkedTargetId
-    ? `内容属 ${target.linkedTargetId}`
-    : `内容在 ${target.skillDirLinkTarget}`;
+  if (!target.linkedTargetId) return null;
+  return `内容属 ${target.linkedTargetId}`;
 }
 
 // 能被勾选的 target：落点是软链接（整目录继承或指向别处）的都不参与同步选择。

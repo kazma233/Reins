@@ -4,7 +4,10 @@ import type { WorkspaceInspection } from "./generated/WorkspaceInspection";
 import type { SkillDirLinkView } from "./generated/SkillDirLinkView";
 
 export type SkillDirLinkLookup = {
-  note: string;
+  // 属主地址（叫不出属主时为空）。
+  note: string | null;
+  // 链接指向的原始目的地：显示给用户的是「这个链接指向哪里」。
+  place: string;
 };
 
 // 目标列表上的落点归属：全局 target 用 agent id，项目级用 `project:agent`，
@@ -25,9 +28,8 @@ export function buildSkillDirLinkMap(
   return map;
 }
 
-// 归属文案：能命名就写属主的地址，否则写链接指向的目录。与同步弹窗同一口径
-// （都取自后端的落点归属）。行里已经有了自己的落点路径，所以这里不再重复
-// 「文件实际在哪」——属主地址本身已经回答了内容归谁。
+// 落点归属：属主地址与链接的原始目的地分开给，界面各自成行——属主回答「内容归
+// 谁」，目的地回答「这个链接指向哪里」。不再合成一句话，也不再省略目的地。
 export function skillDirLinkLookup(
   map: Map<string, SkillDirLinkView>,
   targetId: string,
@@ -35,7 +37,8 @@ export function skillDirLinkLookup(
   const link = map.get(targetId);
   if (!link) return null;
   return {
-    note: link.linkedTargetId ? `内容属 ${link.linkedTargetId}` : `内容在 ${link.linkTarget}`,
+    note: link.linkedTargetId ? `内容属 ${link.linkedTargetId}` : null,
+    place: link.linkTarget,
   };
 }
 
