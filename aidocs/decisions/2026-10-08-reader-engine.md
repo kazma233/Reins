@@ -8,7 +8,7 @@
 
 架构评审候选 2：7 个会话读取器各自复制约 250-350 行机械样板（缓存 static、锁助手、family 管道包装、分页五元组包装、SessionReader impl），且 static 单例 + 路径从 env 推导迫使全部 reader 测试共享一把全局锁并突变进程 HOME（TestEnvGuard），无法并行。逐 reader 解剖发现三个与「7 份机械复制」假设的偏差，决定了范围修正：
 
-- **grokbuild 根本不落这套模板**（零缓存 static、events 流式分页是刻意的内存契约、family index 每次全量重建）——完全不迁。
+- **grokbuild 根本不落这套模板**（零缓存 static、events 流式分页是刻意的内存契约、family index 每次全量重建）——完全不迁。（2026-10-12 更新：「每次全量重建」已过时——grokbuild 加了指纹门控的族索引缓存、失效自管，但**不迁引擎的决定不变**，见 `2026-10-12-grokbuild-index-cache.md`；「全量重建 ≠ 无缓存」：重建成本由指纹门控，不再由域外缓存政策决定。）
 - **pi 没有 family**（条目列表索引、无 summary 条目、双半缓存要求两半同时命中）——不进引擎，只复用部件。
 - **dsh 一个 reader 两种失效口径**（index 用指纹串、timeline 用 mtime）+ **zstd 双解码缺陷**（messages/events 两个 loader 对同一多帧转录各完整解码一遍）。
 
@@ -21,7 +21,7 @@ interface 形状经 design-it-twice 三方案对比（极简数据表 / 16 钩�
 3. **失效口径值化**：`Freshness::Stamp(i64) | Fingerprint(String)`，engine 只做相等比较、不假设单调性——dsh 的双口径（index 指纹 / timeline mtime）由此表达且刻意保留。
 4. **timeline 单 loader 双半**：`load_members` 每成员一次扫描/查询产出 (messages, events)，marker 注入、session_id 兜底、(timestamp, id) 终排由引擎统一执行——顺带修复 dsh 的 zstd 双解码（冷读一个 family 解码次数减半）。marker 外壳（正文/摘要/kind/基底 payload）由引擎组装，读取器只给 `MarkerShape`（id 方案 + message/event 两侧 extras，dsh 的不对称 payload 由此表达）。
 5. **三派口径显式枚举**：`OverviewCounts`（Timeline 默认 / Omitted / Declared+引擎补 marker 数）、`SummaryKind`（RootTranscript 默认三级缓存 / Rows 行直构）、`RowErrorPolicy`（SkipSilently / SkipLogged / Abort）。
-6. **迁移范围**：codex（8ff1bdf）→ claude（bebfed4）→ opencode+zcode（f1074ff）→ dsh（3bc80aa）全进引擎；pi（25b3eb6）只换部件（DualHalfCache、message_page/event_page；摘要缓存保持现状——它是最后一份拷贝且全局持久层的 HOME 重开语义要保留）；grokbuild 永不迁移；delete 留在各 reader、结尾调 `BACKEND.engine()?.clear()?`。
+6. **迁移范围**：codex（8ff1bdf）→ claude（bebfed4）→ opencode+zcode（f1074ff）→ dsh（3bc80aa）全进引擎；pi（25b3eb6）只换部件（DualHalfCache、message_page/event_page；摘要缓存保持现状——它是最后一份拷贝且全局持久层的 HOME 重开语义要保留）；grokbuild 永不迁移（2026-10-12 补记：不迁指不进 `FamilySpec` 机械；它此后有了自己的指纹门控索引缓存，见 `2026-10-12-grokbuild-index-cache.md`）；delete 留在各 reader、结尾调 `BACKEND.engine()?.clear()?`。
 7. **持久缓存随实例注入**：summary_cache.rs 增实例级 `SummaryDb { dir }`；生产经 FamilyReader 解析 `~/.reins`（换根即换库），测试经 `engine_at(root, store_dir)` 传临时目录。**计划中的 v2→v3 版本号 bump 未执行**：核实发现持久层键本来就是 canonical path_key（display 串只存在于内存层）、解析语义未变，bump 只会让用户白吃一次冷缓存。
 8. **family_timeline.rs 收窄为聚合层**：load-through 缓存机器（TimelineCacheEntry / cached_family_* / store_timeline_items）与 family_index.rs 的 FamilyIndexCacheEntry 删除——六家读取器全迁后无调用方；`apply_summary_aggregates` / `family_agents` / `agent_messages` / `sum_token_usage` / `FamilyAgentLabel` 保留，由引擎调用。
 

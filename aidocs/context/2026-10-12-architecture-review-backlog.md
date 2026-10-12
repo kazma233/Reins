@@ -1,7 +1,7 @@
 # 架构评审待办清单
 
 - 日期：2026-10-12
-- 状态：待办（第 1、2、3、4、6 项已完成；剩余：C7）
+- 状态：**清单全部完成**（第 1、2、3、4、6、7、8 项已完成；评审第 2 轮的其余候选见当轮报告卡 08/09 与小项清单）
 - 实施顺序的建议依据：C11 最小（一条断言把注释变成被守卫的事实）；C14 收益/风险比最高且清单自己这么排（mcp 表单照抄 providers 的已验证形态，行级校验目前零直接测试）；C4 最重但解掉它之后 session 域测试才可能并行（18 处 `TestEnvGuard` 把测试钉在进程 HOME 上）
 
 来源：2026-10-11 的架构加深评审（workspace / session / providers / 前端四路扫描 + ADR 交叉验证）。已完成项见文末；以下是剩余候选。文中行号为评审时快照，实施前以当前代码为准。
@@ -116,8 +116,9 @@
 ### 9. C7 · grokbuild 的列表成本由域外缓存政策决定
 
 - 域：session；强度：Speculative
-- 问题：六家来源五家自管 freshness，唯 grokbuild 的成本取决于域外两个决定（`state/session_index.rs` 的 clear 调用点、`commands.rs:62` 的 refresh 默认值）；对 SessionIndexState 做删除测试，它主要是 grokbuild 放错位置的索引缓存。
-- 方向：grokbuild 管自己的失效（哪怕只是自有缓存实例）。前置：先确认全量重建成本是否真实可感；若做，需在 reader-engine ADR 决策 6 补记「全量重建 ≠ 无缓存」。
+- 状态：**已完成**（2026-10-12，见 `decisions/2026-10-12-grokbuild-index-cache.md`）。
+- 问题（修复前）：六家来源五家自管 freshness，唯 grokbuild 的成本取决于域外两个决定（`state/session_index.rs` 的 clear 调用点、`commands.rs:62` 的 refresh 默认值）；详情路径（翻页、概览、子代理消息）每次读取都全量解析整棵 `~/.grok/sessions` 树，SessionIndexState 根本不覆盖。
+- 已做：`GrokBuildBackend` 改按根 slot 缓存实例，`GrokIndex` 持指纹门控的族索引缓存（summary/history/meta 三类文件的路径+mtime+大小），外部写入失配即重建、删除在动作发生地显式清、clear_cache 覆写接通用流程；`family_index()` 转发，八处调用点零改动。不迁引擎的决定不变（成员惰性是刻意契约），reader-engine ADR 已补记。`sessions_fingerprint` 三份拷贝（pi/dsh/grok）顺带收单份。`SessionIndexState` 与 refresh 默认值保留不动。性能收益未做基准测量，标注为结构性。
 
 ### 10. C11 · codex apply 写序不变量测试 · 已完成
 
