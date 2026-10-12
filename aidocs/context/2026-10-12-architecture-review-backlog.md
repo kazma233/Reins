@@ -201,11 +201,11 @@
 
 ## 小项（不单独立项，顺手做）
 
-- providers 能力表 `ModelField::ReasoningLevels` 零适配器引用（`apps/mod.rs:66-79`）——2026-09-24 plan 声明的 unverified 项，验证后填充或删除。
+- providers 能力表 `ModelField::ReasoningLevels` 零适配器引用——**已删**（2026-10-12，连带 `ContextWindow` 同为零构造；未来需要加回是一行 match 臂）。
 - session 域的同类环境解析：`session/pi.rs`、`session/grokbuild.rs` 直接读 env，`session/codex.rs` / `claude_code.rs` / `dsh.rs` 各自拼默认目录（与 `support::environment` 同批事实）。C10 只覆盖 agents / workspace / providers 三处；session 的会话存储读取路径要收敛应单独立项，见 ADR「未纳入本次」。
 - `CLAUDE_CONFIG_DIR` 的 **skills 落点**是目前仅剩的 `unverified`（清单按 `<CFG>/skills` 实现）：`claude skills list` 未登录不可用，畸形 skill + `--debug-file` 在 `--version` 下不产生日志。核对方式：登录后把 skill 放到 `<CFG>/skills` 观察是否被发现。
-- `PathInspection.exists` 前端零渲染（`inspection.targets[].skillDir.exists`、`projects[].agents[].skillDir.exists` 都没被读）：落点目录不存在这件事界面不说。补提示属产品决定（可能是空目录待安装，也可能是配置写错），先记着不动。
-- `model.ts:72` 与 `workspace/styles.css:72` 残留 `--color-text-muted` / `--color-muted` 两个令牌，`src/styles.css` 里只定义了 `--color-muted`；工作区那份引用不存在的令牌（浏览器静默忽略）。顺手清掉或补定义。
+- `PathInspection.exists` 前端零渲染——**已摘除**（2026-10-12）：消费面逐点核实后把五个零消费字段（TargetInspection.skillDir/configPath、ProjectInspection.path、McpTargetInspection.configPath/configExists）与 `PathInspection` 结构体一起从契约摘除。「目录不存在」若要提示（空目录待安装还是配置写错，语义待定）属产品决定，届时按需重新计算。
+- `workspace/styles.css` 的 is-readonly 色引用不存在的 `--color-text-muted` 令牌——**已修**（2026-10-12，改指已定义的 `--color-muted`；model.ts 部分经复核早已不存在）。
 
 ## 已完成（2026-10-11 ~ 10-12，作为上下文保留）
 

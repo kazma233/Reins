@@ -21,6 +21,17 @@
 6. **roundtrip 守卫**：`src-tauri/src/tests/provider_dialects.rs` 按适配器遍历——支持档位/协议的 `parse(spell(x)) == x`（有损折叠按 `lossy` 声明豁免，如 grok max→xhigh 反读回 xhigh）、dsh off 回归、pi/dsh 同实例、opencode v1 npm 包名只读别名、未知拼写留空。
 7. **映射取值不变**：2026-09-24 plan §6 的各工具映射取值（Grok max→xhigh、Pi off→off、OpenCode 预算阶梯、Claude 收窄值域、codex off 不放行）全部原样保留，本次只收编声明位置；该 plan 中「`reasoning_effort_write` 必须与 apply 同源」的注释不变量由方言表结构性与 roundtrip 测试替代。
 
+## 2026-10-12 补记:写入路径闭合
+
+roundtrip 守卫只测「方言表自身 spell↔parse 互逆」,测不到 apply 真的用了
+spell——codex 三处(catalog 的档位清单与默认档、config.toml 的
+model_reasoning_effort)与 opencode 两处(reasoningEffort 的写与读)当时
+仍用 `ReasoningLevel::as_str`/`parse` 直拼,IDENTITY 方言下数值恰好相等,
+不是 live bug,但方言表一旦出现非恒等拼写即脱钩(重演 dsh off→none)。
+现已全部改走 `dialect().spell`/`dialect().parse`(自由函数由 apply/inspect
+传入),守卫范围闭合;pi 的 thinkingLevelMap 值侧是独立第二套拼写(API
+effort),已在代码注释声明不得顺手统一。
+
 ## 不在本次范围
 
 - grok 的 `grok_base_url` 折算与 `grok_providers_view` 克隆视图（base_url 比较口径问题，属条目归类策略，另行处理）。
