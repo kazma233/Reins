@@ -595,6 +595,7 @@ fn parse_manager_config(
         if project_id_trimmed.is_empty() {
             bail!("发现空的 project id。");
         }
+        validate_project_id(&project_id_trimmed)?;
         let project_path = expand_path(&raw_project.path, config_path.parent())?;
         let agent_defaults = project_agent_defaults(&project_path);
         let mut agents = BTreeMap::new();
@@ -818,6 +819,16 @@ fn normalize_patterns(patterns: &[String]) -> Vec<String> {
         .map(|pattern| pattern.trim().to_string())
         .filter(|pattern| !pattern.is_empty())
         .collect()
+}
+
+// project id 是用户可见标识，也是复合地址 `project:agent` 的前半段：含 `:`
+// 会让地址不可拆（前后端都按第一个冒号切），含 `/` 会破坏前端按展示 label 分组。
+// 校验只有这一处，写入与解析两侧都调用，坏值在解析阶段就报清楚。
+fn validate_project_id(value: &str) -> Result<()> {
+    if value.contains(':') || value.contains('/') {
+        bail!("project id 不能包含 `:` 或 `/`：{value}");
+    }
+    Ok(())
 }
 
 fn normalize_target_id(value: &str) -> Result<AgentTargetId> {

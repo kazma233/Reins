@@ -235,6 +235,7 @@ pub(crate) fn create_workspace_project_inner(
         if project_id.is_empty() {
             bail!("project id 不能为空。");
         }
+        super::validate_project_id(&project_id)?;
         if raw_config.projects.contains_key(&project_id) {
             bail!("project id 已存在：{}", project_id);
         }

@@ -1184,6 +1184,47 @@ mcps:
     Ok(())
 }
 
+// 项目 id 是复合地址的前半段：含 `:` 会让地址不可拆（前后端都按第一个冒号切），
+// 含 `/` 会破坏前端按展示 label 分组。写入与解析两侧都必须拒绝，且解析阶段就
+// 报清楚——不能等到用户点某个 target 才报「target 不存在」。
+#[test]
+fn project_id_rejects_colon_and_slash() -> Result<()> {
+    let root = TestDir::new("project-id-charset")?;
+    let store = WorkspaceConfigStore::at(root.path()).with_env(Environment::from_env());
+    fs::write(store.config_path(), "{}\n")?;
+
+    for bad in ["a:b", "web/apps"] {
+        let err = create_workspace_project_inner(
+            &store,
+            ProjectMutationInput {
+                project_id: bad.to_string(),
+                path: root.path().join("project").display().to_string(),
+                agents: vec!["codex".to_string()],
+            },
+        )
+        .expect_err("含 : 或 / 的 project id 必须被拒绝");
+        assert!(
+            err.to_string().contains("不能包含"),
+            "错误文案要说清原因：{err}"
+        );
+    }
+
+    // 手写的 config.yaml 同样在解析阶段被拦下，而不是留到寻址时才暴露。
+    fs::write(
+        store.config_path(),
+        format!(
+            "projects:\n  a:b:\n    path: {}\n    agents:\n      codex: {{}}\n",
+            root.path().join("project").display()
+        ),
+    )?;
+    let err = store
+        .parse()
+        .expect_err("解析阶段就要拒绝含 : 的 project id");
+    assert!(err.to_string().contains("不能包含"), "错误文案：{err}");
+
+    Ok(())
+}
+
 #[test]
 fn pi_mcp_apply_read_remove_roundtrip() -> Result<()> {
     let root = TestDir::new("pi-mcp-roundtrip")?;
