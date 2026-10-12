@@ -578,6 +578,98 @@ pub(super) struct ResolvedProjectConfig {
     pub(super) agents: BTreeMap<AgentTargetId, ResolvedTargetConfig>,
 }
 
+// 一个 target 的地址：全局 target 直接用 id；项目级 target 需要 (项目, agent)
+// 两段。复合 id 的**构造与拆分都只在这里**（此前 3 处组串、1 处内联拆分，
+// 「格式」没有单一所有者）。
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+pub(super) enum TargetRef {
+    Global(AgentTargetId),
+    Project {
+        project_id: String,
+        agent_id: AgentTargetId,
+    },
+}
+
+impl TargetRef {
+    // 面向 UI 与命令的稳定字符串：全局 = id，项目级 = `project:agent`。
+    pub(super) fn composite_id(&self) -> String {
+        match self {
+            TargetRef::Global(id) => id.0.clone(),
+            TargetRef::Project {
+                project_id,
+                agent_id,
+            } => format!("{project_id}:{}", agent_id.0),
+        }
+    }
+
+    // `project:agent` 拆回两段；不含分隔符时按全局 id 处理。拆出的两段在解析
+    // 阶段都经过同一套 id 规范化，调用方不需要自己做字符处理。
+    pub(super) fn parse(composite_id: &str) -> TargetRef {
+        match composite_id.split_once(':') {
+            Some((project_id, agent_id)) if !project_id.is_empty() && !agent_id.is_empty() => {
+                TargetRef::Project {
+                    project_id: project_id.to_string(),
+                    agent_id: AgentTargetId(agent_id.to_string()),
+                }
+            }
+            _ => TargetRef::Global(AgentTargetId(composite_id.to_string())),
+        }
+    }
+}
+
+// 「target 不可用」的唯一说法：调用方只需决定「报错还是记一条 warning」，
+// 不必各自措辞（此前同一个故障有三种文案、两种语言）。
+pub(super) fn target_unavailable(composite_id: &str) -> anyhow::Error {
+    anyhow::anyhow!("target 不存在：{composite_id}")
+}
+
+impl ResolvedManagerConfig {
+    // 唯一的寻址入口。调用方拿到的是配置里的真实 target，不是重新拼出来的。
+    pub(super) fn target(&self, reference: &TargetRef) -> Option<&ResolvedTargetConfig> {
+        match reference {
+            TargetRef::Global(id) => self.targets.get(id),
+            TargetRef::Project {
+                project_id,
+                agent_id,
+            } => self.projects.get(project_id)?.agents.get(agent_id),
+        }
+    }
+
+    // 复合 id 直达寻址；不存在返回 None。
+    pub(super) fn target_by_id(&self, composite_id: &str) -> Option<&ResolvedTargetConfig> {
+        self.target(&TargetRef::parse(composite_id))
+    }
+
+    // 全部 target 及其地址，顺序为「全局在前、项目按配置顺序」。枚举与批量操作
+    // 都从这里取；需要展示串时再调 composite_id，拆串只发生在 TargetRef::parse。
+    pub(super) fn target_refs(&self) -> Vec<(TargetRef, &ResolvedTargetConfig)> {
+        let global = self
+            .targets
+            .values()
+            .map(|target| (TargetRef::Global(target.id.clone()), target));
+        let project = self.projects.values().flat_map(|project| {
+            project.agents.values().map(move |target| {
+                (
+                    TargetRef::Project {
+                        project_id: project.id.clone(),
+                        agent_id: target.id.clone(),
+                    },
+                    target,
+                )
+            })
+        });
+        global.chain(project).collect()
+    }
+
+    // 同上，但带上复合 id（面向 UI / 命令的形态）。
+    pub(super) fn targets_with_ids(&self) -> Vec<(String, &ResolvedTargetConfig)> {
+        self.target_refs()
+            .into_iter()
+            .map(|(reference, target)| (reference.composite_id(), target))
+            .collect()
+    }
+}
+
 #[derive(Clone, Debug)]
 pub(super) struct ResolvedTargetConfig {
     pub(super) id: AgentTargetId,

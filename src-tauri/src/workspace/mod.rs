@@ -9,7 +9,6 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use std::os::windows::process::CommandExt;
 
 use anyhow::{Context, Result, anyhow, bail};
-use dirs::home_dir;
 
 pub(crate) mod commands;
 mod config;
@@ -194,16 +193,24 @@ fn template_targets(env: &Environment) -> Vec<TemplateTarget> {
         .collect()
 }
 
-// 模板里的全局路径写法：默认 ~ 缩写；root 被 env 重定向时固化为绝对路径
-// （判据与 GlobalRoot::resolve 同源，两者不会分叉）；清单里 `~/` 前缀的
-// 路径（codex 的 skills、claude 的 .claude.json）不随 root 重定向，恒写
-// ~ 缩写。
+// 模板里的全局路径写法：先按解析口径求出真实落点，再折回 ~ 缩写。
+// 解析只有 GlobalRoot::resolve_path 一处（与 target defaults 同一个函数），
+// 所以「模板写出的路径」与「解析后的路径」必然一致；root 被 env 重定向时
+// 求出的绝对路径不是 HOME 子路径，显示为绝对路径。
 fn template_global_path(env: &Environment, root: crate::agents::GlobalRoot, rel: &str) -> String {
-    let redirected = root.redirect().and_then(|redirect| env.value(redirect));
-    match (redirected, rel.strip_prefix("~/")) {
-        (Some(dir), None) => dir.join(rel).display().to_string(),
-        (_, Some(home_relative)) => format!("~/{home_relative}"),
-        (None, None) => format!("{}/{}", root.home_prefix(), rel),
+    let Some(resolved) = root.resolve_path(env, rel) else {
+        return format!("{}/{}", root.home_prefix(), rel);
+    };
+    // 落在 HOME 下就折回 ~ 缩写（含 home 自身），否则写绝对路径——后者正是
+    // root 被 env 重定向时的形态，用户能一眼看出该工具不受 HOME 影响。
+    match env
+        .home
+        .as_deref()
+        .and_then(|home| resolved.strip_prefix(home).ok())
+    {
+        Some(relative) if relative.as_os_str().is_empty() => "~".to_string(),
+        Some(relative) => format!("~/{}", relative.display()),
+        None => resolved.display().to_string(),
     }
 }
 
@@ -300,6 +307,12 @@ pub(crate) fn select_target_skill_directory_inner(
     path: Option<&str>,
 ) -> Result<Option<WorkspaceSelection>> {
     pick_folder(path)
+}
+
+// 测试与 inspect 用的 home 口径：与 expand_path / 清单解析同源。
+#[cfg(test)]
+pub(super) fn user_home_dir() -> Option<PathBuf> {
+    crate::support::fs::user_home_dir()
 }
 
 pub(crate) fn select_target_mcp_config_file_inner(
@@ -644,17 +657,7 @@ fn resolve_target_from_id<'a>(
     config: &'a ResolvedManagerConfig,
     composite_id: &str,
 ) -> Option<&'a ResolvedTargetConfig> {
-    if let Some(target) = config.targets.get(&AgentTargetId(composite_id.to_string())) {
-        return Some(target);
-    }
-    if let Some(colon_pos) = composite_id.find(':') {
-        let project_id = &composite_id[..colon_pos];
-        let agent_id = &composite_id[colon_pos + 1..];
-        if let Some(project) = config.projects.get(project_id) {
-            return project.agents.get(&AgentTargetId(agent_id.to_string()));
-        }
-    }
-    None
+    config.target_by_id(composite_id)
 }
 
 // ---------------------------------------------------------------------------
@@ -669,7 +672,11 @@ fn expand_path(value: &str, base_dir: Option<&Path>) -> Result<PathBuf> {
     }
 
     if let Some(stripped) = trimmed.strip_prefix("~/") {
-        let home = home_dir().ok_or_else(|| anyhow!("无法解析 HOME 目录。"))?;
+        // 与清单解析、providers 路径同一个 home 口径（support::fs::user_home_dir
+        // 支持测试覆盖）；直连 dirs::home_dir 会让 Windows 忽略 HOME，测试与
+        // 生产解析出两个家目录。
+        let home =
+            crate::support::fs::user_home_dir().ok_or_else(|| anyhow!("无法解析 HOME 目录。"))?;
         return Ok(home.join(stripped));
     }
 

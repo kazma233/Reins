@@ -9,7 +9,8 @@ use super::mcp_formats::mcp_format_writer;
 use super::{
     AgentTargetId, McpConfigType, McpInspection, McpTargetInspection, PathInspection,
     ProjectInspection, ResolvedManagerConfig, ResolvedMcpConfig, ResolvedTargetConfig,
-    TargetInspection, WorkspaceInspection, parse_manager_config, read_existing_mcp_entries,
+    TargetInspection, TargetRef, WorkspaceInspection, parse_manager_config,
+    read_existing_mcp_entries,
 };
 use crate::support::environment::Environment;
 
@@ -91,31 +92,19 @@ fn inspect_mcp(
     mcp_entry_cache: &mut McpEntryCache,
     env: &Environment,
 ) -> Result<McpInspection> {
+    // 一次遍历全部 target：复合 id 由寻址层给出，项目归属从 id 拆回来，
+    // 本地不再拼串（此前这里与其它两处各拼一份 `project:agent`）。
     let mut targets = Vec::new();
-
-    for target in config.targets.values() {
+    // 遍历一次全部 target：展示用的复合 id 与项目归属都由 TargetRef 给出，
+    // 这里不再自己拼 `project:agent`。
+    for (reference, target) in config.target_refs() {
         targets.push(inspect_mcp_target(
             mcp,
             target,
-            None,
-            None,
+            &reference,
             mcp_entry_cache,
             env,
         )?);
-    }
-
-    for project in config.projects.values() {
-        for (agent_id, target) in &project.agents {
-            let composite_id = AgentTargetId(format!("{}:{}", project.id, agent_id));
-            targets.push(inspect_mcp_target(
-                mcp,
-                target,
-                Some(composite_id),
-                Some(&project.id),
-                mcp_entry_cache,
-                env,
-            )?);
-        }
     }
 
     Ok(McpInspection {
@@ -127,8 +116,7 @@ fn inspect_mcp(
 fn inspect_mcp_target(
     mcp: &ResolvedMcpConfig,
     target: &ResolvedTargetConfig,
-    composite_id: Option<AgentTargetId>,
-    project_id: Option<&str>,
+    reference: &TargetRef,
     mcp_entry_cache: &mut McpEntryCache,
     env: &Environment,
 ) -> Result<McpTargetInspection> {
@@ -169,8 +157,11 @@ fn inspect_mcp_target(
     };
 
     Ok(McpTargetInspection {
-        target_id: composite_id.unwrap_or_else(|| target.id.clone()),
-        project_id: project_id.map(|s| s.to_string()),
+        target_id: AgentTargetId(reference.composite_id()),
+        project_id: match reference {
+            TargetRef::Global(_) => None,
+            TargetRef::Project { project_id, .. } => Some(project_id.clone()),
+        },
         config_path: config_path.map(|path| super::display_path(path)),
         config_exists,
         state,

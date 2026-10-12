@@ -13,7 +13,7 @@ fn grokbuild_defaults_template_and_preset_agree() -> Result<()> {
     let target = resolve_target_from_id(&config, "grokbuild").unwrap();
     let root = std::env::var_os("GROK_HOME")
         .map(PathBuf::from)
-        .unwrap_or_else(|| home_dir().unwrap().join(".grok"));
+        .unwrap_or_else(|| user_home_dir().unwrap().join(".grok"));
     assert_eq!(target.skill_dir, root.join("skills"));
     assert_eq!(target.config_path, Some(root.join("config.toml")));
     assert_eq!(target.mcp_config_prefix, "mcp_servers");

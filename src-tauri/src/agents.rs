@@ -36,6 +36,16 @@ impl GlobalRoot {
         }
     }
 
+    // 清单路径解析：`~/` 前缀以 HOME 为基准，其余以本 root 为基准。
+    // 同一工具的两种基准都合法：claude 的 skills 随 CLAUDE_CONFIG_DIR 走
+    // （root 基准），而 CLI 状态文件 .claude.json 恒在 HOME 下。
+    pub(crate) fn resolve_path(self, env: &Environment, path: &str) -> Option<PathBuf> {
+        match path.strip_prefix("~/") {
+            Some(relative) => env.home.as_ref().map(|home| home.join(relative)),
+            None => self.resolve(env).map(|root| root.join(path)),
+        }
+    }
+
     // 解析为实际根目录：重定向优先，HOME 兜底。home 走 Environment 里的
     // user_home_dir 口径，测试的 home 覆盖才能生效（Windows 上 dirs::home_dir
     // 忽略 HOME，直连会让真实家目录漏进测试）。
@@ -65,9 +75,8 @@ pub(crate) struct McpLayout {
     pub(crate) config_type: McpConfigType,
 }
 
-// 全局布局：路径相对 GlobalRoot 根；`~/` 前缀表示落在 HOME 而非 root 下
-// （codex 的 skills 与 claude 的 .claude.json：重定向只搬配置目录，这两个
-// 落点仍在 HOME）。
+// 全局布局：路径默认相对 GlobalRoot 根；`~/` 前缀表示以 HOME 为基准、不随
+// 该根的重定向搬移（codex 的 skills、claude 的 .claude.json）。
 pub(crate) struct GlobalLayout {
     pub(crate) root: GlobalRoot,
     pub(crate) skill_dir: &'static str,
@@ -152,12 +161,12 @@ pub(crate) static AGENTS: &[AgentSpec] = &[
             config_type: McpConfigType::Common,
         },
         global: GlobalLayout {
+            // 三个落点都相对配置 home：实测（2.1.285）设置 CLAUDE_CONFIG_DIR 后
+            // settings.json / .claude.json / projects / sessions 全在变量目录下，
+            // ~/.claude 只是该变量的缺省值（见 decisions/2026-10-12-global-root-env-redirect.md）。
             root: GlobalRoot::ClaudeConfigDir,
             skill_dir: "skills",
-            // CLI 状态与 MCP 条目在配置目录之外（官方目录布局）：~ 前缀表示
-            // 落在 HOME。该文件是否随 CLAUDE_CONFIG_DIR 搬移未经实测，见
-            // decisions/2026-10-12-global-root-env-redirect.md 的 unverified。
-            mcp_config_path: Some("~/.claude.json"),
+            mcp_config_path: Some(".claude.json"),
         },
         // Claude 的项目级 MCP 配置按官方约定在项目根 .mcp.json。
         project: Some(ProjectLayout {

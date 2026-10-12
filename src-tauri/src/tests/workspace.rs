@@ -614,7 +614,7 @@ fn default_config_template_parses_with_builtin_targets() -> Result<()> {
     // 模板渲染与清单解析必须用同一份重定向判据：未设变量时 codex / claude
     // 的路径都写 ~ 缩写（解析时按当前 HOME 展开），设了 env 重定向的工具
     // 才固化绝对路径。两者分叉会让首次启动生成的 config.yaml 指向别处。
-    let home = home_dir().ok_or_else(|| anyhow!("测试环境缺少 HOME"))?;
+    let home = user_home_dir().ok_or_else(|| anyhow!("测试环境缺少 HOME"))?;
     let codex = config
         .targets
         .get(&AgentTargetId("codex".to_string()))
@@ -628,7 +628,7 @@ fn default_config_template_parses_with_builtin_targets() -> Result<()> {
         .get(&AgentTargetId("claude".to_string()))
         .expect("claude target exists");
     assert_eq!(claude.skill_dir, home.join(".claude/skills"));
-    assert_eq!(claude.config_path, Some(home.join(".claude.json")));
+    assert_eq!(claude.config_path, Some(home.join(".claude/.claude.json")));
 
     assert!(
         !config
@@ -644,7 +644,7 @@ fn default_config_template_parses_with_builtin_targets() -> Result<()> {
     assert!(opencode.skill_dir.ends_with(".config/opencode/skills"));
     assert_eq!(
         opencode.config_path.as_deref(),
-        home_dir()
+        user_home_dir()
             .map(|home| home.join(".config/opencode/opencode.json"))
             .as_deref()
     );
@@ -658,7 +658,7 @@ fn default_config_template_parses_with_builtin_targets() -> Result<()> {
     assert!(zcode.skill_dir.ends_with(".zcode/skills"));
     assert_eq!(
         zcode.config_path.as_deref(),
-        home_dir()
+        user_home_dir()
             .map(|home| home.join(".zcode/cli/config.json"))
             .as_deref()
     );
@@ -675,7 +675,7 @@ fn default_config_template_parses_with_builtin_targets() -> Result<()> {
         pi.config_path,
         env.value(crate::support::environment::Redirect::PiAgentDir)
             .cloned()
-            .or_else(|| home_dir().map(|home| home.join(".pi/agent")))
+            .or_else(|| user_home_dir().map(|home| home.join(".pi/agent")))
             .map(|dir| dir.join("mcp.json"))
     );
     assert_eq!(pi.mcp_config_prefix, "mcpServers");
@@ -708,7 +708,7 @@ fn global_pi_target_without_mcp_section_falls_back_to_preset() -> Result<()> {
     let expected_pi_dir = env
         .value(crate::support::environment::Redirect::PiAgentDir)
         .cloned()
-        .or_else(|| home_dir().map(|home| home.join(".pi/agent")));
+        .or_else(|| user_home_dir().map(|home| home.join(".pi/agent")));
     assert_eq!(
         pi.config_path,
         expected_pi_dir.map(|dir| dir.join("mcp.json"))
@@ -736,7 +736,7 @@ fn target_presets_cover_builtin_agents_with_env_resolved_paths() -> Result<()> {
             .unwrap_or_else(|| panic!("缺少 {id} 预设"))
     };
 
-    let home = home_dir().ok_or_else(|| anyhow!("测试环境缺少 HOME"))?;
+    let home = user_home_dir().ok_or_else(|| anyhow!("测试环境缺少 HOME"))?;
 
     let codex = by_id("codex");
     assert_eq!(codex.label, "Codex");
@@ -763,7 +763,12 @@ fn target_presets_cover_builtin_agents_with_env_resolved_paths() -> Result<()> {
     );
     assert_eq!(
         claude.config_path.as_deref(),
-        Some(home.join(".claude.json").display().to_string().as_str())
+        Some(
+            home.join(".claude/.claude.json")
+                .display()
+                .to_string()
+                .as_str()
+        )
     );
     assert_eq!(claude.mcp_config_prefix, "mcpServers");
 
@@ -897,7 +902,7 @@ fn target_view_carries_mcp_format_example_per_config_type() {
     // 示例由 writer 的 desired 构造 + serde 序列化生成(dsh 条目的 cwd 读
     // home),需与并行 env 测试互斥。
     let _guard = TestEnvGuard::lock();
-    let home = home_dir().expect("测试环境缺少 HOME");
+    let home = user_home_dir().expect("测试环境缺少 HOME");
 
     let labels = |view: &super::TargetConfigView| {
         view.mcp_format_examples

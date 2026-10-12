@@ -89,7 +89,7 @@ fn claimed_config<'a>(
 fn dsh_defaults_preset_and_prefix_relaxation() -> Result<()> {
     // 读 ambient HOME 断言默认值,必须持全局锁防并行测试翻转 env。
     let _guard = TestEnvGuard::lock();
-    let home = home_dir().ok_or_else(|| anyhow!("测试环境缺少 HOME"))?;
+    let home = user_home_dir().ok_or_else(|| anyhow!("测试环境缺少 HOME"))?;
     let preset = target_presets_inner(&Environment::from_env())
         .into_iter()
         .find(|preset| preset.target_id.as_str() == "dsh")
@@ -223,7 +223,9 @@ fn dsh_apply_creates_patch_file_and_preview_matches() -> Result<()> {
     );
     assert_eq!(
         config.get("cwd").and_then(|v| v.as_str()),
-        home_dir().map(|home| home.display().to_string()).as_deref()
+        user_home_dir()
+            .map(|home| home.display().to_string())
+            .as_deref()
     );
     assert_eq!(
         config.get("toolCallTimeoutMs").and_then(|v| v.as_i64()),

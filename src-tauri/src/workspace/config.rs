@@ -97,6 +97,8 @@ impl WorkspaceConfigStore {
     }
 
     // pub(super): ResolvedManagerConfig stays inside the workspace module tree.
+    // 解析用 store 自带的环境：配置里写死的绝对路径与清单派生的默认值
+    // 必须落在同一个 home 口径上。
     pub(super) fn parse(&self) -> Result<ResolvedManagerConfig> {
         let raw_content = self.read_raw()?;
         parse_manager_config(&raw_content, self.config_path(), &self.0.env)

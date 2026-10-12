@@ -27,7 +27,7 @@ use super::targets::read_skill_dir_link;
 use super::types::*;
 use super::{
     display_path, expand_path, normalize_patterns, parse_manager_config, remove_empty_parent_dirs,
-    remove_existing_path, resolve_target_from_id, run_command, workspace_state_inner,
+    remove_existing_path, run_command, workspace_state_inner,
 };
 
 // Discover all skills in a source root, without applying include filters.
@@ -109,17 +109,12 @@ pub(super) fn build_sync_target_options_with_sources(
     config: &ResolvedManagerConfig,
     sources: &[SkillLinkSource],
 ) -> Result<Vec<SyncTargetOption>> {
-    // Flatten all targets into (id, skill_dir) pairs.
-    let mut flat: Vec<(String, &Path)> = Vec::new();
-    for target in config.targets.values() {
-        flat.push((target.id.to_string(), target.skill_dir.as_path()));
-    }
-    for project in config.projects.values() {
-        for (agent_id, target) in &project.agents {
-            let composite_id = format!("{}:{}", project.id, agent_id);
-            flat.push((composite_id, target.skill_dir.as_path()));
-        }
-    }
+    // 全部 target 的 (复合 id, skill_dir)：复合 id 由寻址层生成，本地不拼串。
+    let flat: Vec<(String, &Path)> = config
+        .targets_with_ids()
+        .into_iter()
+        .map(|(composite_id, target)| (composite_id, target.skill_dir.as_path()))
+        .collect();
 
     // Map each managed skill_dir (canonicalized) back to its target id, so a
     // directory link can be resolved to "which managed target it points at".
@@ -298,8 +293,9 @@ pub(crate) fn sync_source_to_targets_inner(
     for target in resolve_ids(&config, &input.target_ids)? {
         match target.skip {
             None => participating.push(target),
+            // 与报错路径同一说法，只在前面加「已跳过」这个处置结果。
             Some(TargetSkip::Missing) => {
-                warnings.push(format!("目标 {} 不存在，已跳过。", target.id))
+                warnings.push(format!("{}，已跳过。", target_unavailable(&target.id)))
             }
             Some(TargetSkip::LinkedProjectDir) => {}
         }
@@ -854,8 +850,9 @@ pub(crate) fn remove_target_skill_link_inner(
     destination_path: &str,
 ) -> Result<SkillSyncItem> {
     let config = store.parse()?;
-    let target = resolve_target_from_id(&config, target_id)
-        .ok_or_else(|| anyhow!("未找到 target：{target_id}"))?;
+    let target = config
+        .target_by_id(target_id)
+        .ok_or_else(|| target_unavailable(target_id))?;
 
     let destination = PathBuf::from(destination_path);
     // 链接归属校验与删除都在安装面：真实目录/文件一律拒绝。

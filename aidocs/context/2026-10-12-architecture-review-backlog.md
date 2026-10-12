@@ -77,6 +77,12 @@
 
 - **启停开关全部废弃**（`decisions/2026-10-12-deprecate-enabled-flags.md`）：target / MCP / 项目 agent 三处 `enabled` 字段删除，旧配置的键被忽略且不再写回，前端启停交互与 3 个相关测试删除。这条原本不在清单里，是实施 C1 时发现的同层分叉（同一个状态机被四条路径各解释一遍）。
 
+## 已完成（C2 收窄后先做的三件事）
+
+- **target 寻址收成 `TargetRef`**：复合 id 的构造与拆分只在 `workspace/types.rs` 一处（此前 3 处组串、1 处内联 `find(':')` 拆分）；`ResolvedManagerConfig::target / target_by_id / target_refs` 是唯一寻址入口，`inspect` 与分发侧不再自己拼串。
+- **「target 不可用」只有一个说法**：`target_unavailable()` 供报错与 warning 共用（此前同一个故障有三种文案、两种语言），调用方只决定「报错还是记 warning」。
+- **config.yaml 的 `~` 展开与清单解析同源**：统一到 `support::fs::user_home_dir()`（`dirs::home_dir()` 在 Windows 忽略 HOME，会让模板写出的路径与解析结果分叉）。
+
 ## 小项（不单独立项，顺手做）
 
 - providers 能力表 `ModelField::ReasoningLevels` 零适配器引用（`apps/mod.rs:66-79`）——2026-09-24 plan 声明的 unverified 项，验证后填充或删除。

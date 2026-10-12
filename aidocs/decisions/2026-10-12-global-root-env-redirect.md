@@ -40,9 +40,29 @@
 
 `session` 域仍各自解析同一批变量（`session/pi.rs`、`session/grokbuild.rs` 读 env，`session/codex.rs` / `claude_code.rs` / `dsh.rs` 拼默认目录）。这些属于会话存储读取路径，与 C10 的两域分叉无关；若要收敛到 `Environment`，应按 session 域单独一项做，避免把会话来源的存储契约一起改动。
 
-## unverified（待有环境时核对）
+## 实测结论（2026-10-12，Claude Code 2.1.285）
 
-- `CLAUDE_CONFIG_DIR` 重定位 `~/.claude/skills`（清单按此实现）与 `~/.claude.json` 是否随之搬移（清单按「不搬移」实现）。`context/2026-09-15-mcp-config-mapping.md` 已记录「未实测（无 CLI）」。核对方式：隔离 HOME 设置该变量跑一次 claude，观察 `settings.json`、skills 目录与 `.claude.json` 三处落点；若 `.claude.json` 确实随目录搬移，只需把该条改为 `".claude.json"` 并把 `skill_dir` 恢复为 root 相对。
+本机装有真 CLI（`~/.vite-plus/packages/@anthropic-ai/claude-code/*/bin/claude.exe`，版本 2.1.285），
+用隔离 HOME + `CLAUDE_CONFIG_DIR` 直接观察落点，此前三条 unverified 全部有结论：
+
+- **`CLAUDE_CONFIG_DIR` 是完整的配置 home**：设置后 `<CFG>/.claude.json`、`<CFG>/projects/`、
+  `<CFG>/sessions/`、`<CFG>/backups/`、`<CFG>/skills/` 全在变量目录下，宿主 HOME 下为空；
+  `~/.claude` 是该变量的**缺省值**，不是第二种根。二进制里的错误文案印证同一口径
+  （"the configuration home (CLAUDE_CONFIG_DIR, the HOME it defaults from, ...)"）。
+- **`.claude.json` 随变量搬移**：此前按「落在 HOME」实现是错的，已改为 root 相对
+  （`config_path: .claude.json`）。用户在 `CLAUDE_CONFIG_DIR` 下写 MCP 条目，reins 也会写到同一处。
+- **`settings.json` 也在变量目录下**：往 `<CFG>/settings.json` 写一个标记后，debug 日志显示
+  `CA certs: Config fallback - globalEnv keys: , settingsEnv keys: PROBE_MARKER`，确认它被读取，
+  且 `env` 段生效。未设置变量时落点 `~/.claude/settings.json`。
+- skills 落点由「目录整体搬移 + `<CFG>/skills/` 被 CLI 创建」推定，标 **unverified**；
+  核对方式：把 skill 放到 `<CFG>/skills` 观察是否被发现（`claude skills list` 在未登录时不可用）。
+
+顺带修掉一个口径分叉：config.yaml 里的 `~` 展开此前用 `dirs::home_dir()`（Windows 上忽略 HOME），
+与清单解析用的 `support::fs::user_home_dir()` 不是同一个 home；两处已统一，模板写出的 `~/x`
+与解析结果必然指向同一个文件。
+
+## 仍未核对
+
 - opencode / zcode 是否存在未记录的目录重定位变量（当前清单按「无」处理，与 providers 一致）。
 
 ## 影响

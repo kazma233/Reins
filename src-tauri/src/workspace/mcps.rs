@@ -43,8 +43,8 @@ pub(crate) fn apply_mcp_to_target_inner(
         .iter()
         .find(|mcp| mcp.name == server_name)
         .ok_or_else(|| anyhow!("MCP not found: {server_name}"))?;
-    let target = resolve_target_from_id(&config, target_id)
-        .ok_or_else(|| anyhow!("Missing target {target_id}"))?;
+    let target =
+        resolve_target_from_id(&config, target_id).ok_or_else(|| target_unavailable(target_id))?;
 
     let Some(_config_path) = target.config_path.as_ref() else {
         bail!("目标 {target_id} 没有 MCP 配置路径。");
@@ -73,8 +73,8 @@ pub(crate) fn preview_mcp_target_inner(
         .iter()
         .find(|mcp| mcp.name == server_name)
         .ok_or_else(|| anyhow!("MCP not found: {server_name}"))?;
-    let target = resolve_target_from_id(&config, target_id)
-        .ok_or_else(|| anyhow!("Missing target {target_id}"))?;
+    let target =
+        resolve_target_from_id(&config, target_id).ok_or_else(|| target_unavailable(target_id))?;
 
     let config_path = target
         .config_path
@@ -99,8 +99,8 @@ pub(crate) fn remove_mcp_from_target_inner(
 ) -> Result<McpTargetMutationResult> {
     let config = store.parse()?;
     let server_name = normalize_mcp_name(server_name)?;
-    let target = resolve_target_from_id(&config, target_id)
-        .ok_or_else(|| anyhow!("Missing target {target_id}"))?;
+    let target =
+        resolve_target_from_id(&config, target_id).ok_or_else(|| target_unavailable(target_id))?;
 
     let mutation = remove_mcp_from_target_config(target, &server_name)?;
 

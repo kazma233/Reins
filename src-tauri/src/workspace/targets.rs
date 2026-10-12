@@ -14,7 +14,7 @@ use super::WorkspaceConfigStore;
 use super::display_path;
 use super::normalize_target_id;
 use super::types::*;
-use crate::support::environment::{Environment, manifest_path};
+use crate::support::environment::Environment;
 
 // ---------------------------------------------------------------------------
 // Directory-link skill_dir detection (project targets linked to another agent)
@@ -464,8 +464,8 @@ pub(crate) fn builtin_target_defaults(env: &Environment) -> Vec<TargetDefaults> 
         .iter()
         .filter_map(|spec| {
             let target_id = spec.target_id?;
-            let root = spec.global.root.resolve(env);
-            let resolve_path = |path: &str| manifest_path(env, root.clone(), path);
+            // 落点解析只有一处：清单里的 `~/` 与 root 相对都由 GlobalRoot 判。
+            let resolve_path = |path: &str| spec.global.root.resolve_path(env, path);
             Some(TargetDefaults {
                 id: AgentTargetId(target_id.to_string()),
                 skill_dir: resolve_path(spec.global.skill_dir).unwrap_or_default(),
@@ -476,9 +476,6 @@ pub(crate) fn builtin_target_defaults(env: &Environment) -> Vec<TargetDefaults> 
         })
         .collect()
 }
-
-// 清单路径的解析口径（`~/` 语义）在 support::environment::manifest_path，
-// 与 providers 同源；调用方只负责准备好 root。
 
 pub(super) fn builtin_target_defaults_map(
     env: &Environment,

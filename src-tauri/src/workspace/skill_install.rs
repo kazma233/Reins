@@ -54,38 +54,26 @@ pub(super) fn resolve_ids<'a>(
 ) -> Result<Vec<ManagedTarget<'a>>> {
     target_ids
         .iter()
-        .map(
-            |target_id| match super::resolve_target_from_id(config, target_id) {
-                None => Ok(ManagedTarget {
-                    id: target_id.clone(),
-                    target: None,
-                    skip: Some(TargetSkip::Missing),
-                }),
-                Some(target) => Ok(ManagedTarget {
-                    id: target_id.clone(),
-                    skip: skip_reason(target)?,
-                    target: Some(target),
-                }),
-            },
-        )
+        .map(|target_id| match config.target_by_id(target_id) {
+            None => Ok(ManagedTarget {
+                id: target_id.clone(),
+                target: None,
+                skip: Some(TargetSkip::Missing),
+            }),
+            Some(target) => Ok(ManagedTarget {
+                id: target_id.clone(),
+                skip: skip_reason(target)?,
+                target: Some(target),
+            }),
+        })
         .collect()
 }
 
 // 配置里全部全局 target + 项目级 target；skip 已判定，调用方只决定呈现。
 pub(super) fn managed_targets(config: &ResolvedManagerConfig) -> Result<Vec<ManagedTarget<'_>>> {
-    let global = config
-        .targets
-        .values()
-        .map(|target| (target.id.to_string(), target));
-    let project = config.projects.values().flat_map(|project| {
-        project
-            .agents
-            .values()
-            .map(move |target| (format!("{}:{}", project.id, target.id), target))
-    });
-
-    global
-        .chain(project)
+    config
+        .targets_with_ids()
+        .into_iter()
         .map(|(id, target)| {
             Ok(ManagedTarget {
                 id,

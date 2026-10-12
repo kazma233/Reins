@@ -10,6 +10,7 @@ use std::path::Path;
 use crate::providers::commands::app_config_paths;
 use crate::providers::types::{PROVIDER_APPS, ProviderAppId};
 use crate::support::environment::Environment;
+use crate::support::environment::Redirect;
 use crate::test_support::{TestDir, TestEnvGuard};
 use crate::workspace::default_config_template;
 use crate::workspace::targets::{TargetDefaults, builtin_target_defaults, project_agent_defaults};
@@ -67,7 +68,7 @@ fn snapshot_builtin_target_defaults() {
         TargetDefaults {
             id: AgentTargetId("claude".to_string()),
             skill_dir: home.join(".claude/skills"),
-            config_path: Some(home.join(".claude.json")),
+            config_path: Some(home.join(".claude/.claude.json")),
             config_prefix: "mcpServers",
             config_type: McpConfigType::Common,
         },
@@ -165,10 +166,10 @@ fn snapshot_builtin_target_defaults_with_codex_claude_dsh_redirect() {
         },
         TargetDefaults {
             id: AgentTargetId("claude".to_string()),
-            // skills 随配置目录搬移；.claude.json 落在 HOME（该文件是否随
-            // CLAUDE_CONFIG_DIR 搬移未经实测，保持现状并在清单里显式标注）。
+            // skills 与 .claude.json 都随 CLAUDE_CONFIG_DIR（实测 2.1.285：
+            // settings.json / .claude.json / projects / sessions 全在变量目录下）。
             skill_dir: claude_dir.join("skills"),
-            config_path: Some(home.join(".claude.json")),
+            config_path: Some(claude_dir.join(".claude.json")),
             config_prefix: "mcpServers",
             config_type: McpConfigType::Common,
         },
@@ -281,7 +282,7 @@ fn snapshot_default_config_template() {
   claude:
     skill_dir: ~/.claude/skills
     mcp:
-      config_path: ~/.claude.json
+      config_path: ~/.claude/.claude.json
       config_prefix: mcpServers
       config_type: common
 
@@ -338,8 +339,24 @@ fn snapshot_default_config_template_pins_pi_dir() {
     let env = Environment::from_env();
 
     let template = default_config_template(&env);
-    let skill_line = format!("    skill_dir: {}", pi_dir.join("skills").display());
-    let mcp_line = format!("      config_path: {}", pi_dir.join("mcp.json").display());
+    // 模板写法先按解析口径求出真实落点，再对 HOME 下的路径折回 ~ 缩写。
+    let resolved_pi = env.resolve(Redirect::PiAgentDir).expect("pi agent dir");
+    let skill_line = format!(
+        "    skill_dir: ~/{}",
+        resolved_pi
+            .join("skills")
+            .strip_prefix(env.home.as_deref().unwrap())
+            .unwrap()
+            .display()
+    );
+    let mcp_line = format!(
+        "      config_path: ~/{}",
+        resolved_pi
+            .join("mcp.json")
+            .strip_prefix(env.home.as_deref().unwrap())
+            .unwrap()
+            .display()
+    );
     assert!(template.contains(&skill_line), "模板应固化 pi skills 路径");
     assert!(template.contains(&mcp_line), "模板应固化 pi mcp 路径");
     assert!(
@@ -421,35 +438,53 @@ fn snapshot_app_config_paths() {
 }
 
 // C10 的核心不变量：workspace 的 MCP 落点与 providers 认的配置文件是同一个。
-// 此前 workspace 只认 GROK_HOME / PI_CODING_AGENT_DIR，用户设 CODEX_HOME 后
-// 两个域会各写一份配置。这条断言把「两域同源」直接钉住（两边各自经不同函数，
-// 但环境与清单判据只有一份）。
+// 此前 workspace 只认 GROK_HOME / PI_CODING_AGENT_DIR，用户设 CODEX_HOME /
+// CLAUDE_CONFIG_DIR 后两个域会各写一份配置。两边各自经不同函数，但环境与清单
+// 判据只有一份，这条断言把它钉住。
 #[test]
-fn workspace_and_providers_agree_on_codex_config_path() {
+fn workspace_and_providers_agree_on_redirected_targets() {
     let dir = TestDir::new("agents-two-domains").unwrap();
     let home = dir.path().to_path_buf();
     let _guard = TestEnvGuard::set_home(&home);
-    let redirected = dir.path().join("custom-codex");
-    let env = Environment {
-        codex_home: Some(redirected.clone()),
+
+    let codex_home = dir.path().join("custom-codex");
+    let codex_env = Environment {
+        codex_home: Some(codex_home.clone()),
         ..Environment::from_env()
     };
-
-    let workspace_path = builtin_target_defaults(&env)
+    let codex_workspace = builtin_target_defaults(&codex_env)
         .into_iter()
         .find(|item| item.id.0 == "codex")
         .and_then(|item| item.config_path)
         .expect("codex 缺少 workspace 落点");
-    let provider_path = app_config_paths(&env, ProviderAppId::Codex)
+    let codex_provider = app_config_paths(&codex_env, ProviderAppId::Codex)
         .into_iter()
         .find(|path| path.ends_with("config.toml"))
         .expect("codex 缺少 providers 落点");
-
     assert_eq!(
-        workspace_path, provider_path,
+        codex_workspace, codex_provider,
         "workspace 与 providers 的 codex 落点必须一致"
     );
-    assert_eq!(workspace_path, redirected.join("config.toml"));
+    assert_eq!(codex_workspace, codex_home.join("config.toml"));
+
+    // claude 的两个域落点是不同文件（MCP 条目 vs settings.json），但目录同源：
+    // 都由 CLAUDE_CONFIG_DIR 决定。
+    let claude_dir = dir.path().join("custom-claude");
+    let claude_env = Environment {
+        claude_config_dir: Some(claude_dir.clone()),
+        ..Environment::from_env()
+    };
+    let claude_workspace = builtin_target_defaults(&claude_env)
+        .into_iter()
+        .find(|item| item.id.0 == "claude")
+        .and_then(|item| item.config_path)
+        .expect("claude 缺少 workspace 落点");
+    let claude_settings = app_config_paths(&claude_env, ProviderAppId::Claude)
+        .into_iter()
+        .find(|path| path.ends_with("settings.json"))
+        .expect("claude 缺少 providers 落点");
+    assert_eq!(claude_workspace, claude_dir.join(".claude.json"));
+    assert_eq!(claude_settings, claude_dir.join("settings.json"));
 }
 
 // AgentSpec 清单自身的一致性：键与各域 id 唯一、PROVIDER_APPS 全覆盖
