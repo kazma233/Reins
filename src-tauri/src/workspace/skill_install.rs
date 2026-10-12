@@ -13,18 +13,11 @@ use anyhow::{Context, Result, anyhow, bail};
 
 use super::display_path;
 use super::targets::read_directory_link_target;
-use super::types::{AgentTargetId, ResolvedManagerConfig, ResolvedTargetConfig, SkillSyncItem};
+use super::types::{
+    AgentTargetId, ResolvedManagerConfig, ResolvedTargetConfig, SkillSyncItem, TargetRef,
+    TargetSkip,
+};
 use super::{create_directory_symlink, remove_existing_path};
-
-// 目标不参与分发的原因。两种常见表现（提示 / 静默跳过）都由调用方决定，
-// 这里只回答「为什么不参与」。
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum TargetSkip {
-    // 目标不存在：输入来自客户端（弹窗快照）时才会出现。
-    Missing,
-    // 项目级 target 的 skill_dir 整体继承另一个受管 target 的目录。
-    LinkedProjectDir,
-}
 
 // 一个参与分发决策的 target。
 pub(super) struct ManagedTarget<'a> {
@@ -54,17 +47,13 @@ pub(super) fn resolve_ids<'a>(
 ) -> Result<Vec<ManagedTarget<'a>>> {
     target_ids
         .iter()
-        .map(|target_id| match config.target_by_id(target_id) {
-            None => Ok(ManagedTarget {
+        .map(|target_id| {
+            let reference = TargetRef::parse(target_id);
+            Ok(ManagedTarget {
                 id: target_id.clone(),
-                target: None,
-                skip: Some(TargetSkip::Missing),
-            }),
-            Some(target) => Ok(ManagedTarget {
-                id: target_id.clone(),
-                skip: skip_reason(target)?,
-                target: Some(target),
-            }),
+                target: config.target(&reference),
+                skip: config.skip_reason(&reference)?,
+            })
         })
         .collect()
 }
@@ -72,23 +61,16 @@ pub(super) fn resolve_ids<'a>(
 // 配置里全部全局 target + 项目级 target；skip 已判定，调用方只决定呈现。
 pub(super) fn managed_targets(config: &ResolvedManagerConfig) -> Result<Vec<ManagedTarget<'_>>> {
     config
-        .targets_with_ids()
+        .managed_refs()?
         .into_iter()
-        .map(|(id, target)| {
+        .map(|(reference, target, skip)| {
             Ok(ManagedTarget {
-                id,
+                id: reference.composite_id(),
                 target: Some(target),
-                skip: skip_reason(target)?,
+                skip,
             })
         })
         .collect()
-}
-
-fn skip_reason(target: &ResolvedTargetConfig) -> Result<Option<TargetSkip>> {
-    if target.is_project && super::targets::is_linked_skill_dir(&target.skill_dir)? {
-        return Ok(Some(TargetSkip::LinkedProjectDir));
-    }
-    Ok(None)
 }
 
 // 一个分发来源：来源根 + 该来源下的 skill。
@@ -657,7 +639,7 @@ mod tests {
     use crate::test_support::TestDir;
     use crate::workspace::types::McpConfigType;
 
-    // 一个全局 target；is_project=false，其余字段与解析结果同形。
+    // 一个全局 target；其余字段与解析结果同形。
     fn target(id: &str, skill_dir: PathBuf) -> ResolvedTargetConfig {
         ResolvedTargetConfig {
             id: AgentTargetId(id.to_string()),
@@ -824,6 +806,42 @@ mod tests {
         assert_eq!(removed.len(), 1);
         assert_eq!(removed[0].action, "remove");
         assert!(destination.symlink_metadata().is_err());
+
+        Ok(())
+    }
+
+    // 项目级 target 的 skill_dir 整层是目录链接时不参与分发：目录内容由链接
+    // 的另一端负责，这里不能往它里面装。全局 target 不受此判定（既有行为）。
+    #[test]
+    fn linked_project_skill_dir_is_skipped() -> Result<()> {
+        let root = TestDir::new("install-skip-linked-dir")?;
+        let owner_skill_dir = root.path().join("owner/skills");
+        fs::create_dir_all(&owner_skill_dir)?;
+        let linked_skill_dir = root.path().join("linked/skills");
+        fs::create_dir_all(linked_skill_dir.parent().expect("parent"))?;
+        create_directory_symlink(&owner_skill_dir, &linked_skill_dir)?;
+
+        let mut project_target = target("claude", linked_skill_dir.clone());
+        project_target.is_project = true;
+        let config = config_with(vec![
+            target("codex", linked_skill_dir.clone()),
+            project_target,
+        ]);
+
+        let targets = resolve_ids(&config, &["codex".to_string(), "claude".to_string()])?;
+        // 全局 target 的链接不触发跳过；项目级触发。
+        assert_eq!(targets[0].skip, None);
+        assert_eq!(targets[1].skip, Some(TargetSkip::LinkedDir));
+
+        let managed = managed_targets(&config)?;
+        assert_eq!(
+            managed
+                .iter()
+                .find(|target| target.id == "claude")
+                .expect("claude 应在枚举里")
+                .skip,
+            Some(TargetSkip::LinkedDir)
+        );
 
         Ok(())
     }

@@ -346,8 +346,8 @@ fn inferred_target_layout(
     let default = defaults.get(target_id)?;
 
     Some(ResolvedTargetConfig {
-        id: target_id.clone(),
         is_project: false,
+        id: target_id.clone(),
         skill_dir: default.skill_dir.clone(),
         config_path: Some(config_path.to_path_buf()),
         mcp_config_prefix: default.config_prefix.to_string(),

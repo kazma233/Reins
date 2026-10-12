@@ -910,8 +910,8 @@ mod tests {
         config_type: McpConfigType,
     ) -> ResolvedTargetConfig {
         ResolvedTargetConfig {
-            id: AgentTargetId(id.to_string()),
             is_project: false,
+            id: AgentTargetId(id.to_string()),
             skill_dir: PathBuf::from("/tmp/reins-mcp-formats-skills"),
             config_path: Some(config_path),
             mcp_config_prefix: prefix.to_string(),

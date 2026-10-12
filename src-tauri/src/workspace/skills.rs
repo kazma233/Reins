@@ -18,8 +18,7 @@ use crate::support::environment::Environment;
 use super::WorkspaceConfigStore;
 use super::skill_install::enumerate_links as enumerate_target_links;
 use super::skill_install::{
-    InstallItem, ManagedTarget, SelectedSkill, SkillInstall, TargetSkip, managed_targets,
-    resolve_ids,
+    InstallItem, ManagedTarget, SelectedSkill, SkillInstall, managed_targets, resolve_ids,
 };
 // 路径规范化只有一份实现：链接归属分类与安装侧的比较必须同口径。
 pub(super) use super::skill_install::{normalize_link_path, relative_to_source_root};
@@ -109,25 +108,27 @@ pub(super) fn build_sync_target_options_with_sources(
     config: &ResolvedManagerConfig,
     sources: &[SkillLinkSource],
 ) -> Result<Vec<SyncTargetOption>> {
-    // 全部 target 的 (复合 id, skill_dir)：复合 id 由寻址层生成，本地不拼串。
-    let flat: Vec<(String, &Path)> = config
-        .targets_with_ids()
+    // 全部 target 的 (地址, skill_dir)：地址由寻址层给出，本地不拼串。
+    let flat: Vec<(TargetRef, &Path)> = config
+        .target_refs()
         .into_iter()
-        .map(|(composite_id, target)| (composite_id, target.skill_dir.as_path()))
+        .map(|(reference, target)| (reference, target.skill_dir.as_path()))
         .collect();
 
     // Map each managed skill_dir (canonicalized) back to its target id, so a
     // directory link can be resolved to "which managed target it points at".
     let mut dir_to_target: HashMap<PathBuf, String> = HashMap::new();
-    for (id, skill_dir) in &flat {
+    for (reference, skill_dir) in &flat {
         let canonical = skill_dir
             .canonicalize()
             .unwrap_or_else(|_| skill_dir.to_path_buf());
-        dir_to_target.entry(canonical).or_insert_with(|| id.clone());
+        dir_to_target
+            .entry(canonical)
+            .or_insert_with(|| reference.composite_id());
     }
 
     let mut options = Vec::with_capacity(flat.len());
-    for (id, skill_dir) in flat {
+    for (reference, skill_dir) in flat {
         // Resolve a directory-link target only if it points at another managed
         // target; links to external directories stay selectable.
         let linked_target_id =
@@ -138,6 +139,7 @@ pub(super) fn build_sync_target_options_with_sources(
         } else {
             scan_target_skill_links(skill_dir, sources)?
         };
+        let id = reference.composite_id();
         options.push(SyncTargetOption {
             id: id.clone(),
             label: id,
@@ -297,7 +299,7 @@ pub(crate) fn sync_source_to_targets_inner(
             Some(TargetSkip::Missing) => {
                 warnings.push(format!("{}，已跳过。", target_unavailable(&target.id)))
             }
-            Some(TargetSkip::LinkedProjectDir) => {}
+            Some(TargetSkip::LinkedDir) => {}
         }
     }
     let targets: Vec<&ManagedTarget<'_>> = participating.iter().collect();
