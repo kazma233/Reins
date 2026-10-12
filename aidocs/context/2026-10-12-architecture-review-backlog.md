@@ -158,6 +158,23 @@
   实际所在」，判定与文案收成纯函数 `skillDirLink.ts`。
 - 提交：`8040f20`（后端）、`bb06ab0`（前端）。
 
+## 待立项：测试隔离去进程环境依赖（C4 调查挖出）
+
+- 域：session / providers / workspace 的测试面；强度：Strong（正确性，不是性能）
+- 结论与证据：把 `TestEnvGuard` 的串行锁去掉后 **82 个测试失败**（359 passed）。分布：
+  `tests::pi` 18、`providers::tests` 17、`tests::grokbuild` 12、`tests::session_delete` 7、
+  `session_usage_stats` / `session_token_usage` / `session_listing` / `session_cache` 各 5、
+  `session_delete_plan` 4、`session::summary_cache` 2、`session_readers` / `reader_engine` 各 1。
+  也就是说这 82 个测试**靠那把锁才能过**：它们事实共享进程 HOME / 环境变量 / 进程级缓存。
+- 根因：拿进程环境当测试隔离手段（`HOME` + `REINS_TEST_HOME` + 各工具环境变量 + 进程级静态
+  缓存）。118 个测试挤在同一把全局锁后。
+- 已有正确形态可照抄：引擎侧 `ReaderEngine::new(root, store_dir)` 与 `*_at` 构造器
+  （`codex::engine_at` 等），`tests/session_engine.rs` 明说「不碰进程 env、不持全局锁」；
+  `FamilyReader` 的「static 前置 + 按 root 重建实例」也已证明可行（C4 已把 pi 迁到同形）。
+- 方向：把「根/库目录」从进程环境改为构造参数注入，`TestEnvGuard` 的进程 HOME 覆写逐域退役；
+  每域先做注入点盘点再动（providers 17 个失败的成因与 session 域可能不同）。
+- 不做的事：不以性能为由做——会话域 129 个测试共占约 0.45s，收益上限很小。
+
 ## 小项（不单独立项，顺手做）
 
 - providers 能力表 `ModelField::ReasoningLevels` 零适配器引用（`apps/mod.rs:66-79`）——2026-09-24 plan 声明的 unverified 项，验证后填充或删除。
