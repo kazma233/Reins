@@ -130,6 +130,18 @@
   `normalize_own_dir`：归属比较只规范化父目录。
 - `TargetSkip::LinkedDir` 的跳过从静默改为 warning（兜底路径不再无声）。
 
+## 已完成：目标列表显示落点状态
+
+- 现状（立此项时的依据）：目标面板只回显配置里的路径字符串，`TargetInspection`
+  只有 `exists`，而带探测信息的 inspection 前端零消费——「落点是软链接」这件事
+  只在同步弹窗可见。
+- 落地：寻址层 `skill_dir_links()` 成为落点归属的单一出处（同步弹窗改为消费它，
+  删掉自己那份 canonicalize 映射）；`TargetInspection.skill_dir_link` 按同一 id
+  口径带给两个列表视图；`WorkspaceInspection.warnings` 从恒空 vec 变为「哪些
+  target 因落点是软链接不参与分发」；前端列表按行标注「软链接 + 内容属谁 + 文件
+  实际所在」，判定与文案收成纯函数 `skillDirLink.ts`。
+- 提交：`8040f20`（后端）、`bb06ab0`（前端）。
+
 ## 小项（不单独立项，顺手做）
 
 - providers 能力表 `ModelField::ReasoningLevels` 零适配器引用（`apps/mod.rs:66-79`）——2026-09-24 plan 声明的 unverified 项，验证后填充或删除。
