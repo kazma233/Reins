@@ -1789,3 +1789,58 @@ fn display_path_strips_windows_extended_length_prefix() {
         r"\\server\share\skills",
     );
 }
+
+// 旧配置兼容路径：target 的 mcp_config_prefix 为空时，读侧按 id 回落到内置布局
+// 再取条目（mcp_formats.rs::read_existing_entries 的文档承诺）。此前这条路径
+// 没有任何测试覆盖，删掉兜底实现全部用例仍然全绿。
+#[test]
+fn empty_mcp_prefix_falls_back_to_builtin_layout_when_reading() {
+    let _guard = TestEnvGuard::lock();
+    let env = Environment::from_env();
+    let root = TestDir::new("reins-empty-prefix-read").unwrap();
+
+    // 表名必须与内置布局一致才能命中；从内置默认值取，不写死 `mcp_servers`。
+    let builtin_prefix = crate::workspace::targets::builtin_target_defaults(&env)
+        .into_iter()
+        .find(|default| default.id.0 == "codex")
+        .expect("codex 应内置")
+        .config_prefix;
+    assert!(!builtin_prefix.trim().is_empty(), "内置前缀不该为空");
+
+    let config_path = root.path().join("codex.toml");
+    fs::write(
+        &config_path,
+        format!(
+            "[{builtin_prefix}.fs]\ncommand = \"npx\"\n\n[{builtin_prefix}.other]\ncommand = \"go\"\n"
+        ),
+    )
+    .unwrap();
+
+    let target = ResolvedTargetConfig {
+        id: AgentTargetId("codex".to_string()),
+        is_project: false,
+        skill_dir: root.path().join("skills"),
+        config_path: Some(config_path.clone()),
+        // 旧配置留下的空前缀：读侧必须自行补回内置布局。
+        mcp_config_prefix: String::new(),
+        mcp_config_type: McpConfigType::Common,
+    };
+
+    let entries = read_existing_mcp_entries(&target, &config_path, &env).unwrap();
+    assert!(
+        entries.contains_key("fs") && entries.contains_key("other"),
+        "空前缀时应回落到内置布局读到条目，实际：{:?}",
+        entries.keys().collect::<Vec<_>>()
+    );
+
+    // 未内置的 id 补不出布局，只能按空前缀读到空表——不报错、不猜测。
+    let unknown = ResolvedTargetConfig {
+        id: AgentTargetId("not-a-builtin".to_string()),
+        ..target
+    };
+    assert!(
+        read_existing_mcp_entries(&unknown, &config_path, &env)
+            .unwrap()
+            .is_empty()
+    );
+}

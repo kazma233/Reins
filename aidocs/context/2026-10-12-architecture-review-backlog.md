@@ -79,6 +79,10 @@
 - 域：workspace；强度：Worth exploring
 - 问题：调用 writer 须维持 config_path 双源不变量（`mcps.rs:131-181` 四个薄壳同条件三种 None 行为：52 bail / 86 bail / 170 noop）；读取侧 `inferred_target_layout`（335-364）绕过 parse 用 builtin defaults 重建 target——同一份配置存在三种解释；transport 校验三层三文案（`mod.rs:547-558`、`mcps.rs:720-731`、`mcp_formats.rs` 八处防御 bail）；inspect 自建 `McpEntryCache`（`inspect.rs:15-18, 185-206`）补逐次 IO。
 - 方向：resolved target 成为唯一携带写入地址的输入，无地址 / defaults 兜底 / transport 校验各收一处；读侧归一化挂进同一接缝。与 `context/2026-09-15-mcp-config-mapping.md` 的适配器契约先对齐，保持「mcps 持引擎、mcp_formats 持格式知识」分工。
+- **2026-10-12 部分完成**（四种解释里的前两种，语义未变）：
+  - `mcps.rs` 里「没有落点」的三处 None 行为都保留，但改成**被显式声明**：新增注释说明为何写入/预览报错、删除必须跳过（删除在遍历全部 target 的循环里，报错会中断整轮清理），并删掉 `apply_mcp_to_target_inner` 里那次复述（同一条件原本在入口再判一次、文案还差一个句号）。
+  - `inferred_target_layout` 查清来历后**保留**：它是被文档声明的「旧配置兼容路径」（`mcp_formats.rs:58`，前缀为空的存量配置按 id 回落内置布局），不是冗余兜底；此前它**零测试覆盖**（删掉兜底实现 441 个用例仍全绿），现已补 `empty_mcp_prefix_falls_back_to_builtin_layout_when_reading`（内置 id 读到条目 + 非内置 id 读空且不报错），并验证过删掉兜底该用例会失败。
+  - 剩余：transport 校验三层三文案、inspect 自建 `McpEntryCache`。
 
 ### 7. C6 · 删除侧线的散落机械
 

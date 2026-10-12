@@ -46,10 +46,8 @@ pub(crate) fn apply_mcp_to_target_inner(
     let target =
         resolve_target_from_id(&config, target_id).ok_or_else(|| target_unavailable(target_id))?;
 
-    let Some(_config_path) = target.config_path.as_ref() else {
-        bail!("目标 {target_id} 没有 MCP 配置路径。");
-    };
-
+    // 落点缺失由 apply_mcp_to_target_config 统一判定（那里是「没有落点」口径的
+    // 唯一定义处），这里不再复述一遍。
     let updated_path = apply_mcp_to_target_config(target, server)?;
 
     Ok(McpTargetMutationResult {
@@ -79,6 +77,8 @@ pub(crate) fn preview_mcp_target_inner(
     let config_path = target
         .config_path
         .as_ref()
+        // 这里要的不只是「检查」：结果里要回传落点，所以得先拿到它。文案与
+        // preview_mcp_entry 保持一致。
         .ok_or_else(|| anyhow!("目标 {target_id} 没有 MCP 配置路径"))?;
 
     let (format, content) = preview_mcp_entry(target, server)?;
@@ -129,6 +129,8 @@ fn preview_mcp_entry(
     target: &ResolvedTargetConfig,
     server: &ResolvedMcpConfig,
 ) -> Result<(String, String)> {
+    // 预览和写入必须拒绝没有落点的 target（地址都写不出去），删除相反：见
+    // remove_mcp_from_target_config 的 None 分支。
     let config_path = target
         .config_path
         .as_ref()
@@ -151,6 +153,10 @@ fn apply_mcp_to_target_config(
     Ok(config_path.clone())
 }
 
+// 「没有落点」三种 None 行为是刻意的，不是不一致：写入与预览必须报错（没有地址
+// 就写不出去），删除必须跳过（它在遍历全部 target 的循环里被调用，报错会中断整轮
+// 清理）。三种行为都写在这里，改口径只改这一处——此前同一个条件在四个调用点各判
+// 一次，措辞都不一样。
 fn remove_mcp_from_target_config(
     target: &ResolvedTargetConfig,
     server_name: &str,
