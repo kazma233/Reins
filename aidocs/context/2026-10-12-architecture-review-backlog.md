@@ -24,11 +24,21 @@
 - 收益落地：单 target 最小夹具 5 个直接测试（`skill_install.rs` 内联模块），不再手拼整份 config.yaml。
 - 证据：`src-tauri/src/workspace/skill_install.rs`、`workspace/skills.rs`（1326 行，较改造前少约 370 行）。
 
-### 3. C2 · target 的寻址与枚举缺一个接缝
+### 3. C2 · target 的寻址与枚举缺一个接缝 · 已完成
 
 - 域：workspace；强度：Strong
-- 问题：复合 id（`project:agent`）的格式知识 7 份拷贝（构造 3、枚举 4：`skills.rs:108-118, 115, 1111-1121`、`mcps.rs:643-659`、`inspect.rs:95-116, 107`）；「target 不可用」四种表现（`mcps.rs:49/83/113` 三行逐字 bail、warning、静默 skip、状态呈现）。
-- 方向：`ResolvedManagerConfig` 提供唯一的 target 枚举 / 寻址入口（id ↔ target+project 双向、enabled 判定内化）；各操作只声明不可用时的呈现方式。纯内部机械改动，不动 Tauri 契约面。
+- 落地：`TargetRef` 是复合地址的唯一定义（构造 + 拆分），`ResolvedManagerConfig`
+  提供 `target` / `target_by_id` / `target_refs` / `managed_refs` / `skip_reason`
+  五个入口；`TargetSkip` 从安装面搬到寻址层，调用方只决定表现方式（报错 /
+  warning / 静默）。
+- 实测修正了原清单的两处判断：(a) 「枚举 4 处」不是同一件事——inspect 的
+  `TargetInspection`、`ProjectInspection`、前端配置视图、删 MCP 的两段循环输出
+  形状各异，能被收编的是「(地址, target) 组合的产出」而不是遍历本身；(b)
+  「enabled 判定内化」这条随启停废弃已不存在，真正需要内化的是「这个地址参不
+  参与分发」这一条规则。
+- 顺带修掉的三个真 bug 见下方「本轮修掉的真 bug」。
+- 提交：`9fdfe82`（机械重构）、`803e523`（project id 字符集）、`21b4696`
+  （项目 agent 落点回退）、`a79bd4d`（契约带上两段，前端不再拆地址）。
 
 ### 4. C4 · pi 的手搓缓存机械迁引擎部件
 
@@ -82,6 +92,34 @@
 - **target 寻址收成 `TargetRef`**：复合 id 的构造与拆分只在 `workspace/types.rs` 一处（此前 3 处组串、1 处内联 `find(':')` 拆分）；`ResolvedManagerConfig::target / target_by_id / target_refs` 是唯一寻址入口，`inspect` 与分发侧不再自己拼串。
 - **「target 不可用」只有一个说法**：`target_unavailable()` 供报错与 warning 共用（此前同一个故障有三种文案、两种语言），调用方只决定「报错还是记 warning」。
 - **config.yaml 的 `~` 展开与清单解析同源**：统一到 `support::fs::user_home_dir()`（`dirs::home_dir()` 在 Windows 忽略 HOME，会让模板写出的路径与解析结果分叉）。
+
+## 本轮修掉的真 bug（都不在原清单里，是实施 C2 时挖出来的）
+
+- **project id 含 `:` 时地址不可拆**：`a:b:codex` 被拆成 project=`a` /
+  agent=`b:codex` → 查询落空报「target 不存在」，但 inspection 照常展示它，
+  用户看得到、点不动。写入与解析两侧此前都只 trim、无字符集校验，已收紧为禁止
+  `:` 与 `/`（`803e523`）。
+- **agent 名不规范时造空目录**：YAML 写 `Codex:` 时 id 规范成 `codex`，但落点
+  回退用原文名拼路径 → 凭空多一个 `Codex/skills` 空目录，真正在用的
+  `<project>/codex/skills` 不被识别（`21b4696`）。
+- **claude 重定向把 MCP 条目写错文件**：`CLAUDE_CONFIG_DIR` 实测是完整配置 home
+  （`.claude.json` / `settings.json` / `projects` / `sessions` 全部随之搬移），
+  旧实现按「`.claude.json` 落在 HOME」写，用户设了变量后 reins 与 CLI 读写两个
+  文件（`883fee5`）。
+
+## 新发现：前端与后端对「整目录继承」的判定不一致（待单独立项）
+
+后端 `skip_reason` 只看「项目级 + skill_dir 是链接」（不看指向谁，`9fdfe82` 已把
+这条规则收进寻址层并注释标明）；展示层的 `linked_target_id` 只看「是否指向另一个
+受管 target」且对全局 target 也生效。由此两处不对称：
+
+| 场景 | 前端 | 后端 |
+| --- | --- | --- |
+| 全局 target 的 skill_dir 指向另一受管 target | 禁用勾选、显示「继承自 X」 | 不跳过，客户端传了就照常安装 |
+| 项目级 target 的 skill_dir 指向外部目录 | 不禁用、照常勾选 | 静默跳过，用户勾了没有任何提示 |
+
+第二行是用户可见的静默失效。选定修复方向后应单独立项（涉及前后端契约与用户可见
+行为，不能混进机械重构）。
 
 ## 小项（不单独立项，顺手做）
 
