@@ -8,6 +8,7 @@ import {
   hasUnmanagedSkillLinks,
   isSelectableSyncTarget,
   pendingSkillLinkCleanupCount,
+  skillDirOwnerLabel,
   skillLinkSourceLabel,
   skillLinkSourcePath,
   skillLinkStateInfo,
@@ -104,9 +105,20 @@ describe("skill link association presentation", () => {
     expect(hasCurrentSourceSkillLinks(links)).toBe(false);
   });
 
-  it("marks inherited targets as unselectable", () => {
+  it("marks alias skill dirs as unselectable", () => {
     expect(isSelectableSyncTarget(makeTarget({ id: "plain" }))).toBe(true);
     expect(isSelectableSyncTarget(makeTarget({ id: "inherited", linkedTargetId: "plain" }))).toBe(false);
+    // 链接另一端不是受管 target（外部目录）时 linkedTargetId 为空，但落点同样是
+    // 别名——此前它会保持可选，勾了之后后端静默跳过（用户可见的静默失效）。
+    expect(isSelectableSyncTarget(makeTarget({ id: "external", skillDirLinkTarget: "/external/skills" }))).toBe(false);
+    // 断链：canonicalize 失败时后端回落为解析出的原路径，仍有值。
+    const broken = makeTarget({ id: "broken", skillDirLinkTarget: "/gone/skills" });
+    expect(isSelectableSyncTarget(broken)).toBe(false);
+    expect(skillDirOwnerLabel(broken)).toBe("内容属链接指向的目录");
+    expect(skillDirOwnerLabel(makeTarget({ id: "inherited", linkedTargetId: "plain" }))).toBe(
+      "内容属 plain",
+    );
+    expect(skillDirOwnerLabel(makeTarget({ id: "plain" }))).toBeNull();
   });
 
   it("preselects selectable targets already linked to the current source", () => {

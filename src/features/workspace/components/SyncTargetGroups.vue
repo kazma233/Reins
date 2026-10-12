@@ -7,6 +7,8 @@ import {
   hasCurrentSourceSkillLinks,
   hasUnmanagedSkillLinks,
   isSelectableSyncTarget,
+  skillDirIsAlias,
+  skillDirOwnerLabel,
   skillLinkSourceLabel,
   skillLinkSourcePath,
   skillLinkStateInfo,
@@ -74,12 +76,12 @@ const groups = computed(() => groupSyncTargets(props.targets));
         class="manager-sync-target-entry"
       >
         <label
-          :class="`manager-sync-target-row${busy || target.linkedTargetId ? ' manager-sync-target-row--disabled' : ''}`"
+          :class="`manager-sync-target-row${busy || skillDirIsAlias(target) ? ' manager-sync-target-row--disabled' : ''}`"
         >
           <input
             type="checkbox"
             :checked="selectedTargetIds.has(target.id)"
-            :disabled="busy || Boolean(target.linkedTargetId)"
+            :disabled="busy || skillDirIsAlias(target)"
             @change="$emit('toggleTarget', target.id)"
           />
           <span class="manager-sync-target-row__body">
@@ -101,8 +103,13 @@ const groups = computed(() => groupSyncTargets(props.targets));
               </span>
             </span>
             <span class="manager-sync-target-row__path">{{ target.skillDir }}</span>
-            <span v-if="target.linkedTargetId" class="manager-sync-target-row__link">
-              继承自 {{ target.linkedTargetId }}
+            <span v-if="skillDirOwnerLabel(target)" class="manager-sync-target-row__link">
+              {{ skillDirOwnerLabel(target) }}
+            </span>
+            <!-- 落点是软链接时，文件实际在链接另一端：地址也给出来，
+                 否则用户会以为路径就是内容所在。 -->
+            <span v-if="target.skillDirLinkTarget" class="manager-sync-target-row__link">
+              {{ target.skillDirLinkTarget }}
             </span>
           </span>
         </label>

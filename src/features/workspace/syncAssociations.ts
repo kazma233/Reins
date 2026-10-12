@@ -66,9 +66,25 @@ export function hasCurrentSourceSkillLinks(
   );
 }
 
-// 能被勾选的 target：禁用的、整目录继承别的 target 的都不参与同步选择。
+// 落点是软链接的 target：那个目录不属于它，内容由链接另一端负责，因此不参与
+// 同步选择。判定只看「是不是链接」——能叫出归属（linkedTargetId）与叫不出
+// （协议目录、外部目录、断链）一样不可选，后者此前会静默失效。
+export function skillDirIsAlias(target: SyncTargetOption): boolean {
+  return Boolean(target.skillDirLinkTarget ?? target.linkedTargetId);
+}
+
+// 该 target 的技能目录属于谁（给界面说明用）：能命名就给 target id，否则说明
+// 内容在链接指向的目录里。
+export function skillDirOwnerLabel(target: SyncTargetOption): string | null {
+  if (!skillDirIsAlias(target)) return null;
+  return target.linkedTargetId
+    ? `内容属 ${target.linkedTargetId}`
+    : "内容属链接指向的目录";
+}
+
+// 能被勾选的 target：落点是软链接（整目录继承或指向别处）的都不参与同步选择。
 export function isSelectableSyncTarget(target: SyncTargetOption): boolean {
-  return !target.linkedTargetId;
+  return !skillDirIsAlias(target);
 }
 
 // 打开同步弹窗时的 targets 预选：只挑已经装了当前来源内容的那批（列表里带
