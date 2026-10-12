@@ -1328,6 +1328,93 @@ fn project_agent_dir_follows_normalized_agent_id() -> Result<()> {
     Ok(())
 }
 
+// inspection 也要带上落点归属：目标面板的列表用它标注「这个落点不归它」，
+// 与同步弹窗同一份数据，不再让两个界面各自判断。
+#[test]
+fn inspection_reports_skill_dir_link_attribution() -> Result<()> {
+    let root = TestDir::new("inspect-skill-dir-link")?;
+    let store = WorkspaceConfigStore::at(root.path()).with_env(Environment::from_env());
+
+    let owner_skill_dir = root.path().join("owner/skills");
+    let alias_skill_dir = root.path().join("alias/skills");
+    let broken_skill_dir = root.path().join("broken/skills");
+    fs::create_dir_all(&owner_skill_dir)?;
+    fs::create_dir_all(alias_skill_dir.parent().expect("alias parent"))?;
+    fs::create_dir_all(broken_skill_dir.parent().expect("broken parent"))?;
+    create_directory_symlink(&owner_skill_dir, &alias_skill_dir)?;
+    create_directory_symlink(&root.path().join("gone"), &broken_skill_dir)?;
+
+    fs::write(
+        store.config_path(),
+        format!(
+            r#"targets:
+  owner:
+    skill_dir: {}
+  alias:
+    skill_dir: {}
+  broken:
+    skill_dir: {}
+"#,
+            owner_skill_dir.display(),
+            alias_skill_dir.display(),
+            broken_skill_dir.display(),
+        ),
+    )?;
+
+    let state = workspace_state_inner(&store)?;
+    let inspection = state.inspection.expect("inspection");
+    let by_id = |id: &str| {
+        inspection
+            .targets
+            .iter()
+            .find(|target| target.id.0 == id)
+            .expect("target 应在 inspection 里")
+    };
+
+    // 普通落点不标注。
+    assert!(by_id("owner").skill_dir_link.is_none());
+
+    // 指向受管 target：给出命名归属与真实目录。
+    let link = by_id("alias")
+        .skill_dir_link
+        .as_ref()
+        .expect("alias 应标注");
+    assert_eq!(link.linked_target_id.as_deref(), Some("owner"));
+    assert_eq!(
+        link.link_target,
+        display_path(
+            &owner_skill_dir
+                .canonicalize()
+                .unwrap_or_else(|_| owner_skill_dir.clone())
+        )
+    );
+
+    // 断链：叫不出名字，但仍要标注（内容在链接另一端）。
+    let broken = by_id("broken")
+        .skill_dir_link
+        .as_ref()
+        .expect("断链也要标注");
+    assert!(broken.linked_target_id.is_none());
+    assert_eq!(
+        broken.link_target,
+        root.path().join("gone").display().to_string()
+    );
+
+    // 两个别名各一条提示，普通 target 不提示（面板已按行标注，这里让其它消费方
+    // 也能看到「它为什么不参与分发」）。
+    assert_eq!(inspection.warnings.len(), 2);
+    assert!(
+        inspection
+            .warnings
+            .iter()
+            .any(|warning| warning.starts_with("alias ")),
+        "warnings 应说明是哪个 target：{:?}",
+        inspection.warnings
+    );
+
+    Ok(())
+}
+
 #[test]
 fn pi_mcp_apply_read_remove_roundtrip() -> Result<()> {
     let root = TestDir::new("pi-mcp-roundtrip")?;

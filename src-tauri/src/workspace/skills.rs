@@ -1,7 +1,7 @@
 // Skill/sync domain: discover skills from local/git sources, import them into
 // config, and install/remove directory links across targets.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::ffi::OsStr;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -21,9 +21,7 @@ use super::skill_install::{
     InstallItem, ManagedTarget, SelectedSkill, SkillInstall, managed_targets, resolve_ids,
 };
 // 路径规范化只有一份实现：链接归属分类与安装侧的比较必须同口径。
-pub(super) use super::skill_install::{
-    normalize_link_path, normalize_own_dir, relative_to_source_root,
-};
+pub(super) use super::skill_install::{normalize_link_path, relative_to_source_root};
 use super::targets::read_skill_dir_link;
 use super::types::*;
 use super::{
@@ -110,34 +108,19 @@ pub(super) fn build_sync_target_options_with_sources(
     config: &ResolvedManagerConfig,
     sources: &[SkillLinkSource],
 ) -> Result<Vec<SyncTargetOption>> {
-    // 全部 target 的 (地址, skill_dir)：地址由寻址层给出，本地不拼串。
-    let flat: Vec<(TargetRef, &Path)> = config
-        .target_refs()
-        .into_iter()
-        .map(|(reference, target)| (reference, target.skill_dir.as_path()))
-        .collect();
+    // 落点的链接状态由寻址层统一提供（是不是链接、内容属于谁、解出的真实目录），
+    // 本地不再自己 canonicalize 一遍。
+    let links = config.skill_dir_links()?;
 
-    // 受管落点 → target id。归属比较必须按「链接自身路径」算：对目录链接
-    // canonicalize 会解析到另一端，别名就会与它的目标撞进同一个 key。
-    let mut dir_to_target: HashMap<PathBuf, String> = HashMap::new();
-    for (reference, skill_dir) in &flat {
-        dir_to_target
-            .entry(normalize_own_dir(skill_dir))
-            .or_insert_with(|| reference.composite_id());
-    }
-
-    let mut options = Vec::with_capacity(flat.len());
-    for (reference, skill_dir) in flat {
+    let mut options = Vec::with_capacity(links.len());
+    for (link, (reference, target)) in links.into_iter().zip(config.target_refs()) {
+        let skill_dir = target.skill_dir.as_path();
         // 落点是软链接时：能对上受管 target 就给出它的 id（命名归属），对不上
         // 就把链接解出的真实目录带出去——界面的「内容属谁 / 文件在哪」都靠这两个
         // 值，不再由前端猜。
-        let skill_dir_link = read_skill_dir_link(skill_dir)?;
-        let linked_target_id = skill_dir_link
-            .as_ref()
-            .and_then(|linked| dir_to_target.get(linked).cloned());
-        let skill_dir_link_target = skill_dir_link.as_ref().map(|linked| display_path(linked));
+        let skill_dir_link_target = link.link_target.as_ref().map(|linked| display_path(linked));
         // 内容属于链接另一端时，那一批物理链接不该算成本 target 自己的安装记录。
-        let links = if skill_dir_link.is_some() {
+        let links = if link.is_alias() {
             Vec::new()
         } else {
             scan_target_skill_links(skill_dir, sources)?
@@ -156,7 +139,7 @@ pub(super) fn build_sync_target_options_with_sources(
             agent_id,
             label: id,
             skill_dir: display_path(skill_dir),
-            linked_target_id,
+            linked_target_id: link.linked_target_id,
             skill_dir_link_target,
             links,
         });

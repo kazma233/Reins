@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -341,6 +341,10 @@ pub(crate) struct ProjectInspection {
 pub(crate) struct TargetInspection {
     pub(crate) id: AgentTargetId,
     pub(crate) skill_dir: PathInspection,
+    // 落点是软链接时的归属：谁提供内容、文件实际在哪。列表视图据此提示
+    // 「这个落点不是它自己的目录」，与同步弹窗同一个数据源头。
+    #[ts(optional = nullable)]
+    pub(crate) skill_dir_link: Option<SkillDirLinkView>,
     pub(crate) config_path: Option<PathInspection>,
 }
 
@@ -613,6 +617,35 @@ pub(super) struct ResolvedProjectConfig {
     pub(super) agents: BTreeMap<AgentTargetId, ResolvedTargetConfig>,
 }
 
+// 一个 target 的技能落点是不是软链接、内容属于谁（探测结果，只读）。
+// 别名 = 这个 target 不拥有那个目录，前端据它禁用与标注。
+// 给界面的落点链接归属（可选字段只发有值的那部分）。
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../src/features/workspace/generated/")]
+pub(crate) struct SkillDirLinkView {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional = nullable)]
+    pub(crate) linked_target_id: Option<String>,
+    pub(crate) link_target: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct SkillDirLink {
+    // 复合地址。
+    pub(super) id: String,
+    // 链接的另一端是某个受管 target 时给出它的 id；外部目录/断链时为 None。
+    pub(super) linked_target_id: Option<String>,
+    // 落点不是链接时为 None。
+    pub(super) link_target: Option<PathBuf>,
+}
+
+impl SkillDirLink {
+    pub(super) fn is_alias(&self) -> bool {
+        self.link_target.is_some()
+    }
+}
+
 // 目标不参与分发的原因。调用方只决定表现方式（报错 / 提示 / 静默），
 // 「为什么不参与」由这里回答。
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -731,6 +764,35 @@ impl ResolvedManagerConfig {
             return Ok(Some(TargetSkip::LinkedDir));
         }
         Ok(None)
+    }
+
+    // 全部 target 的落点链接状态（只读探测）。落点归属与参与判定都从这里取，
+    // 不给调用方各自 canonicalize 的机会——落点是不是链接、内容属于谁、解出来
+    // 的真实目录，答案只有一处。
+    pub(super) fn skill_dir_links(&self) -> Result<Vec<SkillDirLink>> {
+        // 受管落点 → target id。归属比较按「链接自身路径」算：对目录链接
+        // canonicalize 会解析到另一端，别名就会与它的目标撞进同一个 key。
+        let mut dir_to_target: HashMap<PathBuf, String> = HashMap::new();
+        for (reference, target) in self.target_refs() {
+            dir_to_target
+                .entry(super::skill_install::normalize_own_dir(&target.skill_dir))
+                .or_insert_with(|| reference.composite_id());
+        }
+
+        self.target_refs()
+            .into_iter()
+            .map(|(reference, target)| {
+                let id = reference.composite_id();
+                let linked = super::targets::read_skill_dir_link(&target.skill_dir)?;
+                Ok(SkillDirLink {
+                    id,
+                    linked_target_id: linked
+                        .as_ref()
+                        .and_then(|link_target| dir_to_target.get(link_target).cloned()),
+                    link_target: linked,
+                })
+            })
+            .collect()
     }
 
     // 全部 target 的 (地址, target, 是否参与分发)。

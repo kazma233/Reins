@@ -9,7 +9,7 @@ use super::mcp_formats::mcp_format_writer;
 use super::{
     AgentTargetId, McpConfigType, McpInspection, McpTargetInspection, PathInspection,
     ProjectInspection, ResolvedManagerConfig, ResolvedMcpConfig, ResolvedTargetConfig,
-    TargetInspection, TargetRef, WorkspaceInspection, parse_manager_config,
+    SkillDirLinkView, TargetInspection, TargetRef, WorkspaceInspection, parse_manager_config,
     read_existing_mcp_entries,
 };
 use crate::support::environment::Environment;
@@ -25,7 +25,27 @@ pub(crate) fn inspect_app_state_document(
     env: &Environment,
 ) -> Result<WorkspaceInspection> {
     let config = parse_manager_config(raw_content, config_path, env)?;
-    let warnings = Vec::new();
+
+    // 落点归属只查一次：两个视图（全局 target 与项目 agent）都从这张表取。
+    let links = config.skill_dir_links()?;
+    let link_of = |id: &str| {
+        links
+            .iter()
+            .find(|link| link.id == id)
+            .and_then(|link| link.link_target.as_ref().map(|target| (link, target)))
+    };
+    // 落点是软链接的 target 不参与分发（判定在寻址层），这里把「为什么不参与」
+    // 一并说清楚：面板已按行标注，warnings 让启动与其它消费方也能看到。
+    let warnings = links
+        .iter()
+        .filter(|link| link.is_alias())
+        .map(|link| {
+            format!(
+                "{} 的 skills 目录是软链接，内容由链接另一端负责，不参与技能分发。",
+                link.id
+            )
+        })
+        .collect();
 
     let targets = config
         .targets
@@ -36,6 +56,10 @@ pub(crate) fn inspect_app_state_document(
                 path: super::display_path(&target.skill_dir),
                 exists: target.skill_dir.exists(),
             },
+            skill_dir_link: link_of(&target.id.0).map(|(link, target)| SkillDirLinkView {
+                linked_target_id: link.linked_target_id.clone(),
+                link_target: super::display_path(target),
+            }),
             config_path: target.config_path.as_ref().map(|path| PathInspection {
                 path: super::display_path(path),
                 exists: path.exists(),
@@ -62,16 +86,29 @@ pub(crate) fn inspect_app_state_document(
             agents: project
                 .agents
                 .values()
-                .map(|target| TargetInspection {
-                    id: target.id.clone(),
-                    skill_dir: PathInspection {
-                        path: super::display_path(&target.skill_dir),
-                        exists: target.skill_dir.exists(),
-                    },
-                    config_path: target.config_path.as_ref().map(|path| PathInspection {
-                        path: super::display_path(path),
-                        exists: path.exists(),
-                    }),
+                .map(|target| {
+                    let composite_id = TargetRef::Project {
+                        project_id: project.id.clone(),
+                        agent_id: target.id.clone(),
+                    }
+                    .composite_id();
+                    TargetInspection {
+                        id: target.id.clone(),
+                        skill_dir: PathInspection {
+                            path: super::display_path(&target.skill_dir),
+                            exists: target.skill_dir.exists(),
+                        },
+                        skill_dir_link: link_of(&composite_id).map(|(link, link_target)| {
+                            SkillDirLinkView {
+                                linked_target_id: link.linked_target_id.clone(),
+                                link_target: super::display_path(link_target),
+                            }
+                        }),
+                        config_path: target.config_path.as_ref().map(|path| PathInspection {
+                            path: super::display_path(path),
+                            exists: path.exists(),
+                        }),
+                    }
                 })
                 .collect(),
         })
