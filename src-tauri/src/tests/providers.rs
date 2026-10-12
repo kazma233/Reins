@@ -231,6 +231,72 @@ fn codex_apply_writes_entry_and_pointer() -> Result<()> {
     Ok(())
 }
 
+// 「目录文件必须先于 config.toml 写入」此前只写在 codex.rs 的注释里，而
+// `Vec<(PathBuf, String)>` 对顺序零承诺、write_files 按数组顺序逐个写。这条把
+// 注释变成被守卫的事实：config.toml 里的 model_catalog_json 一旦指向缺失或非法
+// 的文件，Codex 配置加载会整体失败。
+#[test]
+fn codex_apply_writes_catalog_before_config() -> Result<()> {
+    let isolated = Isolated::new()?;
+    isolated.seed_model("p1", "model-a")?;
+
+    let preview = preview_apply_inner(
+        &isolated.store,
+        &isolated.env,
+        &plan("p1", ProviderAppId::Codex, &["model-a"], "model-a", None),
+    )?;
+
+    let paths: Vec<&str> = preview
+        .files
+        .iter()
+        .map(|file| file.path.as_str())
+        .collect();
+    assert_eq!(paths.len(), 2, "codex 应用产物应是两个文件：{paths:?}");
+    assert!(
+        paths[0].ends_with("reins-models.json"),
+        "目录文件必须排在 config.toml 之前，实际顺序：{paths:?}"
+    );
+    assert!(
+        paths[1].ends_with("config.toml"),
+        "config.toml 必须是最后一个，实际顺序：{paths:?}"
+    );
+
+    // 指针值与目录文件的实际路径必须一致，否则「先写目录」也救不了。
+    let catalog_content = preview
+        .files
+        .iter()
+        .find(|file| file.path.ends_with("reins-models.json"))
+        .map(|file| {
+            file.diff
+                .iter()
+                .map(|line| line.text.clone())
+                .collect::<Vec<_>>()
+                .join("\n")
+        })
+        .expect("目录文件应在预览里");
+    let config_content = preview
+        .files
+        .iter()
+        .find(|file| file.path.ends_with("config.toml"))
+        .map(|file| {
+            file.diff
+                .iter()
+                .map(|line| line.text.clone())
+                .collect::<Vec<_>>()
+                .join("\n")
+        })
+        .expect("config.toml 应在预览里");
+    assert!(
+        config_content.contains(&format!("model_catalog_json = \"{}\"", paths[0])),
+        "config.toml 的 model_catalog_json 应指向目录文件 {}：{config_content}",
+        paths[0]
+    );
+    // 目录文件是给 Codex 读的模型清单，不该反过来带指针。
+    assert!(!catalog_content.contains("model_catalog_json"));
+
+    Ok(())
+}
+
 // off 档无文档依据（写入 "none"），能力表不放行。
 #[test]
 fn codex_off_reasoning_level_is_rejected() -> Result<()> {

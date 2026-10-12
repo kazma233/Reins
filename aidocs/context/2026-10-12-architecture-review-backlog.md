@@ -78,9 +78,14 @@
 - 问题：六家来源五家自管 freshness，唯 grokbuild 的成本取决于域外两个决定（`state/session_index.rs` 的 clear 调用点、`commands.rs:62` 的 refresh 默认值）；对 SessionIndexState 做删除测试，它主要是 grokbuild 放错位置的索引缓存。
 - 方向：grokbuild 管自己的失效（哪怕只是自有缓存实例）。前置：先确认全量重建成本是否真实可感；若做，需在 reader-engine ADR 决策 6 补记「全量重建 ≠ 无缓存」。
 
-### 10. C11 · codex apply 写序不变量测试
+### 10. C11 · codex apply 写序不变量测试 · 已完成
 
-- 域：providers；强度：Speculative（小而实的顺手项）
+- 域：providers；强度：Speculative（小而实的顺手项）；完成于 2026-10-12
+- 落地：`codex_apply_writes_catalog_before_config` 断言应用产物里目录文件
+  （`reins-models.json`）排在 `config.toml` 之前，并断言 config.toml 的
+  `model_catalog_json` 确实指向那个路径。选 preview 作为观测点是因为顺序由
+  adapter 返回的数组决定（`write_files` 按数组顺序逐个原子写），而 `apply` 直接
+  写盘、没有可注入的写入口径——preview 是这条不变量唯一可观测的产物。
 - 问题：「目录文件必须排在 config.toml 之前写入」只活在 `apps/codex.rs:324-330` 的注释里，接口类型 `Vec<(PathBuf, String)>` 对顺序零承诺。
 - 方向：一个测试断言 codex apply 产物的首个文件是 reins-models.json，把注释变成被守卫的事实。
 
