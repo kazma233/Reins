@@ -45,10 +45,10 @@ fn catalog_efforts(
     reasoning: Option<bool>,
     reasoning_levels: &Option<Vec<ReasoningLevel>>,
 ) -> Vec<ReasoningLevel> {
-    if let Some(levels) = reasoning_levels {
-        if !levels.is_empty() {
-            return levels.clone();
-        }
+    if let Some(levels) = reasoning_levels
+        && !levels.is_empty()
+    {
+        return levels.clone();
     }
     if reasoning == Some(true) {
         return vec![
@@ -107,10 +107,10 @@ fn build_catalog(
         if let Some(context_window) = model.context_window {
             entry["context_window"] = json!(context_window);
         }
-        if let Some(level) = plan.default_reasoning_level {
-            if efforts.contains(&level) {
-                entry["default_reasoning_level"] = json!(dialect.spell(level));
-            }
+        if let Some(level) = plan.default_reasoning_level
+            && efforts.contains(&level)
+        {
+            entry["default_reasoning_level"] = json!(dialect.spell(level));
         }
         models.push(entry);
     }

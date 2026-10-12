@@ -251,10 +251,10 @@ impl AppAdapter for ClaudeAdapter {
             .unwrap_or(false);
         if model_is_ours {
             root.remove("model");
-            if let Some(level) = root.get("effortLevel").and_then(JsonValue::as_str) {
-                if self.reasoning_dialect().parse(level).is_some() {
-                    root.remove("effortLevel");
-                }
+            if let Some(level) = root.get("effortLevel").and_then(JsonValue::as_str)
+                && self.reasoning_dialect().parse(level).is_some()
+            {
+                root.remove("effortLevel");
             }
         }
 
