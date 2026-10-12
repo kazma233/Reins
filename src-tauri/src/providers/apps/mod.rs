@@ -456,9 +456,24 @@ pub(crate) fn classify_reins_entry(
     protocol: Option<ProviderProtocol>,
     providers: &BTreeMap<String, ResolvedProvider>,
 ) -> ProviderAppEntry {
+    classify_reins_entry_with(key, base_url, protocol, providers, |entry, provider| {
+        entry == Some(provider.base_url.as_str())
+    })
+}
+
+// 比较口径钩子:entry 的 base_url 与平台 base_url 怎么算一致。Grok 的
+// 写入口径会把 Anthropic 平台 base_url 折算成 /v1 结尾,恒等比较会把它
+// 错判成漂移;口径不是恒等的适配器经此声明,不必克隆视图凑相等。
+pub(crate) fn classify_reins_entry_with(
+    key: &str,
+    base_url: Option<&str>,
+    protocol: Option<ProviderProtocol>,
+    providers: &BTreeMap<String, ResolvedProvider>,
+    base_url_matches: fn(Option<&str>, &ResolvedProvider) -> bool,
+) -> ProviderAppEntry {
     let provider_id = key.strip_prefix(REINS_PREFIX).unwrap_or(key).to_string();
     match providers.get(&provider_id) {
-        Some(provider) if base_url == Some(provider.base_url.as_str()) => applied_entry(
+        Some(provider) if base_url_matches(base_url, provider) => applied_entry(
             key.to_string(),
             provider,
             base_url.map(str::to_string),

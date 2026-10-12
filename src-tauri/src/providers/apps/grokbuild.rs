@@ -40,19 +40,10 @@ fn grok_base_url(protocol: ProviderProtocol, base_url: &str) -> String {
     }
 }
 
-// 反读时的 providers.yaml 视图：base_url 折算到 Grok 写入口径，
-// 供 classify_reins_entry 比对。
-fn grok_providers_view(
-    providers: &BTreeMap<String, ResolvedProvider>,
-) -> BTreeMap<String, ResolvedProvider> {
-    providers
-        .iter()
-        .map(|(id, provider)| {
-            let mut view = provider.clone();
-            view.base_url = grok_base_url(provider.protocol, &provider.base_url);
-            (id.clone(), view)
-        })
-        .collect()
+// 反读比对口径:Anthropic 平台在 Grok 配置里写的是补了 /v1 的 base_url
+// (见 grok_base_url),classify 前对平台侧做同样折算再比较。
+fn grok_base_url_matches(entry_base_url: Option<&str>, provider: &ResolvedProvider) -> bool {
+    entry_base_url == Some(grok_base_url(provider.protocol, &provider.base_url).as_str())
 }
 
 fn model_entry_key(registration: &str, model_id: &str) -> String {
@@ -222,7 +213,6 @@ impl AppAdapter for GrokbuildAdapter {
 
         let provider_table = root.get("model_providers").and_then(TomlValue::as_table);
         if let Some(table) = provider_table {
-            let grok_providers = grok_providers_view(providers);
             for (key, value) in table {
                 let base_url = value.get("base_url").and_then(TomlValue::as_str);
                 let protocol = value
@@ -230,8 +220,13 @@ impl AppAdapter for GrokbuildAdapter {
                     .and_then(TomlValue::as_str)
                     .and_then(|backend| GROK_PROTOCOL.parse(backend));
                 let entry = if key.starts_with(super::REINS_PREFIX) {
-                    let mut entry =
-                        super::classify_reins_entry(key, base_url, protocol, &grok_providers);
+                    let mut entry = super::classify_reins_entry_with(
+                        key,
+                        base_url,
+                        protocol,
+                        providers,
+                        grok_base_url_matches,
+                    );
                     // 属于该 provider 的模型条目：model 表中 model_provider
                     // 指向注册键的 reins- 键。
                     if let Some(models) = root.get("model").and_then(TomlValue::as_table) {
