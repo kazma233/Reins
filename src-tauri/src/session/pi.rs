@@ -187,7 +187,7 @@ impl PiReader {
     // 索引：指纹就是新鲜度（root 由实例本身表达，不再另存 source_key）。
     fn index(&self) -> Result<Vec<SessionFileEntry>> {
         let files = enumerate_pi_files(&self.sessions_root)?;
-        let fingerprint = sessions_fingerprint(&files)?;
+        let fingerprint = super::sessions_fingerprint(&files)?;
 
         if let Some(entry) = self
             .cached_index
@@ -356,22 +356,6 @@ pub(crate) fn delete_plan(input: &DeletePlanInput) -> Result<Vec<DeletePlanActio
 
 fn enumerate_pi_files(root: &Path) -> Result<Vec<PathBuf>> {
     crate::support::fs::enumerate_jsonl_files(root)
-}
-
-fn sessions_fingerprint(files: &[PathBuf]) -> Result<String> {
-    let mut parts = Vec::with_capacity(files.len());
-    for path in files {
-        let metadata = fs::metadata(path)
-            .with_context(|| format!("Failed to read metadata for {}", path.display()))?;
-        parts.push(format!(
-            "{}:{}:{}",
-            path.display(),
-            file_mtime(path)?,
-            metadata.len()
-        ));
-    }
-    parts.sort();
-    Ok(parts.join("\n"))
 }
 
 fn file_mtime(path: &Path) -> Result<i64> {

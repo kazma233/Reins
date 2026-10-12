@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use anyhow::{Context, Result, bail};
 
 pub(crate) mod catalog;
@@ -118,6 +120,25 @@ pub(crate) fn delete_session(source_app: SourceApp, source_session_id: &str) -> 
         sources::DeletePolicy::Deleter { delete, .. } => delete(source_session_id),
         sources::DeletePolicy::Unsupported { reason, .. } => bail!("{reason}"),
     }
+}
+
+// 文件集合的新鲜度指纹:(路径, mtime, 大小) 排序串接。stat 全集合远便宜于
+// 解析,自管 freshness 的目录型来源(pi/grokbuild/dsh)用它门控各自的索引
+// 缓存;口径只有这一份,各家不得再拼。
+pub(crate) fn sessions_fingerprint(files: &[PathBuf]) -> Result<String> {
+    let mut parts = Vec::with_capacity(files.len());
+    for path in files {
+        let metadata = std::fs::metadata(path)
+            .with_context(|| format!("Failed to read metadata for {}", path.display()))?;
+        parts.push(format!(
+            "{}:{}:{}",
+            path.display(),
+            crate::support::time::file_modified_timestamp_millis(path)?,
+            metadata.len()
+        ));
+    }
+    parts.sort();
+    Ok(parts.join("\n"))
 }
 
 fn sort_entries(entries: &mut [SessionFileEntry]) {

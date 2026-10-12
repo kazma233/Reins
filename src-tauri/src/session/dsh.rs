@@ -733,7 +733,7 @@ impl FamilySpec for DshSpec {
     // 失效用成员 mtime 最大值(引擎默认)。这是现状的刻意差异,不是遗漏。
     fn index_freshness(&self, scan_root: &Path) -> Result<Freshness> {
         let paths = session_transcript_paths_at(scan_root)?;
-        sessions_fingerprint(&paths).map(Freshness::Fingerprint)
+        super::sessions_fingerprint(&paths).map(Freshness::Fingerprint)
     }
 
     fn summary_kind(&self) -> SummaryKind {
@@ -818,22 +818,6 @@ pub(crate) fn engine_at(
     store_dir: PathBuf,
 ) -> super::reader_engine::ReaderEngine<DshSpec> {
     super::reader_engine::ReaderEngine::new(DshSpec, root, store_dir)
-}
-
-fn sessions_fingerprint(paths: &[PathBuf]) -> Result<String> {
-    let mut parts = Vec::with_capacity(paths.len());
-    for path in paths {
-        let metadata = fs::metadata(path)
-            .with_context(|| format!("Failed to read metadata for {}", path.display()))?;
-        parts.push(format!(
-            "{}:{}:{}",
-            path.display(),
-            crate::support::time::file_modified_timestamp_millis(path)?,
-            metadata.len()
-        ));
-    }
-    parts.sort();
-    Ok(parts.join("\n"))
 }
 
 fn session_row(path: PathBuf, transcript: DshTranscript) -> DshSessionRow {
