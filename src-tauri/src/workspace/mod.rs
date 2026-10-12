@@ -10,6 +10,7 @@ use std::os::windows::process::CommandExt;
 
 use anyhow::{Context, Result, anyhow, bail};
 
+mod addressing;
 pub(crate) mod commands;
 mod config;
 mod inspect;

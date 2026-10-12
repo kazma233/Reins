@@ -5,13 +5,14 @@ use std::sync::Arc;
 use anyhow::Result;
 use serde_json::Value as JsonValue;
 
+use super::addressing::TargetRef;
 use super::mcp_formats::mcp_format_writer;
-use super::{
+use super::types::{
     AgentTargetId, McpConfigType, McpInspection, McpTargetInspection, ProjectInspection,
     ResolvedManagerConfig, ResolvedMcpConfig, ResolvedTargetConfig, SkillDirLinkView,
-    TargetInspection, TargetRef, WorkspaceInspection, parse_manager_config,
-    read_existing_mcp_entries,
+    TargetInspection, WorkspaceInspection,
 };
+use super::{parse_manager_config, read_existing_mcp_entries};
 use crate::support::environment::Environment;
 
 type McpEntryCache = HashMap<

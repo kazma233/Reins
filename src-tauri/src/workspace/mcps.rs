@@ -15,6 +15,7 @@ use serde_json::{Map as JsonMap, Value as JsonValue};
 use toml::Value as TomlValue;
 
 use super::WorkspaceConfigStore;
+use super::addressing::*;
 use super::mcp_formats::{McpFormatWriter, mcp_format_writer};
 use super::targets::builtin_target_defaults_map;
 use super::types::*;

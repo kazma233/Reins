@@ -21,6 +21,7 @@ use super::skill_install::{
     InstallItem, ManagedTarget, SelectedSkill, SkillInstall, managed_targets, resolve_ids,
 };
 // 路径规范化只有一份实现：链接归属分类与安装侧的比较必须同口径。
+use super::addressing::*;
 pub(super) use super::skill_install::{normalize_link_path, relative_to_source_root};
 use super::targets::read_skill_dir_link;
 use super::types::*;

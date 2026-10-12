@@ -11,12 +11,10 @@ use std::path::{Component, Path, PathBuf};
 
 use anyhow::{Context, Result, anyhow, bail};
 
+use super::addressing::{TargetRef, TargetSkip};
 use super::display_path;
 use super::targets::read_directory_link_target;
-use super::types::{
-    AgentTargetId, ResolvedManagerConfig, ResolvedTargetConfig, SkillSyncItem, TargetRef,
-    TargetSkip,
-};
+use super::types::{AgentTargetId, ResolvedManagerConfig, ResolvedTargetConfig, SkillSyncItem};
 use super::{create_directory_symlink, remove_existing_path};
 
 // 一个参与分发决策的 target。

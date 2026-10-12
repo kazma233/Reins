@@ -1,5 +1,6 @@
 use super::*;
 use crate::test_support::{TestDir, TestEnvGuard};
+use crate::workspace::addressing::TargetRef;
 use crate::workspace::targets::target_presets_inner;
 use std::time::{Duration, UNIX_EPOCH};
 
