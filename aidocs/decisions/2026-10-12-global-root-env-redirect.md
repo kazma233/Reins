@@ -36,9 +36,9 @@
 - 两域同源不变量：`tests/agents.rs::workspace_and_providers_agree_on_codex_config_path` 直接断言设置 `CODEX_HOME` 后 `builtin_target_defaults`（workspace）与 `app_config_paths`（providers）解析到同一路径。
 - 官方语义核对（2026-10-12，本机 codex-cli 0.158.0）：`CODEX_HOME=<tmp> codex doctor` 报 config 位于 `<tmp>/config.toml`，印证 `CODEX_HOME` 重定位整个 codex 配置目录。
 
-## 未纳入本次（已记录，不在 C10 范围）
+## 未纳入本次（已记录，不在 C10 范围）——已于 2026-10-12 完成
 
-`session` 域仍各自解析同一批变量（`session/pi.rs`、`session/grokbuild.rs` 读 env，`session/codex.rs` / `claude_code.rs` / `dsh.rs` 拼默认目录）。这些属于会话存储读取路径，与 C10 的两域分叉无关；若要收敛到 `Environment`，应按 session 域单独一项做，避免把会话来源的存储契约一起改动。
+`session` 域仍各自解析同一批变量（`session/pi.rs`、`session/grokbuild.rs` 读 env，`session/codex.rs` / `claude_code.rs` / `dsh.rs` 拼默认目录）。这些属于会话存储读取路径，与 C10 的两域分叉无关；按「session 域单独一项」完成，见 `2026-10-12-session-roots-follow-redirect.md`：四家 root 走清单 GlobalRoot（本文件唯一的 unverified 收尾：claude skills 落点），codex 侧补实测——空目录 CODEX_HOME 下 `codex exec` 把 `sessions/年/月/日` 树建在变量目录下（转录文件因目录内无凭据 401 未落，路径选择已证）。
 
 ## 实测结论（2026-10-12，Claude Code 2.1.285）
 
