@@ -1,7 +1,8 @@
 # 架构评审待办清单
 
 - 日期：2026-10-12
-- 状态：待办（第 1、2 项已完成，其余按建议顺序排列）
+- 状态：待办（第 1、2、3 项已完成；剩余按建议顺序排列：C11 → C14 → C4 → C3 → C6 → C9 → C7）
+- 实施顺序的建议依据：C11 最小（一条断言把注释变成被守卫的事实）；C14 收益/风险比最高且清单自己这么排（mcp 表单照抄 providers 的已验证形态，行级校验目前零直接测试）；C4 最重但解掉它之后 session 域测试才可能并行（18 处 `TestEnvGuard` 把测试钉在进程 HOME 上）
 
 来源：2026-10-11 的架构加深评审（workspace / session / providers / 前端四路扫描 + ADR 交叉验证）。已完成项见文末；以下是剩余候选。文中行号为评审时快照，实施前以当前代码为准。
 
@@ -50,7 +51,7 @@
 ### 5. C14 · workspace/model.ts 收深
 
 - 域：workspace 前端；强度：Worth exploring
-- 问题：(a) `projectId:agentId` 拆分规则三处泄漏（`workspace/model.ts:26-34`、`McpPanel.vue:80-83`、`SyncTargetGroups.vue:51-53`），`groupTargetIds` 先格式化成展示文本再按 `/` 反解析；(b) mcp 表单 parse/format/validate 三件套困在 `useMcpMutations.ts`（68-135, 241-262, 284-310）私有函数里，行级校验零直接测试——对照 providers/model.ts:397-511 + 533 行测试的已验证形态；(c) agent 清单前端残留第六份拷贝 `AVAILABLE_PROJECT_AGENTS`（`model.ts:262`，不锚定生成类型）与死导出 `BuiltinTargetPresetId`（71-78）。
+- 问题：(a) `projectId:agentId` 拆分规则泄漏（实施 C2 后同步弹窗那处已随契约收掉，现存 `workspace/model.ts:26-34` 与 `McpPanel.vue:80-83` 两处；`groupTargetIds` 仍先格式化成展示文本再按 `/` 反解析）；(b) mcp 表单 parse/format/validate 三件套困在 `useMcpMutations.ts`（68-135, 241-262, 284-310）私有函数里，行级校验零直接测试——对照 providers/model.ts:397-511 + 533 行测试的已验证形态；(c) agent 清单前端残留第六份拷贝 `AVAILABLE_PROJECT_AGENTS`（`model.ts:262`，不锚定生成类型）与死导出 `BuiltinTargetPresetId`（71-78）。
 - 方向：先做 (b)（照抄 providers 模板，收益/风险比最高）；(a) `parseTargetId` 单点；(c) Rust 侧 codegen 导出 AGENT_IDS 派生、死导出删除（不得手改生成文件）。
 
 ### 6. C3 · MCP writer 调用面收尾
@@ -146,6 +147,9 @@
 
 - providers 能力表 `ModelField::ReasoningLevels` 零适配器引用（`apps/mod.rs:66-79`）——2026-09-24 plan 声明的 unverified 项，验证后填充或删除。
 - session 域的同类环境解析：`session/pi.rs`、`session/grokbuild.rs` 直接读 env，`session/codex.rs` / `claude_code.rs` / `dsh.rs` 各自拼默认目录（与 `support::environment` 同批事实）。C10 只覆盖 agents / workspace / providers 三处；session 的会话存储读取路径要收敛应单独立项，见 ADR「未纳入本次」。
+- `CLAUDE_CONFIG_DIR` 的 **skills 落点**是目前仅剩的 `unverified`（清单按 `<CFG>/skills` 实现）：`claude skills list` 未登录不可用，畸形 skill + `--debug-file` 在 `--version` 下不产生日志。核对方式：登录后把 skill 放到 `<CFG>/skills` 观察是否被发现。
+- `PathInspection.exists` 前端零渲染（`inspection.targets[].skillDir.exists`、`projects[].agents[].skillDir.exists` 都没被读）：落点目录不存在这件事界面不说。补提示属产品决定（可能是空目录待安装，也可能是配置写错），先记着不动。
+- `model.ts:72` 与 `workspace/styles.css:72` 残留 `--color-text-muted` / `--color-muted` 两个令牌，`src/styles.css` 里只定义了 `--color-muted`；工作区那份引用不存在的令牌（浏览器静默忽略）。顺手清掉或补定义。
 
 ## 已完成（2026-10-11 ~ 10-12，作为上下文保留）
 
