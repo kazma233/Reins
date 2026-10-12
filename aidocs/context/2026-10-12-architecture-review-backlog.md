@@ -187,21 +187,32 @@
   实际所在」，判定与文案收成纯函数 `skillDirLink.ts`。
 - 提交：`8040f20`（后端）、`bb06ab0`（前端）。
 
-## 待立项：测试隔离去进程环境依赖（C4 调查挖出）
+## 待立项：测试隔离去进程环境依赖（2026-10-12 复核，数字已修正）
 
-- 域：session / providers / workspace 的测试面；强度：Strong（正确性，不是性能）
-- 结论与证据：把 `TestEnvGuard` 的串行锁去掉后 **82 个测试失败**（359 passed）。分布：
-  `tests::pi` 18、`providers::tests` 17、`tests::grokbuild` 12、`tests::session_delete` 7、
-  `session_usage_stats` / `session_token_usage` / `session_listing` / `session_cache` 各 5、
-  `session_delete_plan` 4、`session::summary_cache` 2、`session_readers` / `reader_engine` 各 1。
-  也就是说这 82 个测试**靠那把锁才能过**：它们事实共享进程 HOME / 环境变量 / 进程级缓存。
-- 根因：拿进程环境当测试隔离手段（`HOME` + `REINS_TEST_HOME` + 各工具环境变量 + 进程级静态
-  缓存）。118 个测试挤在同一把全局锁后。
+- 域：session / providers / workspace 的测试面；强度：**Worth exploring（正确性收益真实，但不是缺陷）**
+- **复核后的三组实测数字**（上一版只写了 82，且把成因说错了）：
+  | 条件 | 结果 |
+  | --- | --- |
+  | 有锁 + 并行（现状） | 441 passed，约 1.2s |
+  | 去锁 + 并行 | **82 failed / 359 passed** |
+  | 去锁 + 串行（`--test-threads=1`） | **4 failed / 438 passed** |
+  | 锁不动、`REINS_TEST_HOME` 钉成不存在的目录后串行 | **8 failed**（`session_delete` 4、`workspace` 4） |
+- 成因（实测）：**不是测试各自依赖真实 HOME**（钉错 home 只塌 8 个），而是所有持 guard 的测试都在改同一组**进程级环境变量**（`HOME` / `REINS_TEST_HOME` / `PATH` / `PI_CODING_AGENT_SESSION_DIR` / 5 个工具 home 变量），**最后写者胜**。`support/fs.rs::user_home_dir()` 在测试构建下**优先读 `REINS_TEST_HOME` 环境变量**（而不是 `home_override` 静态），所以后一个测试的 `set_home` 会立刻改变前一个测试眼中的 home。串行时这个状态是自洽的，并行时互相踩。
+- 顺序依赖只有 4 个（串行去锁才暴露，集中在删除侧）：`tests::session_delete` 的
+  `deleting_codex_family_invokes_official_cli`、`deleting_grokbuild_family_removes_member_dirs_and_search_rows`、
+  `deleting_grokbuild_session_prunes_empty_cwd_bucket`、`deleting_opencode_family_uses_cli`。
+  单跑各自通过、全套跑失败（报 `No such file or directory`）；它们都：`set_home` →
+  装假 CLI 到 `$HOME/bin` → `prepend_to_path` → 调官方删除 CLI（子进程）→ **手工 `env::set_var("PATH", ...)` 还原**。
+  `TestEnvGuard::Drop` 本身会还原全部它接管过的变量（含 PATH），所以这不是清理遗漏，
+  要单独定性（子进程解析、PATH 归还顺序、还是与 `home_override` 静态的交互）。
+- **锁不是过度保护**：它替所有测试维持了「同进程内环境量在单个测试执行期间稳定」这个假设。
+  去掉它需要让测试不再依赖进程环境，而不是把测量数字当成 bug 数。
 - 已有正确形态可照抄：引擎侧 `ReaderEngine::new(root, store_dir)` 与 `*_at` 构造器
   （`codex::engine_at` 等），`tests/session_engine.rs` 明说「不碰进程 env、不持全局锁」；
-  `FamilyReader` 的「static 前置 + 按 root 重建实例」也已证明可行（C4 已把 pi 迁到同形）。
-- 方向：把「根/库目录」从进程环境改为构造参数注入，`TestEnvGuard` 的进程 HOME 覆写逐域退役；
-  每域先做注入点盘点再动（providers 17 个失败的成因与 session 域可能不同）。
+  C4 已把 pi 迁成同形。
+- 方向（待确认）：把 `Environment` 从「读取进程环境的行为体」改成**值快照**并在解析点注入，
+  测试用 `Environment::at(temp_home)` 之类构造；per-test 环境是干净实例后，锁自然可退。
+  这不只是测试改法，是 `Environment` 这个共享部件的接缝调整，需要先定稿再动。
 - 不做的事：不以性能为由做——会话域 129 个测试共占约 0.45s，收益上限很小。
 
 ## 小项（不单独立项，顺手做）
