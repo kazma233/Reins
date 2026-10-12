@@ -369,14 +369,14 @@ fn fake_cli_log_path(bin_dir: &Path) -> PathBuf {
 }
 
 // 假 CLI 的完整装卸:建 bin 目录、放入替身、PATH 前插;drop 时恢复原 PATH,
-// 用例不再手工记着恢复。
-struct FakeCli {
+// 用例不再手工记着恢复。grok 索引缓存用例也要顶替官方 CLI。
+pub(super) struct FakeCli {
     bin_dir: PathBuf,
     original_path: std::ffi::OsString,
 }
 
 impl FakeCli {
-    fn install(temp_home: &Path, name: &str) -> Result<Self> {
+    pub(super) fn install(temp_home: &Path, name: &str) -> Result<Self> {
         let bin_dir = temp_home.join("bin");
         fs::create_dir_all(&bin_dir)?;
         install_fake_cli(&bin_dir, name)?;
@@ -386,7 +386,7 @@ impl FakeCli {
         })
     }
 
-    fn log_path(&self) -> PathBuf {
+    pub(super) fn log_path(&self) -> PathBuf {
         fake_cli_log_path(&self.bin_dir)
     }
 }

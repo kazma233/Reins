@@ -720,3 +720,61 @@ fn grokbuild_delete_boundary() -> Result<()> {
     assert!(path.exists());
     Ok(())
 }
+
+// 指纹门控:外部(grok CLI 或手工)写入新会话后,下一次列表必须出现它
+// ——索引缓存靠文件集合指纹失配失效。
+#[test]
+fn grokbuild_index_rebuilds_when_new_session_appears() -> Result<()> {
+    let home = bounded_home();
+    fs::create_dir_all(&home)?;
+    let _guard = TestEnvGuard::set_home(&home);
+    let first = fixture(&home, "first")?;
+    history(&first)?;
+
+    let reader = session::reader(SourceApp::GrokBuild);
+    assert_eq!(reader.list_entries()?.len(), 1);
+
+    // 外部新增:summary + history 直接落盘,不经过 reins。
+    let second = fixture(&home, "second")?;
+    history(&second)?;
+
+    let ids = reader
+        .list_entries()?
+        .into_iter()
+        .map(|entry| entry.source_session_id)
+        .collect::<Vec<_>>();
+    assert!(ids.contains(&"second".to_string()), "{ids:?}");
+    Ok(())
+}
+
+// 删除后下一次列表不得再见已删会话:指纹失配与 delete_session 末尾的
+// 显式清缓存都能达成(实测摘掉显式清该用例仍过——删除本身改变文件
+// 集合),这条钉住的是行为契约,不是特定机制。
+#[test]
+fn grokbuild_delete_invalidates_index_cache() -> Result<()> {
+    let home = bounded_home();
+    fs::create_dir_all(&home)?;
+    let _guard = TestEnvGuard::set_home(&home);
+    let kept = fixture(&home, "kept")?;
+    history(&kept)?;
+    let gone = fixture(&home, "gone")?;
+    history(&gone)?;
+
+    let fake_cli = super::session_delete::FakeCli::install(&home, "grok")?;
+    let _ = fake_cli;
+
+    let reader = session::reader(SourceApp::GrokBuild);
+    assert_eq!(reader.list_entries()?.len(), 2);
+
+    // 直调删除实现(不经 delete_session_inner),证明失效清在删除动作里,
+    // 不依赖调用方再走 clear_all_caches。
+    session::grokbuild::delete_session("gone")?;
+
+    let ids = reader
+        .list_entries()?
+        .into_iter()
+        .map(|entry| entry.source_session_id)
+        .collect::<Vec<_>>();
+    assert_eq!(ids, vec!["kept".to_string()], "{ids:?}");
+    Ok(())
+}

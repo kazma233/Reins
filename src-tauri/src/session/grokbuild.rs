@@ -4,6 +4,7 @@ use std::fs::{self, File};
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result, anyhow, bail};
 use rusqlite::{Connection, params};
@@ -20,8 +21,232 @@ use super::{
 use super::family_index::{Family, FamilyIndex, FamilyRow};
 use super::family_timeline::{FamilyAgentLabel, family_agents};
 
-pub(crate) struct GrokBuildBackend;
-pub(crate) static BACKEND: GrokBuildBackend = GrokBuildBackend;
+pub(crate) struct GrokBuildBackend {
+    // 按根缓存索引实例：换根（测试切 HOME）即整实例重建，与 pi 的 reader
+    // slot 同形。
+    slot: Mutex<Option<(PathBuf, Arc<GrokIndex>)>>,
+}
+
+pub(crate) static BACKEND: GrokBuildBackend = GrokBuildBackend {
+    slot: Mutex::new(None),
+};
+
+impl GrokBuildBackend {
+    fn index(&self) -> Result<Arc<GrokIndex>> {
+        let root = root()?;
+        // 根不存在时保留原始拼写，实例内的扫描对缺失根返回空索引。
+        let root = if root.exists() {
+            crate::support::fs::canonicalize(&root)?
+        } else {
+            root
+        };
+        let mut slot = self
+            .slot
+            .lock()
+            .map_err(|_| anyhow!("Grok Build index slot lock was poisoned"))?;
+        if let Some((cached_root, index)) = slot.as_ref()
+            && *cached_root == root
+        {
+            return Ok(index.clone());
+        }
+        let index = Arc::new(GrokIndex::new(root));
+        *slot = Some((index.root.clone(), index.clone()));
+        Ok(index)
+    }
+
+    // 索引实例的失效入口：reins 删除自己的数据后在动作发生地清掉；
+    // 通用清缓存流程（clear_all_caches）经 SessionReader::clear_cache 到这。
+    pub(crate) fn clear_cache(&self) -> Result<()> {
+        *self
+            .slot
+            .lock()
+            .map_err(|_| anyhow!("Grok Build index slot lock was poisoned"))? = None;
+        Ok(())
+    }
+}
+
+// 一个根下的族索引与它的指纹门控缓存。家族结构（summary.json 集合、
+// subagent 归属）与可读性（chat_history.jsonl 在不在）都由文件集合决定，
+// 指纹覆盖三类文件的（路径, mtime, 大小）：外部进程（官方 CLI、grok 自己）
+// 写入后指纹失配即重建；reins 自己删除经 clear_cache 显式清。
+struct GrokIndex {
+    root: PathBuf,
+    cached: Mutex<Option<CachedFamilies>>,
+}
+
+struct CachedFamilies {
+    fingerprint: String,
+    index: FamilyIndex<Row>,
+}
+
+impl GrokIndex {
+    fn new(root: PathBuf) -> Self {
+        Self {
+            root,
+            cached: Mutex::new(None),
+        }
+    }
+
+    fn family_index(&self) -> Result<FamilyIndex<Row>> {
+        if !self.root.exists() {
+            return Ok(FamilyIndex::build(Vec::new()));
+        }
+
+        let mut fingerprint_files = Vec::new();
+        let mut sessions = Vec::new();
+        for entry in walkdir::WalkDir::new(&self.root).min_depth(3).max_depth(3) {
+            let entry = entry?;
+            if !entry.file_type().is_file() || entry.file_name() != "summary.json" {
+                continue;
+            }
+            let history = sibling(entry.path(), "chat_history.jsonl")?;
+            fingerprint_files.push(entry.path().to_path_buf());
+            if let Some(history) = history.as_ref() {
+                fingerprint_files.push(history.clone());
+            }
+            sessions.push((entry.path().to_path_buf(), history));
+        }
+        let meta_paths = collect_subagent_meta_paths(&self.root)?;
+        fingerprint_files.extend(meta_paths.iter().cloned());
+        let fingerprint = super::sessions_fingerprint(&fingerprint_files)?;
+
+        {
+            let cached = self
+                .cached
+                .lock()
+                .map_err(|_| anyhow!("Grok Build index cache lock was poisoned"))?;
+            if let Some(cached) = cached.as_ref().filter(|c| c.fingerprint == fingerprint) {
+                return Ok(cached.index.clone());
+            }
+        }
+
+        let index = self.build_family_index(&sessions, &meta_paths)?;
+        *self
+            .cached
+            .lock()
+            .map_err(|_| anyhow!("Grok Build index cache lock was poisoned"))? =
+            Some(CachedFamilies {
+                fingerprint,
+                index: index.clone(),
+            });
+        Ok(index)
+    }
+
+    // 构建逻辑与迁入前逐条对齐：行来自 summary 解析，归属只认 meta，
+    // 父缺失的子会话保留占位入口。输入改为扫描阶段收集的路径，
+    // 解析成本只发生在指纹失配时。
+    fn build_family_index(
+        &self,
+        sessions: &[(PathBuf, Option<PathBuf>)],
+        meta_paths: &[PathBuf],
+    ) -> Result<FamilyIndex<Row>> {
+        let mut rows: HashMap<String, Row> = HashMap::new();
+        for (path, history) in sessions {
+            let summary = summary(path)?;
+            let readable = match history {
+                // 尚未写入 history 的会话按 0 条消息读取，而不是当成坏会话。
+                Some(path) => File::open(path).is_ok(),
+                None => true,
+            };
+            let id = summary.source_session_id.clone();
+            if rows
+                .insert(
+                    id,
+                    Row {
+                        summary,
+                        meta: None,
+                        readable,
+                    },
+                )
+                .is_some()
+            {
+                bail!("Conflicting Grok Build session ids");
+            }
+        }
+
+        let metas = parse_subagent_metas(meta_paths)?;
+        let mut owners: HashMap<String, String> = HashMap::new();
+        let mut subagent_ids = HashSet::new();
+        for meta in &metas {
+            if !subagent_ids.insert(meta.subagent_id.clone())
+                || meta.parent_session_id == meta.child_session_id
+                || owners
+                    .insert(
+                        meta.child_session_id.clone(),
+                        meta.parent_session_id.clone(),
+                    )
+                    .is_some()
+            {
+                bail!("Conflicting Grok Build subagent ownership");
+            }
+        }
+
+        let claimed: HashSet<String> = owners.keys().cloned().collect();
+        let mut children: HashMap<String, Vec<Row>> = HashMap::new();
+        for meta in &metas {
+            if !rows.contains_key(&meta.parent_session_id)
+                || claimed.contains(&meta.parent_session_id)
+            {
+                continue;
+            }
+            let mut child = if let Some(row) = rows.get(&meta.child_session_id) {
+                let raw: Summary = serde_json::from_reader(File::open(row.member_path())?)?;
+                if raw.attempt_id.as_deref() != Some(meta.attempt_id.as_str())
+                    || raw.session_kind.as_deref() != Some("subagent")
+                {
+                    bail!("Grok Build child summary does not match subagent meta");
+                }
+                row.clone()
+            } else {
+                let created_at =
+                    parse_optional_timestamp(meta.started_at.as_deref(), "subagent started_at")?;
+                let updated_at = parse_optional_timestamp(
+                    meta.completed_at.as_deref(),
+                    "subagent completed_at",
+                )?
+                .or(created_at);
+                Row {
+                    summary: SessionSummary {
+                        source_app: SourceApp::GrokBuild,
+                        source_session_id: meta.child_session_id.clone(),
+                        title: meta.title(),
+                        cwd: None,
+                        git_branch: None,
+                        transcript_path: meta.child_summary_path.display().to_string(),
+                        created_at,
+                        updated_at,
+                        // 子会话文件缺失,无法读 usage.json。
+                        token_usage: None,
+                    },
+                    meta: None,
+                    readable: false,
+                }
+            };
+            child.meta = Some(meta.clone());
+            children
+                .entry(meta.parent_session_id.clone())
+                .or_default()
+                .push(child);
+        }
+
+        let mut families = Vec::new();
+        for (id, row) in &rows {
+            if owners
+                .get(id)
+                .is_some_and(|parent| rows.contains_key(parent) && !claimed.contains(parent))
+            {
+                continue;
+            }
+            let mut members = vec![row.clone()];
+            members.extend(children.remove(id).unwrap_or_default());
+            families.push(Family {
+                root: row.clone(),
+                members,
+            });
+        }
+        Ok(FamilyIndex::build(families))
+    }
+}
 
 pub(crate) fn root() -> Result<PathBuf> {
     crate::support::fs::grok_home_path(
@@ -186,14 +411,22 @@ fn regular_path(path: &Path) -> Result<()> {
     Ok(())
 }
 
-fn load_subagent_metas(root: &Path) -> Result<Vec<SubagentMeta>> {
-    let mut metas = Vec::new();
+// meta.json 的路径收集与解析分开:路径集合进索引指纹,解析只发生在
+// 指纹失配的重建里。
+fn collect_subagent_meta_paths(root: &Path) -> Result<Vec<PathBuf>> {
+    let mut paths = Vec::new();
     for entry in walkdir::WalkDir::new(root).min_depth(5).max_depth(5) {
         let entry = entry?;
-        if !entry.file_type().is_file() || entry.file_name() != "meta.json" {
-            continue;
+        if entry.file_type().is_file() && entry.file_name() == "meta.json" {
+            paths.push(entry.path().to_path_buf());
         }
-        let path = entry.path();
+    }
+    Ok(paths)
+}
+
+fn parse_subagent_metas(paths: &[PathBuf]) -> Result<Vec<SubagentMeta>> {
+    let mut metas = Vec::new();
+    for path in paths {
         regular_path(path)?;
         let child_dir = path.parent().context("Invalid subagent directory")?;
         let subagents_dir = child_dir.parent().context("Invalid subagent directory")?;
@@ -229,122 +462,10 @@ fn load_subagent_metas(root: &Path) -> Result<Vec<SubagentMeta>> {
     Ok(metas)
 }
 
+// 自由函数转发到按根缓存的实例:八处调用点(family_for_id、parse_*、
+// delete、delete_plan_input)零改动。
 fn family_index() -> Result<FamilyIndex<Row>> {
-    let root = root()?;
-    if !root.exists() {
-        return Ok(FamilyIndex::build(Vec::new()));
-    }
-    let root = crate::support::fs::canonicalize(&root)?;
-    let mut rows: HashMap<String, Row> = HashMap::new();
-    for entry in walkdir::WalkDir::new(&root).min_depth(3).max_depth(3) {
-        let entry = entry?;
-        if !entry.file_type().is_file() || entry.file_name() != "summary.json" {
-            continue;
-        }
-        let summary = summary(entry.path())?;
-        let readable = match sibling(entry.path(), "chat_history.jsonl")? {
-            Some(path) => File::open(path).is_ok(),
-            // 尚未写入 history 的会话按 0 条消息读取，而不是当成坏会话。
-            None => true,
-        };
-        let id = summary.source_session_id.clone();
-        if rows
-            .insert(
-                id,
-                Row {
-                    summary,
-                    meta: None,
-                    readable,
-                },
-            )
-            .is_some()
-        {
-            bail!("Conflicting Grok Build session ids");
-        }
-    }
-
-    // 归属只认 meta：updates 只有事件、工具结果只是文本，都不能作为关系来源。
-    let metas = load_subagent_metas(&root)?;
-    let mut owners: HashMap<String, String> = HashMap::new();
-    let mut subagent_ids = HashSet::new();
-    for meta in &metas {
-        if !subagent_ids.insert(meta.subagent_id.clone())
-            || meta.parent_session_id == meta.child_session_id
-            || owners
-                .insert(
-                    meta.child_session_id.clone(),
-                    meta.parent_session_id.clone(),
-                )
-                .is_some()
-        {
-            bail!("Conflicting Grok Build subagent ownership");
-        }
-    }
-
-    // 只折叠父会话存在的一层子代理；父自身也是子代理的嵌套关系尚未验证，
-    // 这类子会话保留为独立条目，不推测层级。
-    let claimed: HashSet<String> = owners.keys().cloned().collect();
-    let mut children: HashMap<String, Vec<Row>> = HashMap::new();
-    for meta in &metas {
-        if !rows.contains_key(&meta.parent_session_id) || claimed.contains(&meta.parent_session_id)
-        {
-            continue;
-        }
-        let mut child = if let Some(row) = rows.get(&meta.child_session_id) {
-            let raw: Summary = serde_json::from_reader(File::open(row.member_path())?)?;
-            if raw.attempt_id.as_deref() != Some(meta.attempt_id.as_str())
-                || raw.session_kind.as_deref() != Some("subagent")
-            {
-                bail!("Grok Build child summary does not match subagent meta");
-            }
-            row.clone()
-        } else {
-            // meta 已声明但子会话缺失：保留可点击入口，打开时再明确报不可读。
-            let created_at =
-                parse_optional_timestamp(meta.started_at.as_deref(), "subagent started_at")?;
-            let updated_at =
-                parse_optional_timestamp(meta.completed_at.as_deref(), "subagent completed_at")?
-                    .or(created_at);
-            Row {
-                summary: SessionSummary {
-                    source_app: SourceApp::GrokBuild,
-                    source_session_id: meta.child_session_id.clone(),
-                    title: meta.title(),
-                    cwd: None,
-                    git_branch: None,
-                    transcript_path: meta.child_summary_path.display().to_string(),
-                    created_at,
-                    updated_at,
-                    // 子会话文件缺失,无法读 usage.json。
-                    token_usage: None,
-                },
-                meta: None,
-                readable: false,
-            }
-        };
-        child.meta = Some(meta.clone());
-        children
-            .entry(meta.parent_session_id.clone())
-            .or_default()
-            .push(child);
-    }
-
-    let mut families = Vec::new();
-    for (id, row) in &rows {
-        if owners
-            .get(id)
-            .is_some_and(|parent| rows.contains_key(parent) && !claimed.contains(parent))
-        {
-            continue;
-        }
-        let mut members = vec![row.clone()];
-        members.extend(children.remove(id).unwrap_or_default());
-        families.push(Family {
-            root: row.clone(),
-            members,
-        });
-    }
-    Ok(FamilyIndex::build(families))
+    BACKEND.index()?.family_index()
 }
 
 // 会话身份的唯一寻址入口:id → family 直查,未命中文案逐字保留现状契约。
@@ -806,6 +927,10 @@ fn source_paths(path: &Path) -> Result<Vec<String>> {
 }
 
 impl SessionReader for GrokBuildBackend {
+    fn clear_cache(&self) -> Result<()> {
+        BACKEND.clear_cache()
+    }
+
     fn list_entries(&self) -> Result<Vec<SessionFileEntry>> {
         let mut entries = family_index()?
             .families
@@ -928,7 +1053,9 @@ pub(crate) fn delete_session(source_session_id: &str) -> Result<()> {
             super::delete::prune_empty_parents(sessions_root.clone(), Some(dir));
         }
     }
-    Ok(())
+    // 「删除 → 索引失效」写在动作发生地,不依赖指纹口径恰好覆盖删除的
+    // 全部文件副作用(实测指纹失配也会兜住,这里显式清是契约不是必需)。
+    BACKEND.clear_cache()
 }
 
 // delete_session 的预演:root 交官方命令,官方够不到的子会话目录与搜索
