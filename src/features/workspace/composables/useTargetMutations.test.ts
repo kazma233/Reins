@@ -7,7 +7,7 @@ import {
   updateWorkspaceTarget,
 } from "../api";
 import type { TargetPreset } from "../types";
-import { AVAILABLE_PROJECT_AGENTS } from "../model";
+import { AGENT_IDS } from "@shared/lib/agent-labels";
 import { useWorkspaceStore } from "../stores/workspace";
 import { useTargetMutations } from "./useTargetMutations";
 
@@ -102,7 +102,7 @@ it("surfaces a preset load failure with a retry that restores the list", async (
 
 it("registers dsh as a preset that submits without configPrefix", async () => {
   // dsh 用户级 target 含全局 Cordis patch，列表同样提供。
-  expect(AVAILABLE_PROJECT_AGENTS).toContain("dsh");
+  expect(AGENT_IDS).toContain("dsh");
   vi.mocked(getTargetPresets).mockResolvedValue(mockPresets());
   vi.mocked(createWorkspaceTarget).mockResolvedValue({ targetId: "dsh", updatedPaths: [] });
   const mutations = useTargetMutations();

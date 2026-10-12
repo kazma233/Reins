@@ -9,7 +9,7 @@ import { useMcpMutations } from "../../composables/useMcpMutations";
 import { useProjectAgentPicker } from "../../composables/useProjectAgentPicker";
 import { useWorkspaceState } from "../../composables/useWorkspaceState";
 import { useWorkspaceStore } from "../../stores/workspace";
-import { formatTargetLabel, groupTargetIds } from "../../model";
+import { formatTargetLabel, parseTargetId, groupTargetIds } from "../../model";
 import type { AgentTargetId, McpInspection } from "../../types";
 
 const store = useWorkspaceStore();
@@ -76,10 +76,9 @@ const pickerAgents = computed(() =>
 );
 const pickerProjectId = computed(() => projectAgentPickerDialog.projectId ?? "");
 
-// 确认弹窗里与按钮一致只显示 agent 名，省掉项目前缀
+// 确认弹窗里与按钮一致只显示 agent 名，省掉项目前缀。
 function pickerAgentLabel(targetId: AgentTargetId) {
-  const colonPos = targetId.indexOf(":");
-  return colonPos >= 0 ? targetId.substring(colonPos + 1) : targetId;
+  return parseTargetId(targetId).agentId;
 }
 
 // 同步确认里的目标按项目分组：项目 target 各归自己的 project，

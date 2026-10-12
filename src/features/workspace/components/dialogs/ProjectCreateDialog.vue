@@ -2,7 +2,8 @@
 import { computed } from "vue";
 import AppFieldError from "@shared/ui/AppFieldError.vue";
 import DialogShell from "@shared/ui/DialogShell.vue";
-import { AVAILABLE_PROJECT_AGENTS, formatTargetName, type ProjectFormState } from "../../model";
+import { formatTargetName, type ProjectFormState } from "../../model";
+import { AGENT_IDS } from "@shared/lib/agent-labels";
 
 type ProjectCreateDialogProps = {
   form: ProjectFormState;
@@ -118,7 +119,7 @@ function toggleAgent(agentId: string) {
         <span class="manager-field-label">启用的 agents</span>
         <div class="manager-target-buttons">
           <button
-            v-for="agentId in AVAILABLE_PROJECT_AGENTS"
+            v-for="agentId in AGENT_IDS"
             :key="agentId"
             :class="`secondary-button manager-target-button${isAgentActive(agentId) ? ' is-active' : ''}`"
             :disabled="loading"

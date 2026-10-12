@@ -13,6 +13,18 @@ export const AGENT_LABELS: Record<string, string> = {
   dsh: "DeepSeek Harness",
 };
 
+// 可配置的 agent 清单与顺序（与后端 AGENTS 表一致）：项目成员的候选、目标
+// 选择器等都从这里取，不再前端另维护一份拷贝。
+export const AGENT_IDS = [
+  "codex",
+  "claude",
+  "opencode",
+  "zcode",
+  "grokbuild",
+  "pi",
+  "dsh",
+] as const;
+
 // 跨域 id 映射（wire id → 规范键）：session 来源等 wire 写法与规范键不同时
 // 显式列出；其余域 id 与规范键一致，不需要映射。
 export const AGENT_ID_ALIASES: Record<string, string> = {

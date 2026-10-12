@@ -311,8 +311,14 @@ pub(crate) fn spec_by_source_app(app: SourceApp) -> Option<&'static AgentSpec> {
 fn render_agent_labels_ts() -> String {
     let mut labels = String::new();
     let mut aliases = String::new();
+    let mut ids = String::new();
     for spec in AGENTS {
         labels.push_str(&format!("  {}: \"{}\",\n", spec.key, spec.label));
+        // 有 target 入口的才是 workspace 里可配置的 agent：前端「启用的 agents」
+        // 选择器要用这份清单，而不是自己再写一遍。
+        if let Some(target_id) = spec.target_id {
+            ids.push_str(&format!("  \"{}\",\n", target_id));
+        }
         if let Some(source) = spec.source_app {
             let wire = source.as_str();
             if wire != spec.key {
@@ -328,6 +334,11 @@ fn render_agent_labels_ts() -> String {
 // 都从这里取，避免同一个工具在不同界面出现 codex / Codex / claude 等不同写法。
 export const AGENT_LABELS: Record<string, string> = {{
 {labels}}};
+
+// 可配置的 agent 清单与顺序（与后端 AGENTS 表一致）：项目成员的候选、目标
+// 选择器等都从这里取，不再前端另维护一份拷贝。
+export const AGENT_IDS = [
+{ids}] as const;
 
 // 跨域 id 映射（wire id → 规范键）：session 来源等 wire 写法与规范键不同时
 // 显式列出；其余域 id 与规范键一致，不需要映射。

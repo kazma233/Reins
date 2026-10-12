@@ -57,11 +57,21 @@
   同样通过**——时间线缓存按绝对路径做键，两个 home 的路径天然不同，本来就不会撞，所以该
   测试证明不了迁移的必要性，已按「不为不成立的主张留测试」删除。这次迁移的收益是结构性的
   （删掉进程级可变状态与重复机械），不是由一个失败用例驱动。
-### 5. C14 · workspace/model.ts 收深（(b) 已完成）
+### 5. C14 · workspace/model.ts 收深 · 已完成
 
 - 域：workspace 前端；强度：Worth exploring；(b) 完成于 2026-10-12
 - 问题：(a) `projectId:agentId` 拆分规则泄漏（实施 C2 后同步弹窗那处已随契约收掉，现存 `workspace/model.ts:26-34` 与 `McpPanel.vue:80-83` 两处；`groupTargetIds` 仍先格式化成展示文本再按 `/` 反解析）；(b) mcp 表单 parse/format/validate 三件套困在 `useMcpMutations.ts`（68-135, 241-262, 284-310）私有函数里，行级校验零直接测试——对照 providers/model.ts:397-511 + 533 行测试的已验证形态；(c) agent 清单前端残留第六份拷贝 `AVAILABLE_PROJECT_AGENTS`（`model.ts:262`，不锚定生成类型）与死导出 `BuiltinTargetPresetId`（71-78）。
 - 方向：先做 (b)（照抄 providers 模板，收益/风险比最高）；(a) `parseTargetId` 单点；(c) Rust 侧 codegen 导出 AGENT_IDS 派生、死导出删除（不得手改生成文件）。
+- (a)(c) 已做：`parseTargetId` 成为地址拆分的唯一点（`formatTargetLabel` 与
+  `McpPanel` 都走它），`groupTargetIds` 不再「先格式化成展示文本再按 `/` 反解析」——
+  那层二级假设依赖展示格式，agent 名里出现 `/` 就会归错组；新增 3 条直测（含多冒号
+  与空段，与后端 `split_once` 同口径）。前端第七份 agent 清单
+  `AVAILABLE_PROJECT_AGENTS` 删除，`agents.rs` 的 codegen 增出 `AGENT_IDS`
+  （`src/shared/lib/agent-labels.ts`），项目对话框与两处测试改指生成物；死导出
+  `BuiltinTargetPresetId` 删除。
+- **可见变化**：项目对话框的 agent 按钮顺序由 `claude, codex, …, pi, grokbuild`
+  变为后端 AGENTS 表的 `codex, claude, …, grokbuild, pi`——清单单一来源的代价，
+  已在提交信息里说明。
 - (b) 已做：表单的解析 / 格式化 / 校验 / payload 组装收进 `workspace/mcpForm.ts`（`formFromMcp`、`buildMcpErrors`、`buildMcpPayload`、`parseKeyValueText`、`parseLineList`、`keyValueError`、`parseTimeoutText`），`model.ts` 与 `useMcpMutations.ts` 里的重复定义删除，新增 17 条行级直测（等号在值里、空值、负 timeout、按传送方式取舍字段、坏行定位、往返一致性）。`useMcpMutations` 只剩编排。
 
 ### 6. C3 · MCP writer 调用面收尾

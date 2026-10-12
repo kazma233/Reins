@@ -21,16 +21,31 @@ export function formatTargetName(agentId: string): string {
   return AGENT_LABELS[agentId] ?? agentId;
 }
 
+// target 地址的拆分点：全局 target 是纯 agent id，项目 target 是
+// `projectId:agentId`。任何需要「从地址取两段」的地方都走这里——此前
+// formatTargetLabel 与 McpPanel 各拆一遍，拆法一旦不同就会静默错位。
+export type TargetAddress = {
+  projectId: string | null;
+  agentId: string;
+};
+
+export function parseTargetId(targetId: AgentTargetId): TargetAddress {
+  const colonPos = targetId.indexOf(":");
+  if (colonPos < 0) {
+    return { projectId: null, agentId: targetId };
+  }
+  return {
+    projectId: targetId.slice(0, colonPos),
+    agentId: targetId.slice(colonPos + 1),
+  };
+}
+
 // target id 的展示形式：全局 target 就是 agent 名，
 // 项目 target 带项目前缀，两者都用展示名而不是配置里的原始 id。
 export function formatTargetLabel(targetId: AgentTargetId) {
-  const colonPos = targetId.indexOf(":");
-  if (colonPos >= 0) {
-    const projectId = targetId.substring(0, colonPos);
-    const agentId = targetId.substring(colonPos + 1);
-    return `${projectId}/${formatTargetName(agentId)}`;
-  }
-  return formatTargetName(targetId);
+  const { projectId, agentId } = parseTargetId(targetId);
+  const name = formatTargetName(agentId);
+  return projectId === null ? name : `${projectId}/${name}`;
 }
 
 export type TargetGroup = {
@@ -45,13 +60,13 @@ export function groupTargetIds(targetIds: AgentTargetId[]): TargetGroup[] {
   const globalTargets: AgentTargetId[] = [];
   const projectGroups = new Map<string, AgentTargetId[]>();
   for (const targetId of targetIds) {
-    const label = formatTargetLabel(targetId);
-    const slashPos = label.indexOf("/");
-    if (slashPos < 0) {
+    // 分组只看地址本身：不再先格式化成 `project/名称` 再按 `/` 反推项目名
+    // （那层反解析依赖展示格式，agent 名里一旦出现 `/` 就会归错组）。
+    const { projectId } = parseTargetId(targetId);
+    if (projectId === null) {
       globalTargets.push(targetId);
       continue;
     }
-    const projectId = label.slice(0, slashPos);
     const agents = projectGroups.get(projectId) ?? [];
     agents.push(targetId);
     projectGroups.set(projectId, agents);
@@ -68,15 +83,6 @@ export function groupTargetIds(targetIds: AgentTargetId[]): TargetGroup[] {
 
 // 七个内置工具的稳定 target id 契约；具体的创建预设（路径/prefix/configType）
 // 由后端 get_target_presets 下发，前端不再静态维护。
-export type BuiltinTargetPresetId =
-  | "codex"
-  | "claude"
-  | "opencode"
-  | "zcode"
-  | "pi"
-  | "grokbuild"
-  | "dsh";
-
 export type SkillSourceFilter = "all" | "new" | `source:${string}`;
 
 export type SkillTargetToggleKind = "install" | "replace" | "uninstall";
@@ -221,8 +227,6 @@ export const DEFAULT_MCP_APPLY_PREVIEW_DIALOG: McpApplyPreviewDialogState = {
   targetId: null,
   preview: null,
 };
-
-export const AVAILABLE_PROJECT_AGENTS = ["claude", "codex", "opencode", "zcode", "pi", "grokbuild", "dsh"] as const;
 
 export type ProjectFormState = {
   originalProjectId: string | null;
