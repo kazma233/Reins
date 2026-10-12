@@ -9,32 +9,23 @@ import {
 } from "../api";
 import {
   DEFAULT_MCP_APPLY_PREVIEW_DIALOG,
-  DEFAULT_MCP_FORM,
   formatTargetLabel,
   type FieldErrors,
   type McpApplyPreviewDialogState,
   type McpDeleteDialogState,
-  type McpFormState,
 } from "../model";
-import type {
-  AgentTargetId,
-  McpConfigView,
-} from "../types";
+import {
+  buildMcpErrors,
+  buildMcpPayload,
+  emptyMcpForm,
+  formFromMcp,
+  type McpFormPayload,
+  type McpFormState,
+} from "../mcpForm";
+import type { AgentTargetId, McpConfigView } from "../types";
 import { extractErrorMessage } from "@shared/lib/errors";
 import { useWorkspaceState } from "./useWorkspaceState";
 import { useWorkspaceAction } from "./useWorkspaceAction";
-
-type WorkspaceMcpPayload = {
-  name: string;
-  transport: McpConfigView["transport"];
-  homepage: string | null;
-  command: string | null;
-  args: string[];
-  env: Record<string, string>;
-  url: string | null;
-  headers: Record<string, string>;
-  timeout: number | null;
-};
 
 type McpSyncConfirmDialogState = {
   open: boolean;
@@ -42,7 +33,7 @@ type McpSyncConfirmDialogState = {
   error: string | null;
   originalName: string;
   nextName: string;
-  payload: WorkspaceMcpPayload | null;
+  payload: McpFormPayload | null;
   targetIds: AgentTargetId[];
 };
 
@@ -64,75 +55,6 @@ const DEFAULT_MCP_SYNC_CONFIRM_DIALOG: McpSyncConfirmDialogState = {
   targetIds: [],
 };
 
-function parseKeyValueText(value: string): Record<string, string> {
-  return value
-    .split("\n")
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .reduce<Record<string, string>>((result, line) => {
-      const separatorIndex = line.indexOf("=");
-      if (separatorIndex <= 0) {
-        throw new Error(`格式错误: ${line}`);
-      }
-      const key = line.slice(0, separatorIndex).trim();
-      const nextValue = line.slice(separatorIndex + 1).trim();
-      if (key) {
-        result[key] = nextValue;
-      }
-      return result;
-    }, {});
-}
-
-function parseLineList(value: string): string[] {
-  return value
-    .split("\n")
-    .map((line) => line.trim())
-    .filter(Boolean);
-}
-
-// env/headers 是每行一条 KEY=VALUE，错误定位到具体那一行；字段错误挂在
-// 对应输入框下方，用户改内容时清空。
-function keyValueError(value: string, label: string): string | null {
-  if (!value.trim()) return null;
-  try {
-    parseKeyValueText(value);
-    return null;
-  } catch (error) {
-    const line = extractErrorMessage(error, "格式错误").replace(/^格式错误:\s*/, "");
-    return `${label} 第「${line}」行缺少 “=”，每行需要写成 KEY=VALUE。`;
-  }
-}
-
-function buildMcpErrors(form: McpFormState): FieldErrors {
-  const errors: FieldErrors = {};
-
-  if (!form.name.trim()) {
-    errors.name = "请填写 mcp 名称。";
-  }
-  if (form.transport === "stdio" && !form.command.trim()) {
-    errors.command = "stdio 模式需要填写 command。";
-  }
-  if (form.transport !== "stdio" && !form.url.trim()) {
-    errors.url = "远程模式需要填写 mcp 链接。";
-  }
-
-  const timeout = form.timeout.trim() ? Number(form.timeout.trim()) : null;
-  if (timeout !== null && (!Number.isFinite(timeout) || timeout < 0)) {
-    errors.timeout = "timeout 需要是大于等于 0 的数字。";
-  }
-
-  const envError = form.transport === "stdio" ? keyValueError(form.env, "Env") : null;
-  if (envError) {
-    errors.env = envError;
-  }
-  const headersError = form.transport === "stdio" ? null : keyValueError(form.headers, "Headers");
-  if (headersError) {
-    errors.headers = headersError;
-  }
-
-  return errors;
-}
-
 export function useMcpMutations() {
   const { inspection, reloadWorkspaceState } = useWorkspaceState();
   const { runWorkspaceAction } = useWorkspaceAction();
@@ -144,7 +66,7 @@ export function useMcpMutations() {
   }>({
     open: false,
     loading: false,
-    form: { ...DEFAULT_MCP_FORM, errors: {} },
+    form: emptyMcpForm(),
   });
 
   const mcpDeleteDialog = reactive<McpDeleteDialogState>({
@@ -177,7 +99,7 @@ export function useMcpMutations() {
     loading: boolean;
     error: string | null;
     serverName: string;
-    payload: WorkspaceMcpPayload | null;
+    payload: McpFormPayload | null;
     targetIds: AgentTargetId[];
   }>({
     open: false,
@@ -204,7 +126,7 @@ export function useMcpMutations() {
   // Serial-apply each target id: concurrent writes would clobber each other's
   // config file mutations. Keep the loop `for await` — do not Promise.all it.
   async function persistWorkspaceMcp(
-    payload: WorkspaceMcpPayload,
+    payload: McpFormPayload,
     currentServerName: string | null,
     syncTargetIds: AgentTargetId[],
   ) {
@@ -228,29 +150,12 @@ export function useMcpMutations() {
   }
 
   function openMcpCreateDialog() {
-    mcpCreateDialog.form = { ...DEFAULT_MCP_FORM, errors: {} };
+    mcpCreateDialog.form = emptyMcpForm();
     mcpCreateDialog.open = true;
   }
 
   function openMcpEditDialog(mcp: McpConfigView) {
-    mcpCreateDialog.form = {
-      originalName: mcp.name,
-      name: mcp.name,
-      transport: mcp.transport,
-      createdAt: mcp.createdAt,
-      homepage: mcp.homepage ?? "",
-      command: mcp.command ?? "",
-      args: mcp.args.join("\n"),
-      env: Object.entries(mcp.env ?? {})
-        .map(([key, value]) => `${key}=${value}`)
-        .join("\n"),
-      url: mcp.url ?? "",
-      headers: Object.entries(mcp.headers)
-        .map(([key, value]) => `${key}=${value}`)
-        .join("\n"),
-      timeout: mcp.timeout === null ? "" : String(mcp.timeout),
-      errors: {},
-    };
+    mcpCreateDialog.form = formFromMcp(mcp);
     mcpCreateDialog.open = true;
   }
 
@@ -264,41 +169,19 @@ export function useMcpMutations() {
   function closeMcpCreateDialog() {
     Object.assign(mcpSyncConfirmDialog, DEFAULT_MCP_SYNC_CONFIRM_DIALOG);
     mcpCreateDialog.open = false;
-    mcpCreateDialog.form = { ...DEFAULT_MCP_FORM, errors: {} };
+    mcpCreateDialog.form = emptyMcpForm();
   }
 
   function closeMcpSyncConfirmDialog() {
     Object.assign(mcpSyncConfirmDialog, DEFAULT_MCP_SYNC_CONFIRM_DIALOG);
   }
 
-  // 校验一次算出全部错误：只在字段旁列出问题，不再逐条弹全局提示，
-  // 把表单校验与 payload 组装抽出来：「保存」与「同步到已安装目标」共用
-  // 同一套口径，避免两条路径对空值与格式的处理不一致。
-  function buildMcpPayloadOrErrors(): WorkspaceMcpPayload | null {
+  // 校验与组装都走 mcpForm：表单规则只有一处，行级校验有直接测试。
+  function buildMcpPayloadOrErrors(): McpFormPayload | null {
     const form = mcpCreateDialog.form;
-
-    let payload: WorkspaceMcpPayload;
-    try {
-      payload = {
-        name: form.name.trim(),
-        transport: form.transport,
-        homepage: form.homepage.trim() || null,
-        command: form.transport === "stdio" ? form.command.trim() : null,
-        args: form.transport === "stdio" ? parseLineList(form.args) : [],
-        env: form.transport === "stdio" ? parseKeyValueText(form.env) : {},
-        url: form.transport === "stdio" ? null : form.url.trim(),
-        headers: form.transport === "stdio" ? {} : parseKeyValueText(form.headers),
-        timeout: form.timeout.trim() ? Number(form.timeout.trim()) : null,
-      };
-    } catch {
-      // 行级格式错误由 buildMcpErrors 精准定位到 Env / Headers 字段。
-      form.errors = buildMcpErrors(form);
-      return null;
-    }
-
-    const errors = buildMcpErrors(form);
-    form.errors = errors;
-    return Object.keys(errors).length > 0 ? null : payload;
+    const payload = buildMcpPayload(form);
+    form.errors = buildMcpErrors(form);
+    return payload;
   }
 
   // 用户能看到所有待改字段而不是修一个才发现下一个。

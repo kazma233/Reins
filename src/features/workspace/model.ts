@@ -79,7 +79,6 @@ export type BuiltinTargetPresetId =
 
 export type SkillSourceFilter = "all" | "new" | `source:${string}`;
 
-
 export type SkillTargetToggleKind = "install" | "replace" | "uninstall";
 
 export type SkillDiscoveryPreviewState = {
@@ -158,28 +157,12 @@ export type McpApplyPreviewDialogState = {
   preview: McpTargetPreviewResult | null;
 };
 
-export type McpFormState = {
-  originalName: string | null;
-  name: string;
-  transport: McpTransport;
-  createdAt: number | null;
-  homepage: string;
-  command: string;
-  args: string;
-  env: string;
-  url: string;
-  headers: string;
-  timeout: string;
-  errors: FieldErrors;
-};
-
 export function parseCommaSeparatedList(value: string): string[] {
   return value
     .split(",")
     .map((item) => item.trim())
     .filter(Boolean);
 }
-
 
 export function createSkillImportDialogState(sourceType: SkillSourceKind = "git"): SkillImportDialogState {
   return {
@@ -220,21 +203,6 @@ export function createSkillDiscoveryPreviewState(): SkillDiscoveryPreviewState {
   };
 }
 
-export const DEFAULT_MCP_FORM: McpFormState = {
-  originalName: null,
-  name: "",
-  transport: "stdio",
-  createdAt: null,
-  homepage: "",
-  command: "",
-  args: "",
-  env: "",
-  url: "",
-  headers: "",
-  timeout: "",
-  errors: {},
-};
-
 export const DEFAULT_TARGET_FORM: TargetFormState = {
   originalTargetId: null,
   targetId: "",
@@ -253,7 +221,6 @@ export const DEFAULT_MCP_APPLY_PREVIEW_DIALOG: McpApplyPreviewDialogState = {
   targetId: null,
   preview: null,
 };
-
 
 export const AVAILABLE_PROJECT_AGENTS = ["claude", "codex", "opencode", "zcode", "pi", "grokbuild", "dsh"] as const;
 

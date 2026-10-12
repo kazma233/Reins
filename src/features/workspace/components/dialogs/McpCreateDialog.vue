@@ -3,7 +3,7 @@ import { computed } from "vue";
 import AppCheckbox from "@shared/ui/AppCheckbox.vue";
 import AppFieldError from "@shared/ui/AppFieldError.vue";
 import DialogShell from "@shared/ui/DialogShell.vue";
-import type { McpFormState } from "../../model";
+import type { McpFormState } from "../../mcpForm";
 
 type McpCreateDialogProps = {
   form: McpFormState;

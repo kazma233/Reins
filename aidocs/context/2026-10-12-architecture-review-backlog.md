@@ -48,11 +48,12 @@
 - 方向：把 `DualHalfCache` 的借用模式推广到指纹目录缓存与 SummaryMemCache，pi 按实例持有部件；HOME 重开语义逐字保留。
 - ADR：构成对 `2026-10-08-reader-engine.md` 决策 6「pi 摘要缓存保持现状」的修订，应记录而非默默改。
 
-### 5. C14 · workspace/model.ts 收深
+### 5. C14 · workspace/model.ts 收深（(b) 已完成）
 
-- 域：workspace 前端；强度：Worth exploring
+- 域：workspace 前端；强度：Worth exploring；(b) 完成于 2026-10-12
 - 问题：(a) `projectId:agentId` 拆分规则泄漏（实施 C2 后同步弹窗那处已随契约收掉，现存 `workspace/model.ts:26-34` 与 `McpPanel.vue:80-83` 两处；`groupTargetIds` 仍先格式化成展示文本再按 `/` 反解析）；(b) mcp 表单 parse/format/validate 三件套困在 `useMcpMutations.ts`（68-135, 241-262, 284-310）私有函数里，行级校验零直接测试——对照 providers/model.ts:397-511 + 533 行测试的已验证形态；(c) agent 清单前端残留第六份拷贝 `AVAILABLE_PROJECT_AGENTS`（`model.ts:262`，不锚定生成类型）与死导出 `BuiltinTargetPresetId`（71-78）。
 - 方向：先做 (b)（照抄 providers 模板，收益/风险比最高）；(a) `parseTargetId` 单点；(c) Rust 侧 codegen 导出 AGENT_IDS 派生、死导出删除（不得手改生成文件）。
+- (b) 已做：表单的解析 / 格式化 / 校验 / payload 组装收进 `workspace/mcpForm.ts`（`formFromMcp`、`buildMcpErrors`、`buildMcpPayload`、`parseKeyValueText`、`parseLineList`、`keyValueError`、`parseTimeoutText`），`model.ts` 与 `useMcpMutations.ts` 里的重复定义删除，新增 17 条行级直测（等号在值里、空值、负 timeout、按传送方式取舍字段、坏行定位、往返一致性）。`useMcpMutations` 只剩编排。
 
 ### 6. C3 · MCP writer 调用面收尾
 
