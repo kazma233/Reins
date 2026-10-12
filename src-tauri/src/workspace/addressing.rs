@@ -10,11 +10,9 @@ use anyhow::Result;
 
 use super::types::{AgentTargetId, ResolvedManagerConfig, ResolvedTargetConfig};
 
-// 落点链接的探测结果:复合地址、链接另一端是受管 target 时的 id、
-// 解出的真实目录(不是链接时 None)。
+// 落点链接的探测结果:链接另一端是受管 target 时的 id、解出的真实目录
+// (不是链接时 None)。复合地址由返回的三元组携带,不在结构体里重复。
 pub(super) struct SkillDirLink {
-    // 复合地址。
-    pub(super) id: String,
     // 链接的另一端是某个受管 target 时给出它的 id；外部目录/断链时为 None。
     pub(super) linked_target_id: Option<String>,
     // 落点不是链接时为 None。
@@ -147,10 +145,13 @@ impl ResolvedManagerConfig {
         Ok(None)
     }
 
-    // 全部 target 的落点链接状态（只读探测）。落点归属与参与判定都从这里取，
-    // 不给调用方各自 canonicalize 的机会——落点是不是链接、内容属于谁、解出来
-    // 的真实目录，答案只有一处。
-    pub(super) fn skill_dir_links(&self) -> Result<Vec<SkillDirLink>> {
+    // 全部 target 的落点链接状态（只读探测）:(地址, target, 链接状态) 三元组
+    // 一次给出,调用方不再各自把两条独立序列配对。落点归属与参与判定都从
+    // 这里取，不给调用方各自 canonicalize 的机会——落点是不是链接、内容属于
+    // 谁、解出来的真实目录，答案只有一处。
+    pub(super) fn skill_dir_links(
+        &self,
+    ) -> Result<Vec<(TargetRef, &ResolvedTargetConfig, SkillDirLink)>> {
         // 受管落点 → target id。归属比较按「链接自身路径」算：对目录链接
         // canonicalize 会解析到另一端，别名就会与它的目标撞进同一个 key。
         let mut dir_to_target: HashMap<PathBuf, String> = HashMap::new();
@@ -163,15 +164,14 @@ impl ResolvedManagerConfig {
         self.target_refs()
             .into_iter()
             .map(|(reference, target)| {
-                let id = reference.composite_id();
                 let linked = super::targets::read_skill_dir_link(&target.skill_dir)?;
-                Ok(SkillDirLink {
-                    id,
+                let link = SkillDirLink {
                     linked_target_id: linked
                         .as_ref()
                         .and_then(|link_target| dir_to_target.get(link_target).cloned()),
                     link_target: linked,
-                })
+                };
+                Ok((reference, target, link))
             })
             .collect()
     }

@@ -114,7 +114,7 @@ pub(super) fn build_sync_target_options_with_sources(
     let links = config.skill_dir_links()?;
 
     let mut options = Vec::with_capacity(links.len());
-    for (link, (reference, target)) in links.into_iter().zip(config.target_refs()) {
+    for (reference, target, link) in links {
         let skill_dir = target.skill_dir.as_path();
         // 落点是软链接时：能对上受管 target 就给出它的 id（命名归属），对不上
         // 就把链接解出的真实目录带出去——界面的「内容属谁 / 文件在哪」都靠这两个

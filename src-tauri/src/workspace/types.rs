@@ -318,6 +318,18 @@ pub(crate) struct McpInspection {
     pub(crate) targets: Vec<McpTargetInspection>,
 }
 
+// 目标配置里该 MCP 条目的在场状态:封闭枚举过 wire,前端拼错取值在
+// 编译期即报错(对照同域 SkillLinkState 的先例)。
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export, export_to = "../../src/features/workspace/generated/")]
+pub(crate) enum McpTargetState {
+    Present,
+    Missing,
+    Error,
+    Unconfigured,
+}
+
 #[derive(Clone, Debug, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export, export_to = "../../src/features/workspace/generated/")]
@@ -326,7 +338,7 @@ pub(crate) struct McpTargetInspection {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[ts(optional = nullable)]
     pub(crate) project_id: Option<String>,
-    pub(crate) state: String,
+    pub(crate) state: McpTargetState,
     pub(crate) detail: String,
 }
 

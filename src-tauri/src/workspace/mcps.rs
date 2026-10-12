@@ -123,7 +123,8 @@ pub(super) fn read_existing_mcp_entries(
     config_path: &Path,
     env: &Environment,
 ) -> Result<BTreeMap<String, JsonValue>> {
-    mcp_format_writer(target.mcp_config_type).read_existing_entries(target, config_path, env)
+    let prefix = effective_prefix(&target.mcp_config_prefix, Some(&target.id), env);
+    mcp_format_writer(target.mcp_config_type).read_existing_entries(&prefix, config_path)
 }
 
 fn preview_mcp_entry(
@@ -185,15 +186,13 @@ fn remove_mcp_from_target_config(
 // 引擎按具体 writer 单态化即可。
 pub(super) fn read_file_entries<W: McpFormatWriter + ?Sized>(
     writer: &W,
-    target: &ResolvedTargetConfig,
+    prefix: &str,
     config_path: &Path,
-    env: &Environment,
 ) -> Result<BTreeMap<String, JsonValue>> {
-    let target = resolve_read_target_for_config(target, config_path, env)?;
     match detect_supported_format(writer, config_path)? {
         McpConfigFileFormat::Toml => {
             let mut root = read_toml_config(config_path)?;
-            let Some(table) = get_toml_table_path_mut(&mut root, &target.mcp_config_prefix) else {
+            let Some(table) = get_toml_table_path_mut(&mut root, &prefix) else {
                 return Ok(BTreeMap::new());
             };
 
@@ -207,7 +206,7 @@ pub(super) fn read_file_entries<W: McpFormatWriter + ?Sized>(
         }
         McpConfigFileFormat::Json => {
             let mut root = read_json_config(config_path)?;
-            let Some(table) = get_json_object_path_mut(&mut root, &target.mcp_config_prefix) else {
+            let Some(table) = get_json_object_path_mut(&mut root, &prefix) else {
                 return Ok(BTreeMap::new());
             };
 
@@ -330,36 +329,18 @@ fn detect_supported_format<W: McpFormatWriter + ?Sized>(
     Ok(format)
 }
 
-fn resolve_read_target_for_config(
-    target: &ResolvedTargetConfig,
-    config_path: &Path,
-    env: &Environment,
-) -> Result<ResolvedTargetConfig> {
-    if target.mcp_config_prefix.trim().is_empty() {
-        if let Some(fallback) = inferred_target_layout(&target.id, config_path, env) {
-            return Ok(fallback);
-        }
+// 读取侧的生效前缀:target 没配 prefix 时按 id 回落内置布局(旧配置兼容
+// 路径)。回落不出的非内置 id 按空前缀继续读——读空表、不猜测、不报错
+// (有专门用例钉住)。只算前缀,不再为传一个字符串构造整个 target。
+fn effective_prefix(prefix: &str, target_id: Option<&AgentTargetId>, env: &Environment) -> String {
+    if !prefix.trim().is_empty() {
+        return prefix.to_string();
     }
-
-    Ok(target.clone())
-}
-
-fn inferred_target_layout(
-    target_id: &AgentTargetId,
-    config_path: &Path,
-    env: &Environment,
-) -> Option<ResolvedTargetConfig> {
     let defaults = builtin_target_defaults_map(env);
-    let default = defaults.get(target_id)?;
-
-    Some(ResolvedTargetConfig {
-        is_project: false,
-        id: target_id.clone(),
-        skill_dir: default.skill_dir.clone(),
-        config_path: Some(config_path.to_path_buf()),
-        mcp_config_prefix: default.config_prefix.to_string(),
-        mcp_config_type: default.config_type,
-    })
+    target_id
+        .and_then(|id| defaults.get(id))
+        .map(|default| default.config_prefix.to_string())
+        .unwrap_or_else(|| prefix.to_string())
 }
 
 fn detect_mcp_file_format(config_path: &Path) -> Result<McpConfigFileFormat> {
@@ -640,21 +621,12 @@ pub(crate) fn delete_workspace_mcp_inner(
         raw_config.mcps.retain(|mcp| mcp.name != server_name);
         config.write_raw(&raw_config)?;
 
-        for target in resolved_config.targets.values() {
+        // 「全部 target」的定义在寻址层:全局在前、项目按配置顺序。
+        for (_, target) in resolved_config.target_refs() {
             let mutation = remove_mcp_from_target_config(target, &resolved.name)?;
 
             if let Some(path) = mutation.updated_path {
                 updated_paths.push(path);
-            }
-        }
-
-        for project in resolved_config.projects.values() {
-            for target in project.agents.values() {
-                let mutation = remove_mcp_from_target_config(target, &resolved.name)?;
-
-                if let Some(path) = mutation.updated_path {
-                    updated_paths.push(path);
-                }
             }
         }
 

@@ -923,7 +923,8 @@ mod tests {
         let links = config.skill_dir_links()?;
         let project = links
             .iter()
-            .find(|link| link.id == "my-app:claude")
+            .find(|(reference, _, _)| reference.composite_id() == "my-app:claude")
+            .map(|(_, _, link)| link)
             .expect("项目级落点应在表里");
 
         assert!(project.is_alias());
@@ -951,7 +952,8 @@ mod tests {
         let links = reversed.skill_dir_links()?;
         let global = links
             .iter()
-            .find(|link| link.id == "claude")
+            .find(|(reference, _, _)| reference.composite_id() == "claude")
+            .map(|(_, _, link)| link)
             .expect("全局落点应在表里");
         assert_eq!(
             global.linked_target_id.as_deref(),

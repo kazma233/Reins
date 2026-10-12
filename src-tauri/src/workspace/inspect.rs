@@ -8,7 +8,8 @@ use serde_json::Value as JsonValue;
 use super::addressing::TargetRef;
 use super::mcp_formats::mcp_format_writer;
 use super::types::{
-    AgentTargetId, McpConfigType, McpInspection, McpTargetInspection, ProjectInspection,
+    AgentTargetId, McpConfigType, McpInspection, McpTargetInspection, McpTargetState,
+    ProjectInspection,
     ResolvedManagerConfig, ResolvedMcpConfig, ResolvedTargetConfig, SkillDirLinkView,
     TargetInspection, WorkspaceInspection,
 };
@@ -32,18 +33,18 @@ pub(crate) fn inspect_app_state_document(
     let link_of = |id: &str| {
         links
             .iter()
-            .find(|link| link.id == id)
-            .and_then(|link| link.link_target.as_ref().map(|target| (link, target)))
+            .find(|(reference, _, _)| reference.composite_id() == id)
+            .and_then(|(_, _, link)| link.link_target.as_ref().map(|target| (link, target)))
     };
     // 落点是软链接的 target 不参与分发（判定在寻址层），这里把「为什么不参与」
     // 一并说清楚：面板已按行标注，warnings 让启动与其它消费方也能看到。
     let warnings = links
         .iter()
-        .filter(|link| link.is_alias())
-        .map(|link| {
+        .filter(|(_, _, link)| link.is_alias())
+        .map(|(reference, _, _)| {
             format!(
                 "{} 的 skills 目录是软链接，内容由链接另一端负责，不参与技能分发。",
-                link.id
+                reference.composite_id()
             )
         })
         .collect();
@@ -150,21 +151,24 @@ fn inspect_mcp_target(
                 let lookup_name =
                     mcp_format_writer(target.mcp_config_type).entry_key_for(&mcp.name);
                 let state = if existing.contains_key(&lookup_name) {
-                    "present".to_string()
+                    McpTargetState::Present
                 } else {
-                    "missing".to_string()
+                    McpTargetState::Missing
                 };
-                let detail = match state.as_str() {
-                    "present" => "目标配置里已经存在同名条目。".to_string(),
+                let detail = match state {
+                    McpTargetState::Present => "目标配置里已经存在同名条目。".to_string(),
                     _ => "目标配置里还没有同名条目。".to_string(),
                 };
                 (state, detail)
             }
-            Err(error) => ("error".to_string(), format!("读取目标配置失败：{error}")),
+            Err(error) => (
+                McpTargetState::Error,
+                format!("读取目标配置失败：{error}"),
+            ),
         }
     } else {
         (
-            "unconfigured".to_string(),
+            McpTargetState::Unconfigured,
             "当前 target 还没有 MCP 配置文件路径。".to_string(),
         )
     };

@@ -17,7 +17,6 @@ use super::types::{
     McpConfigFileFormat, McpConfigType, McpTargetMutationResult, McpTransport, ResolvedMcpConfig,
     ResolvedTargetConfig,
 };
-use crate::support::environment::Environment;
 
 // 每个 writer 只声明「这个 config type 的条目长什么样、接受什么文件、
 // 需要哪些前置条件」；JSON/TOML 的读/预览/应用/移除由 mcps.rs 的共享引擎
@@ -54,15 +53,14 @@ pub(super) trait McpFormatWriter: Sync {
         name.to_string()
     }
 
-    /// 读既有条目（key 为 server 名；dsh 按清洗后的 serverName）。
-    /// env 只在 target 缺 prefix 时用于回落内置布局（旧配置兼容路径）。
+    /// 读既有条目（key 为 server 名；dsh 按清洗后的 serverName）。prefix
+    /// 的内置回落已由编排侧按 target.id 完成,这里只认生效前缀。
     fn read_existing_entries(
         &self,
-        target: &ResolvedTargetConfig,
+        prefix: &str,
         config_path: &Path,
-        env: &Environment,
     ) -> Result<BTreeMap<String, JsonValue>> {
-        super::mcps::read_file_entries(self, target, config_path, env)
+        super::mcps::read_file_entries(self, prefix, config_path)
     }
 
     /// 预览条目内容（格式标签 + 序列化文本），不落盘。
@@ -357,9 +355,8 @@ impl McpFormatWriter for DshPatchWriter {
 
     fn read_existing_entries(
         &self,
-        _target: &ResolvedTargetConfig,
+        _prefix: &str,
         config_path: &Path,
-        _env: &Environment,
     ) -> Result<BTreeMap<String, JsonValue>> {
         read_existing_dsh_patch_entries(config_path)
     }
@@ -877,7 +874,6 @@ mod tests {
     use anyhow::Result;
 
     use super::mcp_format_writer;
-    use crate::support::environment::Environment;
     use crate::test_support::TestDir;
     use crate::workspace::types::{
         AgentTargetId, McpConfigType, McpTransport, ResolvedMcpConfig, ResolvedTargetConfig,
@@ -947,7 +943,7 @@ mod tests {
 
         assert!(
             writer
-                .read_existing_entries(&target, &config_path, &Environment::default())?
+                .read_existing_entries(&target.mcp_config_prefix, &config_path)?
                 .contains_key("probe")
         );
 
@@ -998,7 +994,7 @@ mod tests {
 
         assert!(
             writer
-                .read_existing_entries(&target, &config_path, &Environment::default())?
+                .read_existing_entries(&target.mcp_config_prefix, &config_path)?
                 .contains_key("probe")
         );
 
@@ -1035,7 +1031,7 @@ mod tests {
         );
         assert!(
             writer
-                .read_existing_entries(&target, &config_path, &Environment::default())?
+                .read_existing_entries(&target.mcp_config_prefix, &config_path)?
                 .contains_key("probe")
         );
 
@@ -1062,7 +1058,7 @@ mod tests {
         );
         assert_eq!(
             writer
-                .read_existing_entries(&target, &json_path, &Environment::default())
+                .read_existing_entries(&target.mcp_config_prefix, &json_path)
                 .unwrap_err()
                 .to_string(),
             GROK_TOML_ONLY
@@ -1102,7 +1098,7 @@ mod tests {
 
         assert!(
             writer
-                .read_existing_entries(&target, &config_path, &Environment::default())?
+                .read_existing_entries(&target.mcp_config_prefix, &config_path)?
                 .contains_key("probe")
         );
 
@@ -1171,7 +1167,7 @@ mod tests {
         // 读取侧按清洗后的 serverName 建键。
         assert!(
             writer
-                .read_existing_entries(&target, &config_path, &Environment::default())?
+                .read_existing_entries(&target.mcp_config_prefix, &config_path)?
                 .contains_key("probe")
         );
 

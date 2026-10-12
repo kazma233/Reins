@@ -31,9 +31,7 @@ function inspectionWithInstalledTarget() {
         targets: [
           {
             targetId: "codex" as const,
-            configPath: "/tmp/codex.toml",
-            configExists: true,
-            state: "present",
+            state: "present" as const,
             detail: "",
           },
         ],
