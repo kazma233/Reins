@@ -44,7 +44,7 @@ const applyDialog = reactive<{ open: boolean; app: ProviderAppId | null; provide
 const applyError = ref<string | null>(null);
 const removeError = ref<string | null>(null);
 const removeTarget = ref<
-  | { app: ProviderAppId; providerId: string; external: false }
+  | { app: ProviderAppId; providerId: string; entryKey: string; external: false }
   | { app: ProviderAppId; entryKey: string; external: true }
   | null
 >(null);
@@ -62,7 +62,8 @@ const removeConfirmText = computed(() => {
       }
     : {
         title: "移除应用",
-        description: `将从 ${appLabel} 的配置文件中移除 reins-${removeTarget.value.providerId} 相关条目（默认模型仍引用时随移除清空）。`,
+        // 注册键取行数据的 entry.key:前端不再自己拼 reins- 前缀。
+        description: `将从 ${appLabel} 的配置文件中移除 ${removeTarget.value.entryKey} 相关条目（默认模型仍引用时随移除清空）。`,
       };
 });
 
@@ -108,9 +109,9 @@ function confirmApply(input: ApplyProviderInput) {
   });
 }
 
-function requestRemove(app: ProviderAppId, providerId: string) {
+function requestRemove(app: ProviderAppId, providerId: string, entryKey: string) {
   removeError.value = null;
-  removeTarget.value = { app, providerId, external: false };
+  removeTarget.value = { app, providerId, entryKey, external: false };
 }
 
 function requestRemoveExternal(app: ProviderAppId, entryKey: string) {
@@ -238,7 +239,9 @@ function confirmRemove() {
                 class="providers-mini-button providers-mini-button--danger"
                 :disabled="runningAction"
                 type="button"
-                @click="requestRemove(appState.app, entry.providerId)"
+                @click="
+                  requestRemove(appState.app, entry.providerId, entry.key)
+                "
               >
                 移除
               </button>

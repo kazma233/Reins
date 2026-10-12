@@ -216,3 +216,61 @@ describe("createPagedList 错误分区", () => {
     expect(errors).toEqual([]);
   });
 });
+
+describe("createPagedList 接管", () => {
+  it("begin/commit 走机器记账:加载位、apply(replace) 与成功回写", async () => {
+    const { list, applied } = createMachine();
+    list.prime();
+    await list.loadMore();
+
+    const request = list.takeover();
+    expect(request.key).toBe("source-a::1");
+    request.begin();
+    expect(list.loading.value).toBe(true);
+    expect(list.loadingMore.value).toBe(false);
+
+    request.commit(page([{ id: 9 }], null));
+    expect(applied).toContainEqual({ ids: [9], mode: "replace" });
+    expect(list.nextOffset.value).toBe(null);
+    expect(list.hasMore.value).toBe(false);
+    expect(list.resultKey.value).toBe("source-a::1");
+    expect(list.canLoadMore.value).toBe(false);
+  });
+
+  it("stale 后 commit 是 no-op:旧接管不能覆盖新请求的记账", async () => {
+    const { list, applied } = createMachine();
+    const request = list.takeover();
+    // 新请求推进版本,接管持有的 key 立即过期。
+    await list.replace();
+
+    request.begin();
+    expect(list.loading.value).toBe(true);
+    request.commit(page([{ id: 7 }], 5));
+    expect(applied).not.toContainEqual({ ids: [7], mode: "replace" });
+    expect(list.resultKey.value).not.toBe(request.key);
+    // settle 在 stale 下跳过复位,与 run 的 finally 同一规则。
+    request.settle();
+    expect(list.loading.value).toBe(true);
+  });
+
+  it("settle 在未 stale 时复位加载位", async () => {
+    const { list } = createMachine();
+    const request = list.takeover();
+    request.begin();
+    expect(list.loading.value).toBe(true);
+    request.settle();
+    expect(list.loading.value).toBe(false);
+  });
+
+  it("requestKey 为 null(无身份)时 key 为 null,commit 不落账", async () => {
+    const { list, applied } = createMachine({
+      requestKey: () => null,
+    });
+    const request = list.takeover();
+    expect(request.key).toBe(null);
+    request.begin();
+    request.commit(page([{ id: 1 }], null));
+    expect(applied).toHaveLength(0);
+    expect(list.resultKey.value).toBe(null);
+  });
+});

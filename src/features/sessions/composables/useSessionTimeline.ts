@@ -37,7 +37,7 @@ function createTimelineLoader<T>(
   const items = ref<T[]>([]) as Ref<T[]>;
   const error = ref<string | null>(null);
 
-  const list: PagedList = createPagedList<T>({
+  const list: PagedList<T> = createPagedList<T>({
     requestKey,
     fetchPage: async (offset) => {
       const overview = overviewRef.value;

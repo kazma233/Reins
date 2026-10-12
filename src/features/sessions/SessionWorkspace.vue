@@ -305,14 +305,13 @@ async function handleRefresh() {
     return;
   }
 
-  // 接管式刷新:作废状态机的在途请求,后续用同一 key 空间自查 stale。
-  sessionList.invalidate();
-  const requestKey = sessionList.currentRequestKey();
-  const isStale = () => sessionList.currentRequestKey() !== requestKey;
+  // 接管式刷新:请求与旁路副作用(setSources、来源切换)在这里,
+  // 加载位与成功回写交给状态机的 takeover。
+  const request = sessionList.takeover();
+  const isStale = request.isStale;
 
   refreshing.value = true;
-  sessionList.loading.value = true;
-  sessionList.loadingMore.value = false;
+  request.begin();
   listError.value = null;
   loadMoreError.value = null;
   detailRequestGuard.invalidate();
@@ -332,19 +331,20 @@ async function handleRefresh() {
 
     sessionStore.setSources(result.sources);
 
-    // 后端合并视图返回 null，映射回前端的"全部"。
+    // 后端合并视图返回 null，映射回前端的"全部"。切换来源时数据由
+    // 来源监听自己重拉,不提交本次结果。
     const nextSelection: SourceSelection = result.selectedSource ?? ALL_SOURCES;
     if (nextSelection !== selectedSource.value) {
       sessionStore.setSelectedSource(nextSelection);
       return;
     }
 
-    sessionStore.setSessions(result.page.sessions);
-    sessionTotalCount.value = result.page.totalCount;
-    sessionList.nextOffset.value =
-      result.page.nextOffset ?? result.page.sessions.length;
-    sessionList.hasMore.value = result.page.hasMore;
-    sessionList.resultKey.value = requestKey;
+    request.commit({
+      items: result.page.sessions,
+      nextOffset: result.page.nextOffset ?? result.page.sessions.length,
+      hasMore: result.page.hasMore,
+      totalCount: result.page.totalCount
+    });
   } catch (error) {
     if (isStale()) {
       return;
@@ -352,7 +352,7 @@ async function handleRefresh() {
     listError.value = extractErrorMessage(error, "刷新会话失败。");
   } finally {
     if (!isStale()) {
-      sessionList.loading.value = false;
+      request.settle();
     }
     refreshing.value = false;
   }

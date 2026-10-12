@@ -29,15 +29,17 @@ export type PagedListOptions<T> = {
   isEmpty?: () => boolean;
 };
 
-export type PagedList = {
-  loading: Ref<boolean>;
-  loadingMore: Ref<boolean>;
-  nextOffset: Ref<number | null>;
-  hasMore: Ref<boolean>;
+export type PagedList<T> = {
+  // 加载位与记账 ref 对调用方只读:写入只发生在机器内部(run 的两条流
+  // 与 takeover 的 commit/settle),手写回写等于在调用方复刻记账规则。
+  loading: Readonly<Ref<boolean>>;
+  loadingMore: Readonly<Ref<boolean>>;
+  nextOffset: Readonly<Ref<number | null>>;
+  hasMore: Readonly<Ref<boolean>>;
   // 追加门:未就绪(nextOffset null)、无更多、任一加载位占用都不放行。
   canLoadMore: ComputedRef<boolean>;
   // 最近一次成功请求的 key;列表据此重置滚动位置。
-  resultKey: Ref<string | null>;
+  resultKey: Readonly<Ref<string | null>>;
   // 强制替换流:递增版本作废在途请求,从 offset 0 全量重拉(来源 / 筛选
   // 切换、重试)。接管在途的追加流,加载位随之复位。
   replace: () => Promise<void>;
@@ -46,13 +48,23 @@ export type PagedList = {
   loadMore: () => Promise<void>;
   // 切换身份:作废在途请求并回到未就绪态。
   reset: () => void;
-  // 仅作废在途请求,不动加载进度;接管式操作(如 refresh,自己管理加载位
-  // 与数据落点)用它抢占,再用 currentRequestKey 做 stale 检查。
+  // 仅作废在途请求,不动加载进度。
   invalidate: () => void;
   currentRequestKey: () => string | null;
+  // 接管式操作(如列表的 refresh:响应里还有列表以外的数据):外部请求
+  // 绕过 fetchPage,但加载位、数据落点与成功回写仍是机器的记账。调用方
+  // 只保留自己的旁路副作用(如 setSources)与错误分区;key 失配即 stale,
+  // commit/settle 在 stale 下与 run 的对应路径同一规则(no-op / 跳过复位)。
+  takeover: () => {
+    key: string | null;
+    isStale: () => boolean;
+    begin: () => void;
+    commit: (result: PagedResult<T>) => void;
+    settle: () => void;
+  };
 };
 
-export function createPagedList<T>(options: PagedListOptions<T>): PagedList {
+export function createPagedList<T>(options: PagedListOptions<T>): PagedList<T> {
   const loading = ref(false);
   const loadingMore = ref(false);
   const nextOffset = ref<number | null>(null);
@@ -141,6 +153,35 @@ export function createPagedList<T>(options: PagedListOptions<T>): PagedList {
     version += 1;
   }
 
+  function takeover() {
+    invalidate();
+    const key = currentRequestKey();
+    return {
+      key,
+      isStale: () => currentRequestKey() !== key,
+      begin: () => {
+        loading.value = true;
+        // 接管可能在途的追加流:其 finally 会因 key 失配跳过复位。
+        loadingMore.value = false;
+      },
+      commit: (result: PagedResult<T>) => {
+        // 与 run 的入口守卫同一哲学:无身份不记账。
+        if (key === null || currentRequestKey() !== key) {
+          return;
+        }
+        options.apply(result, "replace");
+        nextOffset.value = result.nextOffset;
+        hasMore.value = result.hasMore;
+        resultKey.value = key;
+      },
+      settle: () => {
+        if (currentRequestKey() === key) {
+          loading.value = false;
+        }
+      }
+    };
+  }
+
   return {
     loading,
     loadingMore,
@@ -154,5 +195,6 @@ export function createPagedList<T>(options: PagedListOptions<T>): PagedList {
     reset,
     invalidate,
     currentRequestKey,
+    takeover,
   };
 }
