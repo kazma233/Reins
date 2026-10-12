@@ -24,6 +24,11 @@ export function formatTargetName(agentId: string): string {
 // target 地址的拆分点：全局 target 是纯 agent id，项目 target 是
 // `projectId:agentId`。任何需要「从地址取两段」的地方都走这里——此前
 // formatTargetLabel 与 McpPanel 各拆一遍，拆法一旦不同就会静默错位。
+//
+// 口径以后端 TargetRef::parse 为准：只在第一个 `:` 处切一次，两段都必须非空；
+// 任一段为空（`:codex` / `demo:` / `:`）时整串按全局地址处理。第二段不再校验
+// 是否含 `:`（`a:b:codex` 在后端就是项目 `a` 里的 agent `b:codex`）。前端不得
+// 自己放宽或收紧，否则同一个 id 在前后端会落到不同分组。
 export type TargetAddress = {
   projectId: string | null;
   agentId: string;
@@ -34,10 +39,12 @@ export function parseTargetId(targetId: AgentTargetId): TargetAddress {
   if (colonPos < 0) {
     return { projectId: null, agentId: targetId };
   }
-  return {
-    projectId: targetId.slice(0, colonPos),
-    agentId: targetId.slice(colonPos + 1),
-  };
+  const projectId = targetId.slice(0, colonPos);
+  const agentId = targetId.slice(colonPos + 1);
+  if (!projectId || !agentId) {
+    return { projectId: null, agentId: targetId };
+  }
+  return { projectId, agentId };
 }
 
 // target id 的展示形式：全局 target 就是 agent 名，

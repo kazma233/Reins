@@ -82,6 +82,8 @@ mod tests {
     // 多冒号归第一段——项目 id 含 `:` 时这个地址必然查不到，读取侧会明确报错。
     #[test]
     fn target_ref_rejects_empty_segments() {
+        // 与前端 model.test.ts::parseTargetId 的同一用例集：两端口径必须一致，
+        // 否则同一个 id 在前后端会落到不同项目分组。
         for malformed in [":codex", "demo:", ":"] {
             assert!(
                 matches!(TargetRef::parse(malformed), TargetRef::Global(id) if id.0 == malformed),

@@ -51,12 +51,15 @@ describe("parseTargetId", () => {
     expect(parseTargetId("codex")).toEqual({ projectId: null, agentId: "codex" });
   });
 
-  it("splits at the first separator, same as the backend", () => {
-    // 后端 TargetRef::parse 用 split_once，前端必须切在同一处：多冒号归第一段。
-    // 项目名含 `:` 已被后端禁止，这里是历史配置的兜底口径。
+  it("matches the backend for empty segments and extra separators", () => {
+    // 这组地址与后端 types.rs::target_ref_rejects_empty_segments 是同一份
+    // 用例集，两边必须给出同一答案。
+    expect(parseTargetId(":codex")).toEqual({ projectId: null, agentId: ":codex" });
+    expect(parseTargetId("demo:")).toEqual({ projectId: null, agentId: "demo:" });
+    expect(parseTargetId(":")).toEqual({ projectId: null, agentId: ":" });
+
+    // 第二段含 `:` 后端照样接受：split_once 后两段都非空即为项目地址。
     expect(parseTargetId("a:b:codex")).toEqual({ projectId: "a", agentId: "b:codex" });
-    expect(parseTargetId(":codex")).toEqual({ projectId: "", agentId: "codex" });
-    expect(parseTargetId("demo:")).toEqual({ projectId: "demo", agentId: "" });
   });
 });
 
