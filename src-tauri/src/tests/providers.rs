@@ -488,6 +488,74 @@ fn codex_apply_writes_model_catalog_and_remove_clears_pointer() -> Result<()> {
     Ok(())
 }
 
+// 用户所选档位不在模型元数据档位里时（如三档元数据选了 max），所选档位
+// 按强度序并入条目档位列表并写为默认档：codex /model 只认条目列表，当前
+// 档位不在列表里会被回落到列表中间档，用户所选被静默丢弃。
+#[test]
+fn codex_catalog_appends_selected_effort_beyond_metadata() -> Result<()> {
+    let isolated = Isolated::new()?;
+    // 元数据三档、所选 max：追加到列表尾部。
+    isolated.seed_model("p1", "model-a")?;
+    isolated.apply(
+        "p1",
+        ProviderAppId::Codex,
+        &["model-a"],
+        "model-a",
+        Some(ReasoningLevel::Max),
+    )?;
+    let catalog_path = codex_home_dir(&isolated.env)?.join(CATALOG_FILE_NAME);
+    let catalog: JsonValue = serde_json::from_str(&read_text(&catalog_path))?;
+    let entry = &catalog["models"][0];
+    assert_eq!(entry["default_reasoning_level"], "max");
+    assert_eq!(
+        entry["supported_reasoning_levels"],
+        json!([
+            { "effort": "low", "description": "" },
+            { "effort": "medium", "description": "" },
+            { "effort": "high", "description": "" },
+            { "effort": "max", "description": "" }
+        ])
+    );
+
+    // 元数据跳档（low/max）、所选 medium：按强度序插中间，列表保持有序。
+    isolated.store.upsert(ProviderUpsertInput {
+        provider_id: "p2".to_string(),
+        mode: ProviderWriteMode::Upsert,
+        label: "Label p2".to_string(),
+        protocol: ProviderProtocol::OpenaiResponses,
+        base_url: "https://p2.test/v1".to_string(),
+        api_key: "sk-test-secret".to_string(),
+        models: vec![ProviderModelInput {
+            id: "model-b".to_string(),
+            label: "Label model-b".to_string(),
+            context_window: Some(200_000),
+            max_output_tokens: Some(64_000),
+            supports_images: Some(true),
+            reasoning: Some(true),
+            reasoning_levels: Some(vec![ReasoningLevel::Low, ReasoningLevel::Max]),
+        }],
+    })?;
+    isolated.apply(
+        "p2",
+        ProviderAppId::Codex,
+        &["model-b"],
+        "model-b",
+        Some(ReasoningLevel::Medium),
+    )?;
+    let catalog: JsonValue = serde_json::from_str(&read_text(&catalog_path))?;
+    let entry = &catalog["models"][0];
+    assert_eq!(entry["default_reasoning_level"], "medium");
+    assert_eq!(
+        entry["supported_reasoning_levels"],
+        json!([
+            { "effort": "low", "description": "" },
+            { "effort": "medium", "description": "" },
+            { "effort": "max", "description": "" }
+        ])
+    );
+    Ok(())
+}
+
 // 用户自己的 model_catalog_json 指向不归 Reins 管，移除时不动。
 #[test]
 fn codex_remove_keeps_user_model_catalog_json() -> Result<()> {

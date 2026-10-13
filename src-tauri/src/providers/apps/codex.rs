@@ -60,6 +60,33 @@ fn catalog_efforts(
     Vec::new()
 }
 
+// config.toml 的 model_reasoning_effort 无条件写用户所选档位，而 codex
+// /model 只认目录条目的档位列表：当前档位不在列表里时会被 codex 回落到
+// 列表中间档（codex-rs turn_context.rs），用户所选被静默丢弃。因此所选
+// 档位按强度序并入列表，default_reasoning_level 也随之始终可写。
+fn with_selected_effort(
+    mut efforts: Vec<ReasoningLevel>,
+    selected: Option<ReasoningLevel>,
+) -> Vec<ReasoningLevel> {
+    let Some(level) = selected else {
+        return efforts;
+    };
+    if !efforts.contains(&level) {
+        let rank = |level: ReasoningLevel| {
+            ReasoningLevel::all()
+                .iter()
+                .position(|&candidate| candidate == level)
+                .expect("all 覆盖全部枚举值")
+        };
+        let at = efforts
+            .iter()
+            .position(|&effort| rank(effort) > rank(level))
+            .unwrap_or(efforts.len());
+        efforts.insert(at, level);
+    }
+    efforts
+}
+
 // 生成 reins-models.json 内容：字段对齐 codex 0.158.0 的 ModelInfo——
 // supports_parallel_tool_calls 已在 0.158.0 删除、不再写；系统提示用
 // model_messages.instructions_template（0.158.0 起的规范形式，旧顶层
@@ -78,7 +105,10 @@ fn build_catalog(
             .iter()
             .find(|m| m.id == *model_id)
             .expect("validated by validate_plan");
-        let efforts = catalog_efforts(model.reasoning, &model.reasoning_levels);
+        let efforts = with_selected_effort(
+            catalog_efforts(model.reasoning, &model.reasoning_levels),
+            plan.default_reasoning_level,
+        );
         let mut entry = json!({
             "slug": model.id,
             "display_name": model.label,
@@ -107,9 +137,8 @@ fn build_catalog(
         if let Some(context_window) = model.context_window {
             entry["context_window"] = json!(context_window);
         }
-        if let Some(level) = plan.default_reasoning_level
-            && efforts.contains(&level)
-        {
+        if let Some(level) = plan.default_reasoning_level {
+            // with_selected_effort 已保证所选档位在列表里。
             entry["default_reasoning_level"] = json!(dialect.spell(level));
         }
         models.push(entry);
