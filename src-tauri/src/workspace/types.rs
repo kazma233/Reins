@@ -304,6 +304,9 @@ pub(crate) struct ProjectInspection {
 #[ts(export, export_to = "../../src/features/workspace/generated/")]
 pub(crate) struct TargetInspection {
     pub(crate) id: AgentTargetId,
+    // 配置里的 skills 落点在盘上不存在：可能是待安装（安装时会建目录），
+    // 也可能是路径写错——界面中性提示，不下结论。
+    pub(crate) skill_dir_exists: bool,
     // 落点是软链接时的归属：谁提供内容、文件实际在哪。列表视图据此提示
     // 「这个落点不是它自己的目录」，与同步弹窗同一个数据源头。
     #[ts(optional = nullable)]

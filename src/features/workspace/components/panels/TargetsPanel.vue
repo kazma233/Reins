@@ -127,9 +127,14 @@ const configProjects = computed(() => configDocument.value?.config?.projects ?? 
                     <span>
                       <strong>skill</strong>
                       <span>{{ target.skillDir }}</span>
+                      <!-- 落点不在盘上：可能是待安装，也可能是路径写错，中性提示。 -->
+                      <span
+                        v-if="skillDirLink(target.id)?.exists === false"
+                        class="manager-target-row__pill pill--note"
+                      >目录不存在</span>
                     </span>
                     <!-- 落点是软链接：这个目录不归它，内容在别处。 -->
-                    <span v-if="skillDirLink(target.id)" class="manager-target-row__link">
+                    <span v-if="skillDirLink(target.id)?.place" class="manager-target-row__link">
                       <span class="manager-target-row__pill pill--info">软链接</span>
                       <span class="manager-target-row__place">{{ skillDirLink(target.id)?.place }}</span>
                     </span>
@@ -191,9 +196,14 @@ const configProjects = computed(() => configDocument.value?.config?.projects ?? 
                         <span>
                           <strong>skill</strong>
                           <span>{{ target.skillDir }}</span>
+                          <!-- 落点不在盘上：可能是待安装，也可能是路径写错，中性提示。 -->
+                          <span
+                            v-if="skillDirLink(formatTargetId(project.id, target.id))?.exists === false"
+                            class="manager-target-row__pill pill--note"
+                          >目录不存在</span>
                         </span>
                         <span
-                          v-if="skillDirLink(formatTargetId(project.id, target.id))"
+                          v-if="skillDirLink(formatTargetId(project.id, target.id))?.place"
                           class="manager-target-row__link"
                         >
                           <span class="manager-target-row__pill pill--info">软链接</span>

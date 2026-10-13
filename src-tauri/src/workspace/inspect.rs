@@ -9,9 +9,8 @@ use super::addressing::TargetRef;
 use super::mcp_formats::mcp_format_writer;
 use super::types::{
     AgentTargetId, McpConfigType, McpInspection, McpTargetInspection, McpTargetState,
-    ProjectInspection,
-    ResolvedManagerConfig, ResolvedMcpConfig, ResolvedTargetConfig, SkillDirLinkView,
-    TargetInspection, WorkspaceInspection,
+    ProjectInspection, ResolvedManagerConfig, ResolvedMcpConfig, ResolvedTargetConfig,
+    SkillDirLinkView, TargetInspection, WorkspaceInspection,
 };
 use super::{parse_manager_config, read_existing_mcp_entries};
 use crate::support::environment::Environment;
@@ -54,6 +53,7 @@ pub(crate) fn inspect_app_state_document(
         .values()
         .map(|target| TargetInspection {
             id: target.id.clone(),
+            skill_dir_exists: target.skill_dir.exists(),
             skill_dir_link: link_of(&target.id.0).map(|(link, target)| SkillDirLinkView {
                 linked_target_id: link.linked_target_id.clone(),
                 link_target: super::display_path(target),
@@ -84,6 +84,7 @@ pub(crate) fn inspect_app_state_document(
                     .composite_id();
                     TargetInspection {
                         id: target.id.clone(),
+                        skill_dir_exists: target.skill_dir.exists(),
                         skill_dir_link: link_of(&composite_id).map(|(link, link_target)| {
                             SkillDirLinkView {
                                 linked_target_id: link.linked_target_id.clone(),
@@ -161,10 +162,7 @@ fn inspect_mcp_target(
                 };
                 (state, detail)
             }
-            Err(error) => (
-                McpTargetState::Error,
-                format!("读取目标配置失败：{error}"),
-            ),
+            Err(error) => (McpTargetState::Error, format!("读取目标配置失败：{error}")),
         }
     } else {
         (

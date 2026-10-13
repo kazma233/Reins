@@ -57,3 +57,13 @@
 - 行为变化点:MCP state 的 wire 值不变(snake_case 拼写相同);
   `SkillLinkAssociation` 变宽(新增 source_relatives,向后兼容);
   其余为纯收窄。
+- 「删除按回执」的弹窗交互链已于 2026-10-13 由用户手测通过。
+
+## 2026-10-13 补记:目录不存在提示落地
+
+上述「产品决定」已拍板:加提示。`TargetInspection` 补
+`skill_dir_exists`(inspect 每行一次 `exists()`),面板按行渲染琥珀色
+「目录不存在」pill;语义刻意中性——可能是待安装(安装会建目录),
+也可能是路径写错,不下结论。inspection 行索引(skillDirLink.ts)随之
+每行必有条目(原先是「有软链接才进表」),软链接提示的判断从
+「在不在表里」改为「place 是否为空」。

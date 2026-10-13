@@ -2,4 +2,4 @@
 import type { AgentTargetId } from "./AgentTargetId";
 import type { SkillDirLinkView } from "./SkillDirLinkView";
 
-export type TargetInspection = { id: AgentTargetId, skillDirLink?: SkillDirLinkView | null, };
+export type TargetInspection = { id: AgentTargetId, skillDirExists: boolean, skillDirLink?: SkillDirLinkView | null, };

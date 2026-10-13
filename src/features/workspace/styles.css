@@ -871,6 +871,12 @@
   color: var(--color-primary);
 }
 
+/* 目录不存在：中性偏提醒——可能是待安装，也可能是路径写错。 */
+.pill--note {
+  background: #fef3c7;
+  color: #b45309;
+}
+
 /* --- sync columns --- */
 
 .manager-sync-columns {
