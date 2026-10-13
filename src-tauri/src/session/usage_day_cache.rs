@@ -18,8 +18,9 @@ use rusqlite::Connection;
 use super::model::{SourceApp, UsageHourBuckets};
 
 // 归桶逻辑变更时(如 day→hour 粒度调整)必须 bump 文件名里的版本号:
-// 旧版本库文件整体失效,新版本从空库全量重建一次。
-const DB_FILE_NAME: &str = "usage-day-cache_v2.db";
+// 旧版本库文件整体失效,新版本从空库全量重建一次。v3:小时桶增加按模型的
+// 切片子结构。
+const DB_FILE_NAME: &str = "usage-day-cache_v3.db";
 
 static CONNECTION: LazyLock<Mutex<Option<(PathBuf, Connection)>>> =
     LazyLock::new(|| Mutex::new(None));

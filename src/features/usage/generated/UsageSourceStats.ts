@@ -2,5 +2,7 @@
 import type { SourceApp } from "../../sessions/generated/SourceApp";
 import type { UsageDayPoint } from "./UsageDayPoint";
 import type { UsageHourPoint } from "./UsageHourPoint";
+import type { UsageModelDayPoint } from "./UsageModelDayPoint";
+import type { UsageModelHourPoint } from "./UsageModelHourPoint";
 
-export type UsageSourceStats = { sourceApp: SourceApp, days: Array<UsageDayPoint>, todayHours: Array<UsageHourPoint>, sessionCount: number, todaySessionCount: number, };
+export type UsageSourceStats = { sourceApp: SourceApp, days: Array<UsageDayPoint>, todayHours: Array<UsageHourPoint>, sessionCount: number, todaySessionCount: number, modelDays: Array<UsageModelDayPoint>, modelTodayHours: Array<UsageModelHourPoint>, };

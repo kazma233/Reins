@@ -293,6 +293,8 @@ struct UsageTotals {
 }
 
 // 每轮的增量切片:sum(turns) == session 汇总,endedAt 是该轮完成时间。
+// modelUsage 是该轮按模型的切片(map 键为模型名),空 map 的旧版本会话没有
+// 模型信息。
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct UsageTurn {
@@ -306,6 +308,21 @@ struct UsageTurn {
     cached_read_tokens: u64,
     #[serde(default)]
     cache_creation_tokens: u64,
+    #[serde(default)]
+    model_usage: std::collections::BTreeMap<String, UsageTotals>,
+}
+
+// inputTokens 含缓存命中部分(实测 input+output==totalTokens),扣除后与
+// 其他来源的"新输入"口径一致;outputTokens 已含 reasoning。
+fn grok_slice_usage(totals: &UsageTotals) -> SessionTokenUsage {
+    SessionTokenUsage {
+        input_tokens: totals
+            .input_tokens
+            .saturating_sub(totals.cached_read_tokens),
+        output_tokens: totals.output_tokens,
+        cache_read_tokens: totals.cached_read_tokens,
+        cache_write_tokens: totals.cache_creation_tokens,
+    }
 }
 
 #[derive(Clone, Deserialize)]
@@ -612,16 +629,8 @@ fn session_usage(path: &Path) -> Result<Option<SessionTokenUsage>> {
     let file: UsageFile = serde_json::from_reader(File::open(&usage_path)?)
         .with_context(|| format!("Invalid Grok Build usage file {}", usage_path.display()))?;
 
-    // inputTokens 含缓存命中部分(实测 input+output==totalTokens),扣除后与
-    // 其他来源的"新输入"口径一致;outputTokens 已含 reasoning。
-    Ok(file.session.map(|totals| SessionTokenUsage {
-        input_tokens: totals
-            .input_tokens
-            .saturating_sub(totals.cached_read_tokens),
-        output_tokens: totals.output_tokens,
-        cache_read_tokens: totals.cached_read_tokens,
-        cache_write_tokens: totals.cache_creation_tokens,
-    }))
+    // inputTokens 含缓存命中部分,扣除口径见 grok_slice_usage。
+    Ok(file.session.as_ref().map(grok_slice_usage))
 }
 
 // 用量曲线的小时桶:turns[] 每轮自带增量用量与 endedAt,按轮归到本地时区的
@@ -641,17 +650,26 @@ pub(crate) fn usage_hours(summary_path: &Path) -> Result<UsageHourBuckets> {
             .as_deref()
             .and_then(crate::support::time::parse_timestamp);
 
-        super::merge_usage_bucket(
-            &mut buckets,
-            timestamp.and_then(super::hour_key),
-            SessionTokenUsage {
-                // 口径与 session_usage 相同:input 扣掉缓存命中。
-                input_tokens: turn.input_tokens.saturating_sub(turn.cached_read_tokens),
+        let turn_usage = || {
+            grok_slice_usage(&UsageTotals {
+                input_tokens: turn.input_tokens,
                 output_tokens: turn.output_tokens,
-                cache_read_tokens: turn.cached_read_tokens,
-                cache_write_tokens: turn.cache_creation_tokens,
-            },
-        );
+                cached_read_tokens: turn.cached_read_tokens,
+                cache_creation_tokens: turn.cache_creation_tokens,
+            })
+        };
+        if turn.model_usage.is_empty() {
+            super::merge_usage_event(&mut buckets, timestamp.and_then(super::hour_key), None, turn_usage());
+        } else {
+            for (model, slice) in &turn.model_usage {
+                super::merge_usage_event(
+                    &mut buckets,
+                    timestamp.and_then(super::hour_key),
+                    Some(model.as_str()),
+                    grok_slice_usage(slice),
+                );
+            }
+        }
     }
 
     Ok(buckets)

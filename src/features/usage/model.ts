@@ -6,7 +6,7 @@ import type {
   UsageSourceStats,
 } from "./types";
 
-// 每来源固定颜色:曲线、峰值圆点、筛选 chip 共用,同一 agent 视觉一致。
+// 每来源固定颜色:曲线与悬停圆点共用,同一 agent 视觉一致。
 // 色板取浅色主题下可区分的六个色相,避开 danger/success 等语义色。
 export const SOURCE_COLORS: Record<SourceApp, string> = {
   codex: "#0052ff",
@@ -28,6 +28,10 @@ export const USAGE_WINDOWS = [
 ] as const;
 
 export type UsageWindowDays = (typeof USAGE_WINDOWS)[number]["days"];
+
+// 来源与模型筛选都是单值选择:"all" 表示不筛选(与来源选择的 ALL_SOURCES 同形);
+// 模型名取自转录,不会等于 "all"。
+export const ALL_MODELS = "all";
 
 export function isUsageWindowDays(value: number): value is UsageWindowDays {
   return USAGE_WINDOWS.some((option) => option.days === value);
@@ -74,6 +78,101 @@ export function todaySources(sources: UsageSourceStats[]): NormalizedUsageSource
       usage: point.usage,
     })),
   }));
+}
+
+// ---------------------------------------------------------------------------
+// 模型维度:切片来自后端 modelDays/modelTodayHours,只覆盖能取到模型信息
+// 的消耗,与来源总量天然不等(取不到模型的来源/事件不参与)。
+// ---------------------------------------------------------------------------
+
+type ModelSlice = { model: string; bucket: string; usage: SessionTokenUsage };
+
+// 窗口内的模型切片:窗口模式按日桶裁剪,今日模式取今日小时。
+function windowModelSlices(
+  sources: UsageSourceStats[],
+  axis: string[],
+  isToday: boolean
+): Array<{ sourceApp: SourceApp; sessionCount: number; slices: ModelSlice[] }> {
+  const inAxis = new Set(axis);
+  return sources.map((source) => ({
+    sourceApp: source.sourceApp,
+    sessionCount: isToday ? source.todaySessionCount : source.sessionCount,
+    slices: isToday
+      ? source.modelTodayHours.map((point) => ({
+          model: point.model,
+          bucket: String(point.hour).padStart(2, "0"),
+          usage: point.usage,
+        }))
+      : source.modelDays
+          .filter((point) => inAxis.has(point.day))
+          .map((point) => ({ model: point.model, bucket: point.day, usage: point.usage })),
+  }));
+}
+
+export type UsageModelSummary = {
+  model: string;
+  tokens: number;
+  share: number;
+};
+
+// 窗口内各模型的消耗与占比(跨来源按模型名合并),按消耗降序;占比分母是
+// 模型切片总和,不是来源总量。
+export function windowModelSummaries(
+  sources: UsageSourceStats[],
+  axis: string[],
+  isToday: boolean
+): UsageModelSummary[] {
+  const totals = new Map<string, number>();
+  for (const source of windowModelSlices(sources, axis, isToday)) {
+    for (const slice of source.slices) {
+      totals.set(
+        slice.model,
+        (totals.get(slice.model) ?? 0) + totalConsumedTokens(slice.usage)
+      );
+    }
+  }
+
+  const total = [...totals.values()].reduce((sum, value) => sum + value, 0);
+  return [...totals]
+    .map(([model, tokens]) => ({
+      model,
+      tokens,
+      share: total > 0 ? tokens / total : 0,
+    }))
+    .filter((item) => item.tokens > 0)
+    .sort((left, right) => right.tokens - left.tokens);
+}
+
+// 模型筛选激活时的来源序列:points 只保留选中模型的切片,同桶多来源合并;
+// sessionCount 保留来源级口径(会话数是来源维度概念,不随模型筛选变化)。
+export function modelFilteredSources(
+  sources: UsageSourceStats[],
+  axis: string[],
+  model: string,
+  isToday: boolean
+): NormalizedUsageSource[] {
+  return windowModelSlices(sources, axis, isToday).map((source) => {
+    const byBucket = new Map<string, SessionTokenUsage>();
+    for (const slice of source.slices) {
+      if (slice.model !== model) {
+        continue;
+      }
+      const sum = byBucket.get(slice.bucket);
+      if (sum) {
+        sum.inputTokens += slice.usage.inputTokens;
+        sum.outputTokens += slice.usage.outputTokens;
+        sum.cacheReadTokens += slice.usage.cacheReadTokens;
+        sum.cacheWriteTokens += slice.usage.cacheWriteTokens;
+      } else {
+        byBucket.set(slice.bucket, { ...slice.usage });
+      }
+    }
+    return {
+      sourceApp: source.sourceApp,
+      sessionCount: source.sessionCount,
+      points: [...byBucket].map(([bucket, usage]) => ({ bucket, usage })),
+    };
+  });
 }
 
 // 今日窗口的日期轴:固定 0..23 点,无消耗的小时补零。
@@ -128,9 +227,7 @@ export function sourceSeries(points: UsageBucketPoint[], axis: string[]): number
 
 export type UsageSourceSummary = {
   sourceApp: SourceApp;
-  color: string;
   tokens: number;
-  sessionCount: number;
   share: number;
 };
 
@@ -146,9 +243,7 @@ export function windowSourceSummaries(
       .reduce((sum, point) => sum + totalConsumedTokens(point.usage), 0);
     return {
       sourceApp: source.sourceApp,
-      color: sourceColor(source.sourceApp),
       tokens,
-      sessionCount: source.sessionCount,
       share: 0,
     };
   });

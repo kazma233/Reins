@@ -414,7 +414,12 @@ pub(crate) fn usage_hours(path: &Path) -> Result<UsageHourBuckets> {
             .and_then(crate::support::time::parse_timestamp);
 
         if let Some(usage) = claude_usage(&value["message"]) {
-            super::merge_usage_bucket(&mut buckets, timestamp.and_then(super::hour_key), usage);
+            super::merge_usage_event(
+                &mut buckets,
+                timestamp.and_then(super::hour_key),
+                super::json_string(&value["message"], &["model"]).as_deref(),
+                usage,
+            );
         }
     }
 

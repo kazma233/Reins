@@ -427,9 +427,16 @@ pub(crate) fn codex_cumulative_usage(usage: &Value) -> Option<SessionTokenUsage>
 pub(crate) fn usage_hours(path: &Path) -> Result<UsageHourBuckets> {
     let mut buckets = UsageHourBuckets::new();
     let mut previous = SessionTokenUsage::default();
+    // turn_context 声明该 turn 使用的模型;token_count 事件归属最近一次
+    // 声明的模型,文件开头未声明时只进总量。
+    let mut current_model: Option<String> = None;
 
     for line in BufReader::new(File::open(path)?).lines() {
         let value = super::parse_json_line(&line?)?;
+        if super::json_type(&value) == Some("turn_context") {
+            current_model = super::json_string(&value["payload"], &["model"]);
+            continue;
+        }
         if super::json_type(&value) != Some("event_msg") {
             continue;
         }
@@ -452,9 +459,10 @@ pub(crate) fn usage_hours(path: &Path) -> Result<UsageHourBuckets> {
             .and_then(Value::as_str)
             .and_then(crate::support::time::parse_timestamp);
 
-        super::merge_usage_bucket(
+        super::merge_usage_event(
             &mut buckets,
             timestamp.and_then(super::hour_key),
+            current_model.as_deref(),
             SessionTokenUsage {
                 input_tokens: current.input_tokens.saturating_sub(previous.input_tokens),
                 output_tokens: current.output_tokens.saturating_sub(previous.output_tokens),

@@ -1,7 +1,7 @@
-/* 用量统计页:布局自上而下(指标行 → 曲线卡 → 来源 chips 挂在曲线卡底部)。
+/* 用量统计页:布局自上而下(顶部筛选与窗口切换 → 指标行 → 曲线卡)。
    页面全部内容跟随 app 宽度,左右 padding 即边距;
    高度跟随 app,内容超出时页面内滚动,子项禁止 flex 收缩(否则曲线卡
-   被压瘪后,卡片 overflow hidden 会把 x 轴标签和来源 chips 裁掉)。
+   被压瘪后,卡片 overflow hidden 会把 x 轴标签裁掉)。
    图表高度固定,不随宽度变化(见 UsageTrendChart)。 */
 
 .usage-workspace {
@@ -15,7 +15,7 @@
 }
 
 /* 滚动容器内子项保持自然高度:若允许 flex 收缩,曲线卡会被压瘪,
-   卡片的 overflow hidden 会把 SVG 底部的 x 轴标签和来源 chips 裁掉 */
+   卡片的 overflow hidden 会把 SVG 底部的 x 轴标签裁掉 */
 .usage-workspace > * {
   flex-shrink: 0;
 }
@@ -54,6 +54,14 @@
   display: flex;
   align-items: center;
   gap: 10px;
+  flex-wrap: wrap;
+}
+
+/* 来源与模型筛选:固定宽度,窄屏允许收缩换行(select 内文字自动裁切) */
+.usage-header__actions .usage-filter-select {
+  flex: 0 1 auto;
+  width: 180px;
+  min-width: 128px;
 }
 
 .usage-window-switcher {
@@ -151,52 +159,3 @@
   color: var(--color-ink-muted, var(--color-body));
 }
 
-.usage-source-chips {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  padding-top: 12px;
-  border-top: 1px solid var(--color-hairline);
-}
-
-.usage-source-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 5px 10px;
-  border: 1px solid var(--color-hairline);
-  border-radius: var(--radius-pill, 999px);
-  background: var(--color-canvas);
-  font-size: var(--font-size-xs, 11px);
-  color: var(--color-body);
-  cursor: pointer;
-}
-
-.usage-source-chip:hover {
-  border-color: var(--color-primary);
-}
-
-.usage-source-chip.is-hidden {
-  opacity: 0.45;
-}
-
-.usage-source-chip__dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  flex: none;
-}
-
-.usage-source-chip__name {
-  color: var(--color-ink);
-  font-weight: 550;
-}
-
-.usage-source-chip__share {
-  color: var(--color-ink-muted, var(--color-body));
-  font-variant-numeric: tabular-nums;
-}
-
-.usage-source-chip__tokens {
-  font-variant-numeric: tabular-nums;
-}

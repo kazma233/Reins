@@ -39,11 +39,11 @@ withDefaults(defineProps<UsageMetricsRowProps>(), { mode: "window" });
         {{
           metrics.peak
             ? mode === "today"
-              ? `${metrics.peak.bucket}:00`
+              ? `${metrics.peak.bucket}:00–${Number(metrics.peak.bucket) + 1}:00`
               : metrics.peak.bucket
             : mode === "today"
-              ? "今日无消耗"
-              : "窗口内无消耗"
+            ? "今日无消耗"
+            : "窗口内无消耗"
         }}
       </span>
     </div>

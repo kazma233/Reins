@@ -873,6 +873,14 @@ fn dsh_usage_hours_bucketed_by_assistant_event_time() -> Result<()> {
     };
     let morning = hour(10);
     let afternoon = hour(14);
+    let model_selection = |seq: i64, time: i64, model: &str| {
+        json!({
+            "type": "model/selection",
+            "seq": seq,
+            "time": time,
+            "data": {"provider": "fanggeek", "model": model}
+        })
+    };
     let path = write_session(
         &home,
         "session-hours",
@@ -880,14 +888,17 @@ fn dsh_usage_hours_bucketed_by_assistant_event_time() -> Result<()> {
         false,
         &[
             session_header("session-hours", 1000, 0),
+            model_selection(0, morning - 10, "deepseek-flash"),
             assistant_message(
-                0,
+                1,
                 morning,
                 vec![json!({"type": "text", "text": "morning"})],
                 json!({"inputTokens": 100, "outputTokens": 10, "cacheReadTokens": 20, "cacheWriteTokens": 0}),
             ),
+            // selection 变更后,后续消耗归属新模型。
+            model_selection(2, afternoon - 10, "glm-5.3"),
             assistant_message(
-                1,
+                3,
                 afternoon,
                 vec![json!({"type": "text", "text": "afternoon"})],
                 json!({"inputTokens": 50, "outputTokens": 5, "cacheReadTokens": 0, "cacheWriteTokens": 0}),
@@ -896,26 +907,37 @@ fn dsh_usage_hours_bucketed_by_assistant_event_time() -> Result<()> {
     )?;
 
     let buckets = session::dsh::usage_hours(&path)?;
+    let expected_bucket = |input: u64, output: u64, cache_read: u64, model: &str| {
+        session::model::UsageHourBucket {
+            usage: session::model::SessionTokenUsage {
+                input_tokens: input,
+                output_tokens: output,
+                cache_read_tokens: cache_read,
+                cache_write_tokens: 0,
+            },
+            models: [(
+                model.to_string(),
+                session::model::SessionTokenUsage {
+                    input_tokens: input,
+                    output_tokens: output,
+                    cache_read_tokens: cache_read,
+                    cache_write_tokens: 0,
+                },
+            )]
+            .into_iter()
+            .collect(),
+        }
+    };
     assert_eq!(
         buckets,
         BTreeMap::from([
             (
                 expected_key(morning),
-                session::model::SessionTokenUsage {
-                    input_tokens: 100,
-                    output_tokens: 10,
-                    cache_read_tokens: 20,
-                    cache_write_tokens: 0,
-                }
+                expected_bucket(100, 10, 20, "deepseek-flash")
             ),
             (
                 expected_key(afternoon),
-                session::model::SessionTokenUsage {
-                    input_tokens: 50,
-                    output_tokens: 5,
-                    cache_read_tokens: 0,
-                    cache_write_tokens: 0,
-                }
+                expected_bucket(50, 5, 0, "glm-5.3")
             ),
         ])
     );

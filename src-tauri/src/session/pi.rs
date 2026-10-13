@@ -439,23 +439,23 @@ fn parse_full_summary(path: &Path) -> Result<SessionSummary> {
 // toolResult 的扩展元数据里,按"会话总消耗"口径一并计入。官方 usage 的
 // output 已含 reasoning(totalTokens = input+output+cacheRead+cacheWrite)。
 fn accumulate_pi_usage(total: &mut Option<SessionTokenUsage>, entry: &Value) {
-    for usage in pi_entry_usages(entry) {
+    for (_, usage) in pi_entry_usages(entry) {
         super::merge_token_usage(total, usage);
     }
 }
 
 // 单个 entry 产生的全部增量 usage(主线程回复 0 或 1 条,subagent toolResult
-// 可能带多个 run)。
-fn pi_entry_usages(entry: &Value) -> Vec<SessionTokenUsage> {
+// 可能带多个 run),附带模型名:主线 assistant 消息带 message.model,subagent
+// run 的转录没有模型字段,为 None。
+fn pi_entry_usages(entry: &Value) -> Vec<(Option<String>, SessionTokenUsage)> {
     let Some(message) = entry.get("message") else {
         return Vec::new();
     };
 
     match message.get("role").and_then(Value::as_str) {
-        Some("assistant") => message
-            .get("usage")
-            .map(|usage| vec![pi_usage(usage)])
-            .unwrap_or_default(),
+        Some("assistant") => message.get("usage").map(|usage| {
+            vec![(super::json_string(message, &["model"]), pi_usage(usage))]
+        }).unwrap_or_default(),
         Some("toolResult")
             if super::json_string(message, &["toolName"]).as_deref() == Some("subagent") =>
         {
@@ -466,6 +466,7 @@ fn pi_entry_usages(entry: &Value) -> Vec<SessionTokenUsage> {
                 .map(|runs| {
                     runs.iter()
                         .filter_map(|run| run.get("usage").map(pi_usage))
+                        .map(|usage| (None, usage))
                         .collect()
                 })
                 .unwrap_or_default()
@@ -481,10 +482,11 @@ pub(crate) fn usage_hours(path: &Path) -> Result<UsageHourBuckets> {
     let mut buckets = UsageHourBuckets::new();
 
     for entry in &document.entries {
-        for usage in pi_entry_usages(&entry.value) {
-            super::merge_usage_bucket(
+        for (model, usage) in pi_entry_usages(&entry.value) {
+            super::merge_usage_event(
                 &mut buckets,
                 entry.timestamp.and_then(super::hour_key),
+                model.as_deref(),
                 usage,
             );
         }

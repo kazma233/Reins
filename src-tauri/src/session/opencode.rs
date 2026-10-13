@@ -467,6 +467,7 @@ pub(crate) fn usage_hours() -> Result<Option<SqlUsageHours>> {
         .prepare(
             "SELECT session_id,
                     COALESCE(json_extract(data, '$.time.created'), time_created),
+                    json_extract(data, '$.model.id'),
                     COALESCE(json_extract(data, '$.tokens.input'), 0),
                     COALESCE(json_extract(data, '$.tokens.output'), 0),
                     COALESCE(json_extract(data, '$.tokens.reasoning'), 0),
@@ -486,12 +487,13 @@ pub(crate) fn usage_hours() -> Result<Option<SqlUsageHours>> {
             Ok((
                 row.get::<_, String>(0)?,
                 timestamp,
+                row.get::<_, Option<String>>(2)?,
                 super::usage_stats::split_reasoning_usage(super::usage_stats::UsageColumns {
-                    input: column(2)?,
-                    output: column(3)?,
-                    reasoning: column(4)?,
-                    cache_read: column(5)?,
-                    cache_write: column(6)?,
+                    input: column(3)?,
+                    output: column(4)?,
+                    reasoning: column(5)?,
+                    cache_read: column(6)?,
+                    cache_write: column(7)?,
                 }),
             ))
         })

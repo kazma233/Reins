@@ -387,23 +387,28 @@ fn session_token_usages(connection: &Connection) -> Result<HashMap<String, Sessi
         .context("Failed to read ZCode token usages")
 }
 
-// 用量曲线的小时桶:turn_usage 每 turn 预聚合且自带 started_at,归一口径与
-// session_token_usages 一致(normalized_usage 单点)。db 缺失、或 turn_usage
-// 表还没建,都表示来源不可用,返回 None。
+// 用量曲线的小时桶:model_usage 是调用级明细,自带 model_id 与官方
+// (started_at, provider_id, model_id) 索引,总量与模型切片同源;它比
+// turn_usage(只记主 turn)多计入 subagent 调用,与 claude/pi 把子代理计入
+// 的口径一致,列表 summary 仍走 turn_usage。归一口径与
+// session_token_usages 一致(normalized_usage 单点)。db 缺失、或表还没
+// 建,都表示来源不可用,返回 None。status 只取 completed,error/cancelled
+// 的部分用量不计。
 pub(crate) fn usage_hours() -> Result<Option<SqlUsageHours>> {
     let connection = match open_connection() {
         Ok(connection) => connection,
         Err(_) => return Ok(None),
     };
-    if !super::sqlite_table_exists(&connection, "turn_usage")? {
+    if !super::sqlite_table_exists(&connection, "model_usage")? {
         return Ok(None);
     }
 
     let mut statement = connection
         .prepare(
-            "SELECT session_id, started_at, input_tokens, output_tokens, reasoning_tokens,
-                    cache_read_input_tokens, cache_creation_input_tokens
-             FROM turn_usage",
+            "SELECT session_id, started_at, model_id, input_tokens, output_tokens,
+                    reasoning_tokens, cache_read_input_tokens, cache_creation_input_tokens
+             FROM model_usage
+             WHERE status = 'completed'",
         )
         .context("Failed to prepare Zcode usage hours query")?;
 
@@ -417,12 +422,13 @@ pub(crate) fn usage_hours() -> Result<Option<SqlUsageHours>> {
             Ok((
                 session_id,
                 started_at,
+                row.get::<_, Option<String>>(2)?,
                 super::usage_stats::full_scope_usage(super::usage_stats::UsageColumns {
-                    input: column(2)?,
-                    output: column(3)?,
-                    reasoning: column(4)?,
-                    cache_read: column(5)?,
-                    cache_write: column(6)?,
+                    input: column(3)?,
+                    output: column(4)?,
+                    reasoning: column(5)?,
+                    cache_read: column(6)?,
+                    cache_write: column(7)?,
                 }),
             ))
         })

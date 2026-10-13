@@ -22,6 +22,12 @@ type UsageTrendChartProps = {
 
 const props = defineProps<UsageTrendChartProps>();
 
+// 小时桶是区间量（"23" = 23:00–24:00）：刻度画 0..24 的边界时刻，折线两端
+// 补半个桶的平段，从 0 点铺满到 24 点，避免末桶 "23" 被读成"统计到 23:00
+// 截止"，也避免线段在轴两端留空。
+const isHourMode = computed(() => props.xLabelMode === "hour");
+const HOUR_BOUNDS = 24;
+
 // 宽度跟随容器、高度固定:SVG 用真实像素绘制(viewBox 与渲染尺寸 1:1),
 // 文字不随窗口缩放变形;容器未测出前用兑底宽,挂载后立即校正。
 const chartEl = ref<HTMLElement | null>(null);
@@ -47,7 +53,11 @@ const gridTicks = computed(() =>
   }))
 );
 
+// 小时模式数据点落在桶中点(区间量),日模式落在桶位置。
 function xAt(index: number): number {
+  if (isHourMode.value) {
+    return PAD.left + ((index + 0.5) / props.axis.length) * innerWidth.value;
+  }
   const last = props.axis.length - 1;
   if (last <= 0) {
     return PAD.left + innerWidth.value / 2;
@@ -59,30 +69,61 @@ function yAt(value: number): number {
   return PAD.top + INNER_HEIGHT - (value / maxY.value) * INNER_HEIGHT;
 }
 
+// 折线顶点落在桶中点,再在两端各补一个与首/末桶同高的端点(轴两端),
+// 线段因此铺满 0 点到 24 点,顶点与悬停圆点位置一致。
+function hourLinePoints(values: number[]): string {
+  if (values.length === 0) {
+    return "";
+  }
+  const vertices = values.map(
+    (value, index) => [xAt(index), yAt(value)] as [number, number]
+  );
+  const points: Array<[number, number]> = [
+    [PAD.left, vertices[0][1]],
+    ...vertices,
+    [PAD.left + innerWidth.value, vertices[vertices.length - 1][1]],
+  ];
+  return points.map(([x, y]) => `${x},${y}`).join(" ");
+}
+
 const lines = computed(() =>
   props.series.map((item) => ({
     ...item,
-    points: item.values
-      .map((value, index) => `${xAt(index)},${yAt(value)}`)
-      .join(" "),
+    points: isHourMode.value
+      ? hourLinePoints(item.values)
+      : item.values.map((value, index) => `${xAt(index)},${yAt(value)}`).join(" "),
   }))
 );
 
 // x 轴标签密度:文字已按真实像素渲染,按 11px 字号下标签实宽估算
 // (day 标签"MM-DD"约 33px、hour"HH"约 14px,留余量取间距 40/24);
 // 轴点超过上限时按固定步长抽稀,保证相邻标签严格等距。
+// 小时模式是边界刻度:步长取 24 的因子,末刻度 24 与首刻度 0 必然都在。
 const xTicks = computed(() => {
   const count = props.axis.length;
   if (count === 0) {
     return [];
   }
-  const minSpacing = props.xLabelMode === "hour" ? 24 : 40;
+  const minSpacing = isHourMode.value ? 24 : 40;
   const maxLabels = Math.floor(innerWidth.value / minSpacing) + 1;
+  if (isHourMode.value) {
+    const step = [1, 2, 3, 4, 6, 8, 12, 24].find(
+      (divisor) => HOUR_BOUNDS / divisor + 1 <= maxLabels
+    ) ?? HOUR_BOUNDS;
+    const ticks: Array<{ x: number; label: string }> = [];
+    for (let hour = 0; hour <= HOUR_BOUNDS; hour += step) {
+      ticks.push({
+        x: PAD.left + (hour / HOUR_BOUNDS) * innerWidth.value,
+        label: String(hour),
+      });
+    }
+    return ticks;
+  }
   const step = Math.max(1, Math.ceil(count / maxLabels));
-  const ticks: Array<{ index: number; label: string }> = [];
+  const ticks: Array<{ x: number; label: string }> = [];
   for (let index = 0; index < count; index += step) {
     const bucket = props.axis[index];
-    ticks.push({ index, label: props.xLabelMode === "hour" ? bucket : bucket.slice(5) });
+    ticks.push({ x: xAt(index), label: bucket.slice(5) });
   }
   return ticks;
 });
@@ -100,12 +141,29 @@ function handleMove(event: MouseEvent) {
     return;
   }
   const ratio = (viewX - PAD.left) / innerWidth.value;
+  if (isHourMode.value) {
+    // 桶中点几何下按区间归属取桶,而不是就近取点。
+    const clamped = Math.min(1, Math.max(0, ratio));
+    hoverIndex.value = Math.min(last, Math.floor(clamped * props.axis.length));
+    return;
+  }
   hoverIndex.value = Math.min(last, Math.max(0, Math.round(ratio * last)));
 }
 
 const hoverX = computed(() =>
   hoverIndex.value === null ? null : xAt(hoverIndex.value)
 );
+
+// 小时桶标题按区间展示（"23:00–24:00"），日期桶标题原样。
+const tooltipTitle = computed(() => {
+  if (hoverIndex.value === null) {
+    return "";
+  }
+  const bucket = props.axis[hoverIndex.value];
+  return isHourMode.value
+    ? `${bucket}:00–${Number(bucket) + 1}:00`
+    : bucket;
+});
 
 // tooltip 跟随悬停竖线,viewBox 已是像素坐标,直接定位。
 // 气泡以光标线居中（CSS translateX(-50%)），悬停到最左/最右时会被容器边缘裁掉，
@@ -130,7 +188,7 @@ const tooltipLeft = computed(() => {
       :viewBox="`0 0 ${viewWidth} ${VIEW_HEIGHT}`"
       class="usage-chart__svg"
       role="img"
-      aria-label="各 agent 每日 token 消耗曲线"
+      :aria-label="isHourMode ? '各 agent 每小时 token 消耗曲线' : '各 agent 每日 token 消耗曲线'"
       @mousemove="handleMove"
       @mouseleave="hoverIndex = null"
     >
@@ -149,9 +207,9 @@ const tooltipLeft = computed(() => {
 
       <text
         v-for="tick in xTicks"
-        :key="tick.index"
+        :key="tick.label"
         class="usage-chart__axis-label"
-        :x="xAt(tick.index)"
+        :x="tick.x"
         :y="VIEW_HEIGHT - 8"
         text-anchor="middle"
       >
@@ -195,7 +253,7 @@ const tooltipLeft = computed(() => {
       class="usage-chart__tooltip"
       :style="{ left: `${tooltipLeft}px` }"
     >
-      <div class="usage-chart__tooltip-day">{{ axis[hoverIndex] }}</div>
+      <div class="usage-chart__tooltip-day">{{ tooltipTitle }}</div>
       <div
         v-for="line in series"
         :key="line.sourceApp"

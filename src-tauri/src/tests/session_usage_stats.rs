@@ -54,6 +54,34 @@ fn usage(
     }
 }
 
+// 期望形态:不带模型切片的小时桶(models 为空)。
+fn hour_buckets(
+    entries: &[(&str, session::model::SessionTokenUsage)],
+) -> BTreeMap<String, session::model::SessionTokenUsage> {
+    entries
+        .iter()
+        .map(|(key, usage)| (key.to_string(), *usage))
+        .collect()
+}
+
+// 实际桶的总量视图:与 hour_buckets 同形态比较,模型切片另行断言。
+fn total_view(buckets: &session::model::UsageHourBuckets) -> BTreeMap<String, session::model::SessionTokenUsage> {
+    buckets
+        .iter()
+        .map(|(key, bucket)| (key.clone(), bucket.usage))
+        .collect()
+}
+
+// 某个小时桶的模型切片期望。
+fn model_bucket(
+    entries: &[(&str, session::model::SessionTokenUsage)],
+) -> BTreeMap<String, session::model::SessionTokenUsage> {
+    entries
+        .iter()
+        .map(|(model, usage)| (model.to_string(), *usage))
+        .collect()
+}
+
 fn today_parts() -> (i32, u32, u32) {
     use chrono::Datelike;
     let now = chrono::Local::now();
@@ -80,6 +108,7 @@ fn claude_usage_hours_splits_cross_day_sessions_by_message_timestamps() -> Resul
                 "type": "assistant",
                 "message": {
                     "content": "day one answer",
+                    "model": "glm-5.3",
                     "usage": {
                         "input_tokens": 100,
                         "output_tokens": 20,
@@ -88,13 +117,15 @@ fn claude_usage_hours_splits_cross_day_sessions_by_message_timestamps() -> Resul
                     }
                 }
             }),
-            // 同一会话两天后的续聊:按消息时间归到另一天,不并入首日。
+            // 同一会话两天后的续聊:按消息时间归到另一天,不并入首日;换模型后
+            // 各自归属自己的模型。
             json!({
                 "timestamp": rfc3339(local_day_millis(2026, 4, 23)),
                 "sessionId": session_id,
                 "type": "assistant",
                 "message": {
                     "content": "day three answer",
+                    "model": "glm-5.3-flash",
                     "usage": {
                         "input_tokens": 10,
                         "output_tokens": 5,
@@ -107,11 +138,20 @@ fn claude_usage_hours_splits_cross_day_sessions_by_message_timestamps() -> Resul
 
     let buckets = session::claude_code::usage_hours(&path)?;
     assert_eq!(
-        buckets,
-        BTreeMap::from([
-            ("2026-04-21T12".to_string(), usage(100, 20, 1000, 50)),
-            ("2026-04-23T12".to_string(), usage(10, 5, 200, 0)),
+        total_view(&buckets),
+        hour_buckets(&[
+            ("2026-04-21T12", usage(100, 20, 1000, 50)),
+            ("2026-04-23T12", usage(10, 5, 200, 0)),
         ])
+    );
+    // 模型切片与总量同桶同源,按 message.model 归属。
+    assert_eq!(
+        buckets["2026-04-21T12"].models,
+        model_bucket(&[("glm-5.3", usage(100, 20, 1000, 50))])
+    );
+    assert_eq!(
+        buckets["2026-04-23T12"].models,
+        model_bucket(&[("glm-5.3-flash", usage(10, 5, 200, 0))])
     );
 
     Ok(())
@@ -146,29 +186,48 @@ fn codex_usage_hours_diffs_cumulative_token_counts_across_days() -> Result<()> {
                 }
             })
         };
+    let turn_context_event = |timestamp_millis: i64, model: &str| {
+        json!({
+            "timestamp": rfc3339(timestamp_millis),
+            "type": "turn_context",
+            "payload": {"model": model}
+        })
+    };
 
     write_jsonl(
         &path,
         &[
             // 首事件视作从 0 起步:全量归入首日(归一后 600/30/400/100)。
+            turn_context_event(local_day_millis(2026, 4, 21), "gpt-5.3"),
             token_count_event(local_day_millis(2026, 4, 21), 1000, 400, 100, 30),
-            // 次日累计到 2000/900/150/60:差分归入次日(500/30/500/50)。
+            // 次日累计到 2000/900/150/60:差分归入次日(500/30/500/50);换了
+            // 模型,差分归属新模型。
+            turn_context_event(local_day_millis(2026, 4, 22), "gpt-5.3-codex"),
             token_count_event(local_day_millis(2026, 4, 22), 2000, 900, 150, 60),
         ],
     )?;
 
     let buckets = session::codex::usage_hours(&path)?;
     assert_eq!(
-        buckets,
-        BTreeMap::from([
-            ("2026-04-21T12".to_string(), usage(600, 30, 400, 100)),
-            ("2026-04-22T12".to_string(), usage(500, 30, 500, 50)),
+        total_view(&buckets),
+        hour_buckets(&[
+            ("2026-04-21T12", usage(600, 30, 400, 100)),
+            ("2026-04-22T12", usage(500, 30, 500, 50)),
         ])
+    );
+    // token_count 差分归属最近一次 turn_context 声明的模型。
+    assert_eq!(
+        buckets["2026-04-21T12"].models,
+        model_bucket(&[("gpt-5.3", usage(600, 30, 400, 100))])
+    );
+    assert_eq!(
+        buckets["2026-04-22T12"].models,
+        model_bucket(&[("gpt-5.3-codex", usage(500, 30, 500, 50))])
     );
 
     // 差分求和必须回到最后一条累计值的归一口径,与列表页 summary 一致。
-    let total = buckets.values().fold(usage(0, 0, 0, 0), |mut sum, value| {
-        sum.accumulate(value);
+    let total = buckets.values().fold(usage(0, 0, 0, 0), |mut sum, bucket| {
+        sum.accumulate(&bucket.usage);
         sum
     });
     assert_eq!(total, usage(1100, 60, 900, 150));
@@ -215,12 +274,14 @@ fn codex_usage_hours_clamps_to_zero_when_cumulative_resets() -> Result<()> {
 
     let buckets = session::codex::usage_hours(&path)?;
     assert_eq!(
-        buckets,
-        BTreeMap::from([
-            ("2026-04-21T12".to_string(), usage(1000, 100, 0, 0)),
-            ("2026-04-22T12".to_string(), usage(0, 0, 0, 0)),
+        total_view(&buckets),
+        hour_buckets(&[
+            ("2026-04-21T12", usage(1000, 100, 0, 0)),
+            ("2026-04-22T12", usage(0, 0, 0, 0)),
         ])
     );
+    // 无 turn_context 声明模型时,只有总量没有模型切片。
+    assert!(buckets.values().all(|bucket| bucket.models.is_empty()));
 
     Ok(())
 }
@@ -253,6 +314,7 @@ fn pi_usage_hours_buckets_assistant_and_subagent_runs() -> Result<()> {
                 "message": {
                     "role": "assistant",
                     "content": "answer",
+                    "model": "deepseek-flash",
                     "usage": { "input": 197, "output": 180, "cacheRead": 6656, "cacheWrite": 0 }
                 }
             }),
@@ -280,12 +342,18 @@ fn pi_usage_hours_buckets_assistant_and_subagent_runs() -> Result<()> {
 
     let buckets = session::pi::usage_hours(&path)?;
     assert_eq!(
-        buckets,
-        BTreeMap::from([
-            ("2026-09-04T12".to_string(), usage(197, 180, 6656, 0)),
-            ("2026-09-06T12".to_string(), usage(500, 50, 200, 10)),
+        total_view(&buckets),
+        hour_buckets(&[
+            ("2026-09-04T12", usage(197, 180, 6656, 0)),
+            ("2026-09-06T12", usage(500, 50, 200, 10)),
         ])
     );
+    // 主线 assistant 按 message.model 归属;subagent run 转录没有模型字段。
+    assert_eq!(
+        buckets["2026-09-04T12"].models,
+        model_bucket(&[("deepseek-flash", usage(197, 180, 6656, 0))])
+    );
+    assert!(buckets["2026-09-06T12"].models.is_empty());
 
     Ok(())
 }
@@ -317,7 +385,8 @@ fn grokbuild_usage_hours_reads_incremental_turns_by_ended_at() -> Result<()> {
                 "cachedReadTokens": 1300,
                 "cacheCreationTokens": 150
             },
-            // turns 是增量切片:sum(turns) == session 汇总。
+            // turns 是增量切片:sum(turns) == session 汇总;modelUsage 是该轮
+            // 按模型的切片,与轮总量同口径。
             "turns": [
                 {
                     "turnNumber": 1,
@@ -328,7 +397,27 @@ fn grokbuild_usage_hours_reads_incremental_turns_by_ended_at() -> Result<()> {
                     "cacheCreationTokens": 100,
                     "reasoningTokens": 30,
                     "modelCalls": 1,
-                    "turnCount": 1
+                    "turnCount": 1,
+                    "modelUsage": {
+                        "deepseek-flash": {
+                            "inputTokens": 1500,
+                            "outputTokens": 40,
+                            "cachedReadTokens": 600,
+                            "cacheCreationTokens": 100,
+                            "reasoningTokens": 20,
+                            "totalTokens": 2140,
+                            "modelCalls": 1
+                        },
+                        "glm-5.3": {
+                            "inputTokens": 500,
+                            "outputTokens": 20,
+                            "cachedReadTokens": 300,
+                            "cacheCreationTokens": 0,
+                            "reasoningTokens": 10,
+                            "totalTokens": 820,
+                            "modelCalls": 1
+                        }
+                    }
                 },
                 {
                     "turnNumber": 2,
@@ -349,12 +438,21 @@ fn grokbuild_usage_hours_reads_incremental_turns_by_ended_at() -> Result<()> {
     let buckets = session::grokbuild::usage_hours(&summary_path)?;
     // input 扣掉缓存命中,与 session 汇总口径一致。
     assert_eq!(
-        buckets,
-        BTreeMap::from([
-            ("2026-09-17T10".to_string(), usage(1100, 60, 900, 100)),
-            ("2026-09-18T12".to_string(), usage(600, 30, 400, 50)),
+        total_view(&buckets),
+        hour_buckets(&[
+            ("2026-09-17T10", usage(1100, 60, 900, 100)),
+            ("2026-09-18T12", usage(600, 30, 400, 50)),
         ])
     );
+    // 有 modelUsage 的轮按模型切片(切片同样扣缓存命中),没有的轮只进总量。
+    assert_eq!(
+        buckets["2026-09-17T10"].models,
+        model_bucket(&[
+            ("deepseek-flash", usage(900, 40, 600, 100)),
+            ("glm-5.3", usage(200, 20, 300, 0)),
+        ])
+    );
+    assert!(buckets["2026-09-18T12"].models.is_empty());
 
     // 旧版本 usage.json 没有 turns 数组:空桶而不是报错。
     fs::write(
@@ -425,6 +523,7 @@ fn opencode_usage_hours_groups_by_message_time() -> Result<()> {
         local_day_millis(2026, 4, 21),
         &json!({
             "time": { "created": local_day_millis(2026, 4, 21) },
+            "model": { "id": "MiniMax-M3", "providerID": "minimax" },
             "tokens": { "input": 1000, "output": 100, "reasoning": 50, "cache": { "read": 500, "write": 20 } }
         })
         .to_string(),
@@ -445,18 +544,24 @@ fn opencode_usage_hours_groups_by_message_time() -> Result<()> {
     // 夹具日期不是今天,今日会话数为 0。
     assert_eq!(hours.today_session_count, 0);
     assert_eq!(
-        hours.buckets,
-        BTreeMap::from([
-            ("2026-04-21T12".to_string(), usage(1000, 150, 500, 20)),
-            ("2026-04-23T12".to_string(), usage(200, 20, 0, 0)),
+        total_view(&hours.buckets),
+        hour_buckets(&[
+            ("2026-04-21T12", usage(1000, 150, 500, 20)),
+            ("2026-04-23T12", usage(200, 20, 0, 0)),
         ])
     );
+    // 模型切片取 data.model.id;没有 model 节点的消息只进总量。
+    assert_eq!(
+        hours.buckets["2026-04-21T12"].models,
+        model_bucket(&[("MiniMax-M3", usage(1000, 150, 500, 20))])
+    );
+    assert!(hours.buckets["2026-04-23T12"].models.is_empty());
 
     Ok(())
 }
 
 #[test]
-fn zcode_usage_hours_groups_by_turn_started_at() -> Result<()> {
+fn zcode_usage_hours_groups_by_model_call_started_at() -> Result<()> {
     let home = TempHome::new()?;
     let _guard = TestEnvGuard::set_home(&home.path);
 
@@ -465,10 +570,12 @@ fn zcode_usage_hours_groups_by_turn_started_at() -> Result<()> {
     let connection = Connection::open(&db_path)?;
     connection.execute_batch(
         "
-        CREATE TABLE turn_usage (
+        CREATE TABLE model_usage (
+            id TEXT PRIMARY KEY,
             session_id TEXT NOT NULL,
-            turn_id TEXT NOT NULL,
             started_at INTEGER NOT NULL,
+            model_id TEXT NOT NULL,
+            status TEXT NOT NULL,
             input_tokens INTEGER NOT NULL DEFAULT 0,
             output_tokens INTEGER NOT NULL DEFAULT 0,
             reasoning_tokens INTEGER NOT NULL DEFAULT 0,
@@ -478,41 +585,75 @@ fn zcode_usage_hours_groups_by_turn_started_at() -> Result<()> {
         ",
     )?;
 
-    let insert = |turn_id: &str,
+    let insert = |id: &str,
                   started_at: i64,
+                  model_id: &str,
+                  status: &str,
                   input: i64,
                   output: i64,
                   reasoning: i64,
                   creation: i64,
                   cache_read: i64| {
         connection.execute(
-            "INSERT INTO turn_usage (session_id, turn_id, started_at, input_tokens, output_tokens, reasoning_tokens, cache_creation_input_tokens, cache_read_input_tokens) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-            params!["ses-days", turn_id, started_at, input, output, reasoning, creation, cache_read],
+            "INSERT INTO model_usage (id, session_id, started_at, model_id, status, input_tokens, output_tokens, reasoning_tokens, cache_creation_input_tokens, cache_read_input_tokens) VALUES (?1, 'ses-days', ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            params![id, started_at, model_id, status, input, output, reasoning, creation, cache_read],
         )
     };
 
-    // input_tokens 是全口径,拆掉 cache_read;output 并入 reasoning。
+    // input_tokens 是全口径,拆掉 cache_read;output 并入 reasoning;error 调用
+    // 的部分用量不计。
     insert(
-        "turn-1",
+        "call-1",
         local_day_millis(2026, 4, 21),
+        "GLM-5.3",
+        "completed",
         1000,
         30,
         10,
         100,
         400,
     )?;
-    insert("turn-2", local_day_millis(2026, 4, 23), 200, 5, 0, 0, 0)?;
+    insert(
+        "call-2",
+        local_day_millis(2026, 4, 23),
+        "GLM-5.3-Flash",
+        "completed",
+        200,
+        5,
+        0,
+        0,
+        0,
+    )?;
+    insert(
+        "call-error",
+        local_day_millis(2026, 4, 23),
+        "GLM-5.3",
+        "error",
+        999,
+        99,
+        0,
+        0,
+        0,
+    )?;
     drop(connection);
 
     let hours = session::zcode::usage_hours()?.expect("db exists in fixture home");
     assert_eq!(hours.session_count, 1);
     assert_eq!(hours.today_session_count, 0);
     assert_eq!(
-        hours.buckets,
-        BTreeMap::from([
-            ("2026-04-21T12".to_string(), usage(600, 40, 400, 100)),
-            ("2026-04-23T12".to_string(), usage(200, 5, 0, 0)),
+        total_view(&hours.buckets),
+        hour_buckets(&[
+            ("2026-04-21T12", usage(600, 40, 400, 100)),
+            ("2026-04-23T12", usage(200, 5, 0, 0)),
         ])
+    );
+    assert_eq!(
+        hours.buckets["2026-04-21T12"].models,
+        model_bucket(&[("GLM-5.3", usage(600, 40, 400, 100))])
+    );
+    assert_eq!(
+        hours.buckets["2026-04-23T12"].models,
+        model_bucket(&[("GLM-5.3-Flash", usage(200, 5, 0, 0))])
     );
 
     Ok(())

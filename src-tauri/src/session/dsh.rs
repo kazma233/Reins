@@ -172,6 +172,9 @@ fn build_timeline(header: DshHeader, events: &[Value]) -> DshTranscript {
     let mut usage_total = None;
     let mut usage_buckets = UsageHourBuckets::new();
     let mut catalog_children = Vec::new();
+    // model/selection 声明后续 assistant 消息使用的模型,selection 变更后
+    // 新消息归属新模型。
+    let mut current_model: Option<String> = None;
 
     for (index, value) in events.iter().enumerate() {
         let kind = super::json_type(value).unwrap_or("unknown");
@@ -182,6 +185,9 @@ fn build_timeline(header: DshHeader, events: &[Value]) -> DshTranscript {
             .unwrap_or(last_event_time);
         last_event_time = last_event_time.max(time);
         let data = value.get("data").cloned().unwrap_or(Value::Null);
+        if kind == "model/selection" {
+            current_model = super::json_string(&data, &["model"]);
+        }
         let item_id = |prefix: &str| {
             format!(
                 "dsh-{session_id}-{prefix}-{}",
@@ -233,7 +239,12 @@ fn build_timeline(header: DshHeader, events: &[Value]) -> DshTranscript {
             "assistant/message" => {
                 if let Some(usage) = data.get("usage").map(parse_usage) {
                     super::merge_token_usage(&mut usage_total, usage);
-                    super::merge_usage_bucket(&mut usage_buckets, super::hour_key(time), usage);
+                    super::merge_usage_event(
+                        &mut usage_buckets,
+                        super::hour_key(time),
+                        current_model.as_deref(),
+                        usage,
+                    );
                 }
                 let blocks = assistant_blocks(&data);
                 if !blocks.is_empty() {

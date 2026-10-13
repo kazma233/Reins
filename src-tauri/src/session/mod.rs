@@ -30,7 +30,7 @@ use self::catalog::*;
 use self::jsonl::*;
 use self::model::*;
 use self::text::*;
-use self::usage_stats::{hour_key, merge_usage_bucket};
+use self::usage_stats::{hour_key, merge_usage_event};
 
 // Sync:来源注册表的 spec 会跨线程共享(按来源并行探测/统计),读取器自身
 // 必须无内部可变性,并发安全靠各实现内部的 static Mutex 保证。

@@ -120,6 +120,31 @@ pub(crate) struct UsageSourceStats {
     pub(crate) session_count: usize,
     // 今日产生消耗的会话数,今日窗口的会话指标用它而不是全周期值。
     pub(crate) today_session_count: usize,
+    // 按模型的日切片:只有取得到模型信息的消耗事件进入,取不到的来源为
+    // 空数组,模型筛选对其不可见,也不与 days 总量强行对齐。
+    pub(crate) model_days: Vec<UsageModelDayPoint>,
+    // 按模型的今日小时切片,口径同 model_days。
+    pub(crate) model_today_hours: Vec<UsageModelHourPoint>,
+}
+
+// 模型维度的日聚合点:同一模型跨小时合并成天。
+#[derive(Clone, Debug, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../src/features/usage/generated/")]
+pub(crate) struct UsageModelDayPoint {
+    pub(crate) model: String,
+    pub(crate) day: String,
+    pub(crate) usage: SessionTokenUsage,
+}
+
+// 模型维度的今日小时点。
+#[derive(Clone, Debug, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../src/features/usage/generated/")]
+pub(crate) struct UsageModelHourPoint {
+    pub(crate) model: String,
+    pub(crate) hour: u8,
+    pub(crate) usage: SessionTokenUsage,
 }
 
 // 今日窗口的小时点;hour 是本地时区 0..23。
@@ -140,9 +165,40 @@ pub(crate) struct UsageStats {
     pub(crate) sources: Vec<UsageSourceStats>,
 }
 
+// 单个小时桶:usage 是该小时全量;models 是按模型的切片,取不到模型信息
+// 的事件只进总量。持久缓存直接序列化整个结构,字段变更须 bump 缓存版本。
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
+pub(crate) struct UsageHourBucket {
+    pub(crate) usage: SessionTokenUsage,
+    #[serde(default)]
+    pub(crate) models: std::collections::BTreeMap<String, SessionTokenUsage>,
+}
+
+impl UsageHourBucket {
+    pub(crate) fn accumulate(&mut self, next: &Self) {
+        self.usage.accumulate(&next.usage);
+        for (model, usage) in &next.models {
+            self.models
+                .entry(model.clone())
+                .or_default()
+                .accumulate(usage);
+        }
+    }
+
+    pub(crate) fn accumulate_event(&mut self, model: Option<&str>, usage: &SessionTokenUsage) {
+        self.usage.accumulate(usage);
+        if let Some(model) = model {
+            self.models
+                .entry(model.to_string())
+                .or_default()
+                .accumulate(usage);
+        }
+    }
+}
+
 // 单个转录文件(或 SQL 来源)的小时桶中间形态;day 序列与 today_hours 都由
 // 它聚合而来。key 形如 "YYYY-MM-DDTHH"(本地时区),BTreeMap 保证升序。
-pub(crate) type UsageHourBuckets = std::collections::BTreeMap<String, SessionTokenUsage>;
+pub(crate) type UsageHourBuckets = std::collections::BTreeMap<String, UsageHourBucket>;
 
 #[derive(Clone, Debug, Deserialize, Serialize, TS)]
 #[serde(rename_all = "camelCase")]

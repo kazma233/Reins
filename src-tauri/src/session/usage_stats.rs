@@ -13,7 +13,7 @@ use anyhow::Result;
 
 use super::model::{
     SessionTokenUsage, SourceApp, UsageDayPoint, UsageHourBuckets, UsageHourPoint,
-    UsageSourceStats, UsageStats,
+    UsageModelDayPoint, UsageModelHourPoint, UsageSourceStats, UsageStats,
 };
 
 /// 来源注册表里一个来源的用量采集方式:三种接入姿势,归桶机器都在本模块,
@@ -202,9 +202,12 @@ pub(crate) fn full_scope_usage(columns: UsageColumns) -> SessionTokenUsage {
 }
 
 // SQL 来源行级用量归小时桶的公共尾部:两级会话数与桶合并。行由来源 SQL
-// 装配为 (session_id, 毫秒时间戳, 归一后用量)。
+// 装配为 (session_id, 毫秒时间戳, 模型名, 归一后用量);模型列取不到时为
+// None,只进总量。
 pub(crate) fn hours_from_usage_rows(
-    rows: impl Iterator<Item = rusqlite::Result<(String, i64, SessionTokenUsage)>>,
+    rows: impl Iterator<
+        Item = rusqlite::Result<(String, i64, Option<String>, SessionTokenUsage)>,
+    >,
 ) -> Result<SqlUsageHours> {
     let today = today_prefix();
     let mut buckets = UsageHourBuckets::new();
@@ -212,7 +215,7 @@ pub(crate) fn hours_from_usage_rows(
     let mut today_sessions = std::collections::HashSet::new();
 
     for row in rows {
-        let (session_id, timestamp, usage) = row?;
+        let (session_id, timestamp, model, usage) = row?;
         let hour_key = hour_key(timestamp);
         if let Some(key) = &hour_key {
             if today_hour(key, &today).is_some() {
@@ -220,7 +223,7 @@ pub(crate) fn hours_from_usage_rows(
             }
         }
         sessions.insert(session_id);
-        merge_usage_bucket(&mut buckets, hour_key, usage);
+        merge_usage_event(&mut buckets, hour_key, model.as_deref(), usage);
     }
 
     Ok(SqlUsageHours {
@@ -259,18 +262,20 @@ fn source_stats(
         today_hours: today_hour_points(&buckets, &today),
         session_count,
         today_session_count,
+        model_days: model_day_points(&buckets),
+        model_today_hours: model_today_hour_points(&buckets, &today),
     }
 }
 
 // 小时桶按天前缀合并成日序列。
 fn day_points(buckets: &UsageHourBuckets) -> Vec<UsageDayPoint> {
     let mut days: BTreeMap<&str, SessionTokenUsage> = BTreeMap::new();
-    for (hour_key, usage) in buckets {
+    for (hour_key, bucket) in buckets {
         let day = hour_key
             .split_once('T')
             .map(|(day, _)| day)
             .unwrap_or(hour_key);
-        days.entry(day).or_default().accumulate(usage);
+        days.entry(day).or_default().accumulate(&bucket.usage);
     }
 
     days.into_iter()
@@ -284,11 +289,58 @@ fn day_points(buckets: &UsageHourBuckets) -> Vec<UsageDayPoint> {
 fn today_hour_points(buckets: &UsageHourBuckets, today: &str) -> Vec<UsageHourPoint> {
     buckets
         .iter()
-        .filter_map(|(hour_key, usage)| {
+        .filter_map(|(hour_key, bucket)| {
             today_hour(hour_key, today).map(|hour| UsageHourPoint {
                 hour,
-                usage: *usage,
+                usage: bucket.usage,
             })
+        })
+        .collect()
+}
+
+// 模型切片的日序列:同一模型跨小时合并成天,按 (model, day) 排序,前端按
+// 模型分组消费。
+fn model_day_points(buckets: &UsageHourBuckets) -> Vec<UsageModelDayPoint> {
+    let mut days: BTreeMap<(String, String), SessionTokenUsage> = BTreeMap::new();
+    for (hour_key, bucket) in buckets {
+        let Some((day, _)) = hour_key.split_once('T') else {
+            continue;
+        };
+        for (model, usage) in &bucket.models {
+            days.entry((model.clone(), day.to_string()))
+                .or_default()
+                .accumulate(usage);
+        }
+    }
+
+    days.into_iter()
+        .map(|((model, day), usage)| UsageModelDayPoint { model, day, usage })
+        .collect()
+}
+
+fn model_today_hour_points(
+    buckets: &UsageHourBuckets,
+    today: &str,
+) -> Vec<UsageModelHourPoint> {
+    let mut hours: BTreeMap<(String, u8), SessionTokenUsage> = BTreeMap::new();
+    for (hour_key, bucket) in buckets {
+        let Some(hour) = today_hour(hour_key, today) else {
+            continue;
+        };
+        for (model, usage) in &bucket.models {
+            hours
+                .entry((model.clone(), hour))
+                .or_default()
+                .accumulate(usage);
+        }
+    }
+
+    hours
+        .into_iter()
+        .map(|((model, hour), usage)| UsageModelHourPoint {
+            model,
+            hour,
+            usage,
         })
         .collect()
 }
@@ -304,21 +356,29 @@ fn file_has_today(buckets: &UsageHourBuckets, today: &str) -> bool {
 }
 
 fn merge_buckets(total: &mut UsageHourBuckets, next: &UsageHourBuckets) {
-    for (hour_key, usage) in next {
-        total.entry(hour_key.clone()).or_default().accumulate(usage);
+    for (hour_key, bucket) in next {
+        total
+            .entry(hour_key.clone())
+            .or_default()
+            .accumulate(bucket);
     }
 }
 
-// 消耗事件归桶入口:时间戳缺失的记录不进曲线(总量仍由列表 summary 保证)。
-pub(crate) fn merge_usage_bucket(
+// 消耗事件归桶入口:时间戳缺失的记录不进曲线(总量仍由列表 summary 保证);
+// model 为 None 表示该事件取不到模型信息,只进总量。
+pub(crate) fn merge_usage_event(
     buckets: &mut UsageHourBuckets,
     hour_key: Option<String>,
+    model: Option<&str>,
     usage: SessionTokenUsage,
 ) {
     let Some(hour_key) = hour_key else {
         return;
     };
-    buckets.entry(hour_key).or_default().accumulate(&usage);
+    buckets
+        .entry(hour_key)
+        .or_default()
+        .accumulate_event(model, &usage);
 }
 
 // 天/小时边界取本地时区,与用户在 CLI 工具里看到的活跃日期一致。

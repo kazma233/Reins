@@ -4,20 +4,25 @@ import {
   buildDayAxis,
   buildHourAxis,
   computeMetrics,
+  modelFilteredSources,
   niceCeil,
   shiftDay,
   sourceSeries,
   todaySources,
+  windowModelSummaries,
   windowSourceSummaries,
   windowSources
 } from "./model";
 
 type DayFixture = Array<[string, [number, number, number, number]]>;
+type ModelDayFixture = Array<[string, string, [number, number, number, number]]>;
 
 function rawSourceStats(
   sourceApp: SourceApp,
   days: DayFixture,
-  todayHours: Array<[number, [number, number, number, number]]> = []
+  todayHours: Array<[number, [number, number, number, number]]> = [],
+  modelDays: ModelDayFixture = [],
+  modelTodayHours: Array<[string, number, [number, number, number, number]]> = []
 ): UsageSourceStats {
   const point = ([input, output, cacheRead, cacheWrite]: [number, number, number, number]) => ({
     inputTokens: input,
@@ -30,7 +35,17 @@ function rawSourceStats(
     sessionCount: days.length + todayHours.length,
     todaySessionCount: todayHours.length,
     days: days.map(([day, usage]) => ({ day, usage: point(usage) })),
-    todayHours: todayHours.map(([hour, usage]) => ({ hour, usage: point(usage) }))
+    todayHours: todayHours.map(([hour, usage]) => ({ hour, usage: point(usage) })),
+    modelDays: modelDays.map(([model, day, usage]) => ({
+      model,
+      day,
+      usage: point(usage)
+    })),
+    modelTodayHours: modelTodayHours.map(([model, hour, usage]) => ({
+      model,
+      hour,
+      usage: point(usage)
+    }))
   };
 }
 
@@ -215,5 +230,93 @@ describe("niceCeil", () => {
     expect(niceCeil(7)).toBe(10);
     expect(niceCeil(1_400_000)).toBe(2_000_000);
     expect(niceCeil(600_000)).toBe(1_000_000);
+  });
+});
+
+describe("windowModelSummaries", () => {
+  it("跨来源按模型合并,占比分母是切片总和而非来源总量", () => {
+    const sources = [
+      rawSourceStats(
+        "codex",
+        [["2026-09-01", [100, 10, 0, 0]]],
+        [],
+        [
+          ["gpt-5.3", "2026-09-01", [60, 6, 0, 0]],
+          ["gpt-5.3-codex", "2026-09-01", [40, 4, 0, 0]]
+        ]
+      ),
+      rawSourceStats(
+        "claude_code",
+        [["2026-09-01", [900, 0, 0, 0]]],
+        [],
+        [["gpt-5.3", "2026-09-01", [100, 0, 0, 0]]]
+      )
+    ];
+    const summaries = windowModelSummaries(sources, ["2026-09-01"], false);
+    expect(summaries).toEqual([
+      // gpt-5.3 = codex 66 + claude 100 = 166;gpt-5.3-codex = 44。
+      { model: "gpt-5.3", tokens: 166, share: 166 / 210 },
+      { model: "gpt-5.3-codex", tokens: 44, share: 44 / 210 }
+    ]);
+  });
+
+  it("窗口外的模型切片不计入", () => {
+    const sources = [
+      rawSourceStats("codex", [], [], [
+        ["glm-5.3", "2026-08-01", [10, 0, 0, 0]]
+      ])
+    ];
+    expect(windowModelSummaries(sources, ["2026-09-01"], false)).toEqual([]);
+  });
+});
+
+describe("modelFilteredSources", () => {
+  it("只保留选中模型的切片,其余模型的消耗不计入", () => {
+    const sources = [
+      rawSourceStats(
+        "codex",
+        [["2026-09-01", [100, 10, 0, 0]], ["2026-09-02", [50, 5, 0, 0]]],
+        [],
+        [
+          ["gpt-5.3", "2026-09-01", [60, 6, 0, 0]],
+          ["gpt-5.3-codex", "2026-09-01", [40, 4, 0, 0]],
+          ["gpt-5.3", "2026-09-02", [50, 5, 0, 0]]
+        ]
+      )
+    ];
+    const filtered = modelFilteredSources(sources, ["2026-09-01", "2026-09-02"], "gpt-5.3", false);
+    expect(filtered[0].points).toEqual([
+      { bucket: "2026-09-01", usage: { inputTokens: 60, outputTokens: 6, cacheReadTokens: 0, cacheWriteTokens: 0 } },
+      { bucket: "2026-09-02", usage: { inputTokens: 50, outputTokens: 5, cacheReadTokens: 0, cacheWriteTokens: 0 } }
+    ]);
+    // 会话数保留来源级口径,不随模型筛选变化。
+    expect(filtered[0].sessionCount).toBe(sources[0].sessionCount);
+  });
+
+  it("今日模式按今日小时切片", () => {
+    const sources = [
+      rawSourceStats(
+        "codex",
+        [],
+        [[9, [30, 3, 0, 0]]],
+        [],
+        [
+          ["glm-5.3", 9, [20, 2, 0, 0]],
+          ["glm-5.3-flash", 9, [10, 1, 0, 0]]
+        ]
+      )
+    ];
+    const filtered = modelFilteredSources(sources, buildHourAxis(), "glm-5.3", true);
+    expect(filtered[0].points).toEqual([
+      { bucket: "09", usage: { inputTokens: 20, outputTokens: 2, cacheReadTokens: 0, cacheWriteTokens: 0 } }
+    ]);
+  });
+
+  it("无模型切片的来源在筛选激活时序列为空", () => {
+    const sources = [
+      rawSourceStats("dsh", [["2026-09-01", [100, 0, 0, 0]]], [], [])
+    ];
+    const filtered = modelFilteredSources(sources, ["2026-09-01"], "glm-5.3", false);
+    expect(filtered[0].points).toEqual([]);
   });
 });
