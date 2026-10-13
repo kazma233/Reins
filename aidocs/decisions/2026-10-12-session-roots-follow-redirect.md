@@ -37,8 +37,10 @@ codex / claude / dsh / grok 四家的会话根 `root()` 统一走新增的
   `$CODEX_HOME/sessions/2026/10/12/` 创建了完整年月日树——路径选择的
   直接行为证据,转录文件因认证未落,标注于此。
 - **dsh 侧 unverified**:本机无 dsh CLI,`DSH_HOME` 是否搬 `sessions`
-  未实测;实现按同型处理(与 workspace 侧的 DSH_HOME 语义同一份),
-  测试只断言根解析。
+- **dsh 侧已实测**(2026-10-13 补记,当日 CLI 装机):0.2.0-rc.2,
+  `DSH_HOME=<tmp>` 下 boot profile,数秒内 `sessions/` 即创建在变量
+  目录下——会话存储整体随迁,与 workspace 侧的 DSH_HOME 语义一致。
+  此前的 unverified 闭环。
 - **claude 侧无需重测**:C10 ADR 已实测(2.1.285,`CLAUDE_CONFIG_DIR`
   下 settings.json / projects / sessions 整体搬移)。
 - 重定向值不展开 `~`:与 workspace / providers 侧同口径(域间一致性
@@ -49,7 +51,7 @@ codex / claude / dsh / grok 四家的会话根 `root()` 统一走新增的
 - 提交:`ec764a9`。
 - 测试:三个用例先在旧实现上失败(root 不认重定向、列表为空)——
   codex / claude 按完整读取器列表验证(种子在重定向根下,旧实现列表
-  为空),dsh 无本地 CLI 按根解析验证;全量 cargo test 454 passed
-  (基线 451 + 3),clippy 保持基线 73。
+  为空),dsh 按根解析验证(官方 sessions 随迁行为另有上述黑盒实测);
+  全量 cargo test 454 passed(基线 451 + 3),clippy 保持基线 73。
 - 既有测试无回归:全部 session 测试在 `TestEnvGuard` 下运行(重定向
   变量被清空),`resolve` 落 HOME 兜底,行为与旧路径拼写一致。

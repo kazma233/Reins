@@ -327,8 +327,9 @@ fn dsh_root_resolves_dsh_home_redirect() -> Result<()> {
     let _guard = crate::test_support::TestEnvGuard::set_home(&home);
     unsafe { env::set_var("DSH_HOME", &redirect) };
 
-    // 本机无 dsh CLI 可落真会话,断言根解析走重定向即实现口径(变量值即
-    // 整个根,与 workspace/providers 的 DSH_HOME 语义同一份)。
+    // 重定向变量即整个根,与 workspace/providers 的 DSH_HOME 语义同一份。
+    // dsh 侧官方行为已实测(0.2.0-rc.2):DSH_HOME 重定向时 boot profile
+    // 数秒内把 sessions/ 建在变量目录下,会话存储整体随迁。
     assert_eq!(crate::session::dsh::root()?, redirect);
     assert_eq!(
         crate::session::dsh::sessions_root()?,
