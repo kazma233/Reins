@@ -110,6 +110,20 @@ const levelOptions = computed<ReasoningLevel[]>(() => {
   );
 });
 
+// Codex 桌面应用的模型控件只展示其设置里「可用推理强度」勾选过的档位
+// （enabled-reasoning-efforts）；未勾选的档位在 Codex 界面里看不到，
+// CLI 与其余工具无此过滤，只在用户确实要写档位时提示。
+const codexEffortFilterHint = computed(() => {
+  if (
+    props.app !== "codex" ||
+    levelOptions.value.length === 0 ||
+    defaultReasoningLevel.value === null
+  ) {
+    return null;
+  }
+  return "Codex 桌面应用的模型控件只展示其设置中「可用推理强度」勾选过的档位；在 Codex 里看不到刚写入的档位时，请到应用设置中勾选。";
+});
+
 // 档位展示跟随当前提供商：写入值与档位同名时只显示档位，存在映射
 // （如 Grok max→xhigh、Pi off→off）时附加实际写入值。
 function levelOptionLabel(level: ReasoningLevel): string {
@@ -284,10 +298,17 @@ function renderDiff(lines: DiffLine[]): string {
             ]"
             :disabled="loading || levelOptions.length === 0"
           />
-          <small class="providers-field__hint">
-            {{ levelOptions.length === 0 ? "当前选中的模型在该工具下没有可用的思考等级，将不写入。" : "取模型等级与工具支持集的交集；标注「写入」的档位按该工具的实际取值落盘。" }}
-          </small>
         </div>
+      </div>
+
+      <!-- 档位相关说明集中在下方的提示块，不依附选择器字段。 -->
+      <div class="providers-apply-note">
+        <p class="providers-section-hint">
+          {{ levelOptions.length === 0 ? "当前选中的模型在该工具下没有可用的思考等级，将不写入。" : "取模型等级与工具支持集的交集；标注「写入」的档位按该工具的实际取值落盘。" }}
+        </p>
+        <p v-if="codexEffortFilterHint" class="providers-section-hint">
+          {{ codexEffortFilterHint }}
+        </p>
       </div>
 
       <AppLoadError
