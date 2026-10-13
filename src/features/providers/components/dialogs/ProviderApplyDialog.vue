@@ -86,11 +86,13 @@ const unwrittenFieldsText = computed(() =>
 );
 
 // Codex 的模型目录由已运行的进程缓存（0.159 起为托管守护进程），apply
-// 后不会自动生效；其余工具的新进程直接读到新配置，无需提示。
-const codexRestartHint =
+// 后不会自动生效；其余工具的新进程直接读到新配置，无需提示。弹窗组件
+// 在切换目标工具时被复用（父层 v-if 只判空不卸载），必须响应式求值。
+const codexRestartHint = computed(() =>
   props.app === "codex"
     ? "已运行的 Codex 不会自动读取本次变更：请完全退出 Codex 后重开；仍未生效时执行 codex app-server daemon restart（Codex 0.159 起模型目录由后台守护进程缓存）。"
-    : null;
+    : null
+);
 
 const blockers = computed(() =>
   appState.value ? applyBlockers(appState.value, props.provider, selectedModelIds.value) : []
