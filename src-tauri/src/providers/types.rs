@@ -97,15 +97,17 @@ pub(crate) enum ProviderAppId {
     Pi,
     Grokbuild,
     Dsh,
+    Zcode,
 }
 
-pub(crate) const PROVIDER_APPS: [ProviderAppId; 6] = [
+pub(crate) const PROVIDER_APPS: [ProviderAppId; 7] = [
     ProviderAppId::Codex,
     ProviderAppId::Claude,
     ProviderAppId::Opencode,
     ProviderAppId::Pi,
     ProviderAppId::Grokbuild,
     ProviderAppId::Dsh,
+    ProviderAppId::Zcode,
 ];
 
 impl ProviderAppId {

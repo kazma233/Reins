@@ -147,6 +147,38 @@ pub(crate) static CODEX_PROTOCOL: ProtocolDialect = ProtocolDialect {
     parse_aliases: &[],
 };
 
+// ZCode provider_config.json 的 api.type 拼写（ZCode.app bundle 的 zod
+// schema 实证，2026-10-13）：三种协议全支持，kebab-case。
+pub(crate) static ZCODE_PROTOCOL: ProtocolDialect = ProtocolDialect {
+    spells: &[
+        (ProviderProtocol::OpenaiResponses, "openai-responses"),
+        (
+            ProviderProtocol::OpenaiChatCompletions,
+            "openai-chat-completions",
+        ),
+        (ProviderProtocol::AnthropicMessages, "anthropic-messages"),
+    ],
+    parse_aliases: &[],
+};
+
+// ZCode 的 reasoningLevel.values 档位拼写（开源仓库 packages/shared/src/
+// model-config.ts + 内置规则实证，2026-10-13）：关闭档是 "disabled"，其余
+// 档位名原样透传成各家 effort（按 API 类型的兜底 map 负责拼协议字段）。
+// 与恒等方言的差别只在 off：写 "none" 在 anthropic-messages / openai-responses
+// 兜底里会被当成普通 effort 透传（只有 chat-completions 把它当关闭）。
+pub(crate) static ZCODE_REASONING: ReasoningDialect = ReasoningDialect {
+    spells: &[
+        (ReasoningLevel::Off, "disabled"),
+        (ReasoningLevel::Minimal, "minimal"),
+        (ReasoningLevel::Low, "low"),
+        (ReasoningLevel::Medium, "medium"),
+        (ReasoningLevel::High, "high"),
+        (ReasoningLevel::Xhigh, "xhigh"),
+        (ReasoningLevel::Max, "max"),
+    ],
+    lossy: &[],
+};
+
 // OpenCode v2 按协议选择原生运行时包写入：OpenAI 请求格式（chat
 // completions）走 openai-compatible，Responses 协议走 openai/responses
 // （compatible/responses 有包解析缺陷，不采用），Anthropic 协议走

@@ -380,6 +380,7 @@ fn snapshot_provider_app_labels() {
             (ProviderAppId::Pi, "Pi"),
             (ProviderAppId::Grokbuild, "Grok Build"),
             (ProviderAppId::Dsh, "DeepSeek Harness"),
+            (ProviderAppId::Zcode, "ZCode"),
         ]
     );
 }
@@ -425,6 +426,10 @@ fn snapshot_app_config_paths() {
                 display(&home.join(".dsh/profiles/desktop/cordis.patch.yml")),
                 display(&home.join(".dsh/.credentials.yaml")),
             ],
+        ),
+        (
+            ProviderAppId::Zcode,
+            vec![display(&home.join(".zcode/v2/provider_config.json"))],
         ),
     ];
 

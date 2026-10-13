@@ -202,8 +202,7 @@ pub(crate) static AGENTS: &[AgentSpec] = &[
         label: "ZCode",
         source_app: Some(SourceApp::Zcode),
         target_id: Some("zcode"),
-        // zcode 只有会话来源与 workspace 分发，不在 providers 域纳管。
-        provider_app: None,
+        provider_app: Some(ProviderAppId::Zcode),
         mcp: McpLayout {
             prefix: "mcp.servers",
             config_type: McpConfigType::Common,

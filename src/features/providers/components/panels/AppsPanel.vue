@@ -153,7 +153,7 @@ function confirmRemove() {
       <div>
         <h3 class="providers-section-title">Agent</h3>
         <p class="providers-section-hint">
-          反读五个工具的全局配置文件；`reins-` 前缀条目按 providers.yaml 归类为「已应用 / 配置有偏差」，其余按外部配置展示，可按条目删除。已应用的条目可重新打开应用弹窗，用于切换默认模型。
+          反读各工具的全局配置文件；`reins-` 前缀条目按 providers.yaml 归类为「已应用 / 配置有偏差」，其余按外部配置展示，可按条目删除。已应用的条目可重新打开应用弹窗，用于切换默认模型。
         </p>
       </div>
     </div>

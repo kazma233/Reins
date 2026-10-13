@@ -24,6 +24,7 @@ pub(crate) mod dsh;
 pub(crate) mod grokbuild;
 pub(crate) mod opencode;
 pub(crate) mod pi;
+pub(crate) mod zcode;
 
 // Reins 在各工具配置中的内部注册键前缀；反显按该前缀识别 Reins 条目。
 pub(crate) const REINS_PREFIX: &str = "reins-";
@@ -167,6 +168,7 @@ pub(crate) fn adapter_for(app: ProviderAppId) -> &'static dyn AppAdapter {
         ProviderAppId::Pi => &pi::PiAdapter,
         ProviderAppId::Grokbuild => &grokbuild::GrokbuildAdapter,
         ProviderAppId::Dsh => &dsh::DshAdapter,
+        ProviderAppId::Zcode => &zcode::ZcodeAdapter,
     }
 }
 

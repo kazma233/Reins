@@ -9,6 +9,7 @@ use serde_json::{Value as JsonValue, json};
 use toml::Value as TomlValue;
 
 use crate::providers::apps::codex::CATALOG_FILE_NAME;
+use crate::providers::apps::zcode::provider_config_path;
 use crate::providers::apps::{
     MASKED_KEY, claude_settings_path, codex_config_path, codex_home_dir, grok_config_path,
     opencode_candidate_paths, pi_models_path, pi_settings_path, registration_key,
@@ -1569,8 +1570,8 @@ fn grok_apply_omits_absent_model_metadata() -> Result<()> {
 }
 
 // 应用弹窗的「不写入的模型元数据」清单来自能力表：各工具都写窗口，Claude
-// 另写最大输出，OpenCode 与 Pi 四类全覆盖，Grok 缺最大输出与图像输入，
-// dsh 缺"推理能力"布尔（只能经思考等级字典或显式 false 间接表达）。
+// 另写最大输出，OpenCode 与 Pi 与 ZCode 四类全覆盖，Grok 缺最大输出与图像
+// 输入，dsh 缺"推理能力"布尔（只能经思考等级字典或显式 false 间接表达）。
 #[test]
 fn app_states_declare_unwritten_model_fields() -> Result<()> {
     let isolated = Isolated::new()?;
@@ -1596,6 +1597,8 @@ fn app_states_declare_unwritten_model_fields() -> Result<()> {
     assert_eq!(fields(ProviderAppId::Claude), vec!["图像输入", "推理能力"]);
     assert!(fields(ProviderAppId::Opencode).is_empty());
     assert!(fields(ProviderAppId::Pi).is_empty());
+    // ZCode 四类都有落点：思考档位写 optionSpecs.reasoningLevel.values。
+    assert!(fields(ProviderAppId::Zcode).is_empty());
     // dsh 的模型条目（PiAiModelProfile）有 contextWindow/maxTokens/input/
     // reasoningEfforts 落点；"推理能力"布尔本身没有独立字段。
     assert_eq!(fields(ProviderAppId::Dsh), vec!["推理能力"]);
@@ -2781,5 +2784,504 @@ fn claude_remove_external_unsupported() -> Result<()> {
             .remove_external(ProviderAppId::Claude, "env")
             .is_err()
     );
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// ZCode
+// ---------------------------------------------------------------------------
+
+// 预置一份贴近真实形态的用户自配文件：一条官方模板条目 + 一条自定义条目。
+fn zcode_seed_user_config(path: &Path) -> Result<()> {
+    fs::create_dir_all(path.parent().unwrap())?;
+    fs::write(
+        path,
+        json!({
+            "schemaVersion": 1,
+            "config": {
+                "providerOrder": ["minimax", "new-provider"],
+                "providerConfigRules": {
+                    "providerRules": [
+                        {
+                            "providerId": "minimax",
+                            "templateId": "minimax",
+                            "providerName": "MiniMax",
+                            "config": {
+                                "group": "standard-personal",
+                                "access": {"type": "api-key", "apiKey": "sk-user"},
+                                "personalModelIds": [],
+                                "modelOrder": ["MiniMax-M2.7"]
+                            }
+                        },
+                        {
+                            "providerId": "new-provider",
+                            "providerName": "fanggeek",
+                            "config": {
+                                "group": "standard-personal",
+                                "access": {"type": "api-key", "apiKey": "sk-user"},
+                                "api": {
+                                    "type": "anthropic-messages",
+                                    "baseUrl": "http://192.168.2.102:3000"
+                                },
+                                "personalModelIds": ["deepseek-flash"],
+                                "modelOrder": ["deepseek-flash"]
+                            }
+                        }
+                    ]
+                },
+                "modelConfigRules": {
+                    "providerModelRules": [
+                        {
+                            "providerId": "new-provider",
+                            "modelId": "deepseek-flash",
+                            "config": {"enabled": true}
+                        }
+                    ],
+                    "manualProviderModelRules": []
+                }
+            }
+        })
+        .to_string(),
+    )?;
+    Ok(())
+}
+
+fn zcode_rule<'a>(root: &'a JsonValue, provider_id: &str) -> Option<&'a JsonValue> {
+    root["config"]["providerConfigRules"]["providerRules"]
+        .as_array()?
+        .iter()
+        .find(|rule| rule["providerId"].as_str() == Some(provider_id))
+}
+
+#[test]
+fn zcode_apply_writes_entry_and_reads_back() -> Result<()> {
+    let isolated = Isolated::new()?;
+    let path = provider_config_path(&isolated.env)?;
+    zcode_seed_user_config(&path)?;
+
+    isolated.seed_provider_with_models(
+        "p1",
+        ProviderProtocol::AnthropicMessages,
+        "https://p1.test/v1",
+        vec!["model-a".to_string()],
+    )?;
+    isolated.apply("p1", ProviderAppId::Zcode, &["model-a"], "model-a", None)?;
+
+    let applied: JsonValue = serde_json::from_str(&read_text(&path))?;
+    let rule = zcode_rule(&applied, "reins-p1").expect("reins 条目应存在");
+    assert_eq!(rule["providerName"], "Label p1");
+    assert_eq!(rule["config"]["group"], "standard-personal");
+    assert_eq!(rule["config"]["access"]["apiKey"], "sk-test-secret");
+    assert_eq!(rule["config"]["api"]["type"], "anthropic-messages");
+    assert_eq!(rule["config"]["api"]["baseUrl"], "https://p1.test/v1");
+    assert_eq!(rule["config"]["personalModelIds"], json!(["model-a"]));
+    assert_eq!(rule["config"]["modelOrder"], json!(["model-a"]));
+
+    let order = applied["config"]["providerOrder"].as_array().unwrap();
+    assert!(order.iter().any(|v| v.as_str() == Some("reins-p1")));
+
+    // 模型元数据落模型级规则（seed 夹具带全部元数据）。不写 enabled：内置
+    // `.*` 兜底默认启用，显式写会覆盖用户的启停选择。
+    let model_rule = applied["config"]["modelConfigRules"]["providerModelRules"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|rule| rule["providerId"].as_str() == Some("reins-p1"))
+        .expect("reins 模型规则应存在");
+    assert_eq!(model_rule["modelId"], "model-a");
+    assert!(model_rule["config"].get("enabled").is_none());
+    assert_eq!(model_rule["config"]["properties"]["contextWindow"], 200_000);
+    assert_eq!(
+        model_rule["config"]["properties"]["inputFormat"]["supportsImage"],
+        true
+    );
+    assert_eq!(
+        model_rule["config"]["optionSpecs"]["maxOutputTokens"]["max"],
+        64_000
+    );
+    // 思考档位写 values，map 留给内置按 API 类型的兜底（不写 map 叶子）。
+    assert_eq!(
+        model_rule["config"]["optionSpecs"]["reasoningLevel"]["values"],
+        json!(["low", "medium", "high"])
+    );
+    assert!(
+        model_rule["config"]["optionSpecs"]["reasoningLevel"]
+            .get("map")
+            .is_none()
+    );
+
+    // 反读：已应用 + 外部条目照常展示。
+    let state = isolated.state()?;
+    let zcode = state
+        .apps
+        .iter()
+        .find(|app| app.app == ProviderAppId::Zcode)
+        .unwrap();
+    let reins_entry = zcode
+        .entries
+        .iter()
+        .find(|entry| entry.key == "reins-p1")
+        .unwrap();
+    assert_eq!(reins_entry.status, ProviderAppEntryStatus::Applied);
+    assert_eq!(reins_entry.base_url.as_deref(), Some("https://p1.test/v1"));
+    assert!(zcode.entries.iter().any(|entry| entry.key == "minimax"));
+    Ok(())
+}
+
+// 重新应用是条目级替换：未选中的模型不再保留规则；用户自配条目与其模型
+// 规则原样保留（additive）。
+#[test]
+fn zcode_reapply_replaces_models_and_keeps_user_entries() -> Result<()> {
+    let isolated = Isolated::new()?;
+    let path = provider_config_path(&isolated.env)?;
+    zcode_seed_user_config(&path)?;
+
+    isolated.seed_provider_with_models(
+        "p1",
+        ProviderProtocol::OpenaiChatCompletions,
+        "https://p1.test/v1",
+        vec!["model-a".to_string(), "model-b".to_string()],
+    )?;
+    isolated.apply(
+        "p1",
+        ProviderAppId::Zcode,
+        &["model-a", "model-b"],
+        "model-a",
+        None,
+    )?;
+    isolated.apply("p1", ProviderAppId::Zcode, &["model-b"], "model-b", None)?;
+
+    let reapplied: JsonValue = serde_json::from_str(&read_text(&path))?;
+    let rules = reapplied["config"]["providerConfigRules"]["providerRules"]
+        .as_array()
+        .unwrap();
+    assert_eq!(
+        rules
+            .iter()
+            .filter(|rule| rule["providerId"].as_str().is_some_and(|id| id.starts_with("reins-")))
+            .count(),
+        1,
+        "reins 条目应是条目级替换，不重复追加"
+    );
+    let model_rules = reapplied["config"]["modelConfigRules"]["providerModelRules"]
+        .as_array()
+        .unwrap();
+    let reins_models: Vec<&str> = model_rules
+        .iter()
+        .filter(|rule| rule["providerId"].as_str() == Some("reins-p1"))
+        .filter_map(|rule| rule["modelId"].as_str())
+        .collect();
+    assert_eq!(reins_models, vec!["model-b"], "旧模型规则应随重选清掉");
+    assert_eq!(
+        rule_of(&reapplied, "reins-p1")["config"]["api"]["type"],
+        "openai-chat-completions"
+    );
+    assert!(
+        model_rules
+            .iter()
+            .any(|rule| rule["providerId"].as_str() == Some("new-provider")),
+        "外部条目的模型规则应保留"
+    );
+    assert!(zcode_rule(&reapplied, "new-provider").is_some());
+    Ok(())
+}
+
+fn rule_of<'a>(root: &'a JsonValue, provider_id: &str) -> &'a JsonValue {
+    zcode_rule(root, provider_id).expect("条目应存在")
+}
+
+fn zcode_model_rules<'a>(root: &'a JsonValue, provider_id: &str) -> Vec<&'a JsonValue> {
+    root["config"]["modelConfigRules"]["providerModelRules"]
+        .as_array()
+        .map(|rules| {
+            rules
+                .iter()
+                .filter(|rule| rule["providerId"].as_str() == Some(provider_id))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn zcode_manual_model_rules<'a>(root: &'a JsonValue, provider_id: &str) -> Vec<&'a JsonValue> {
+    root["config"]["modelConfigRules"]["manualProviderModelRules"]
+        .as_array()
+        .map(|rules| {
+            rules
+                .iter()
+                .filter(|rule| rule["providerId"].as_str() == Some(provider_id))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+// 档位值域：off 写 "disabled"（ZCode 的关闭拼写，其余档位原样透传）；乱序与
+// 重复输入按语义强度排序去重（schema 要求非空、不重复、低到高）。
+#[test]
+fn zcode_apply_sorts_reasoning_values_and_spells_off_as_disabled() -> Result<()> {
+    let isolated = Isolated::new()?;
+    let path = provider_config_path(&isolated.env)?;
+    zcode_seed_user_config(&path)?;
+
+    isolated.store.upsert(ProviderUpsertInput {
+        provider_id: "p1".to_string(),
+        mode: ProviderWriteMode::Upsert,
+        label: "Label p1".to_string(),
+        protocol: ProviderProtocol::OpenaiResponses,
+        base_url: "https://p1.test/v1".to_string(),
+        api_key: "sk-test-secret".to_string(),
+        models: vec![ProviderModelInput {
+            id: "model-a".to_string(),
+            label: "Model A".to_string(),
+            context_window: None,
+            max_output_tokens: None,
+            supports_images: None,
+            reasoning: None,
+            reasoning_levels: Some(vec![
+                ReasoningLevel::High,
+                ReasoningLevel::Off,
+                ReasoningLevel::Low,
+                ReasoningLevel::High,
+            ]),
+        }],
+    })?;
+    isolated.apply("p1", ProviderAppId::Zcode, &["model-a"], "model-a", None)?;
+
+    let applied: JsonValue = serde_json::from_str(&read_text(&path))?;
+    let rules = zcode_model_rules(&applied, "reins-p1");
+    assert_eq!(rules.len(), 1);
+    assert_eq!(
+        rules[0]["config"]["optionSpecs"]["reasoningLevel"]["values"],
+        json!(["disabled", "low", "high"])
+    );
+    Ok(())
+}
+
+// 只声明 reasoning 布尔时给保守三档（对齐 codex 目录条目口径）；显式 false
+// 只有关闭档；无任何信息时不写 reasoningLevel（继承内置兜底）。
+#[test]
+fn zcode_apply_derives_reasoning_values_from_boolean_flag() -> Result<()> {
+    let isolated = Isolated::new()?;
+    let path = provider_config_path(&isolated.env)?;
+    zcode_seed_user_config(&path)?;
+
+    let model = |id: &str, reasoning: Option<bool>| ProviderModelInput {
+        id: id.to_string(),
+        label: format!("Label {id}"),
+        context_window: None,
+        max_output_tokens: None,
+        supports_images: None,
+        reasoning,
+        reasoning_levels: None,
+    };
+    isolated.store.upsert(ProviderUpsertInput {
+        provider_id: "p1".to_string(),
+        mode: ProviderWriteMode::Upsert,
+        label: "Label p1".to_string(),
+        protocol: ProviderProtocol::OpenaiResponses,
+        base_url: "https://p1.test/v1".to_string(),
+        api_key: "sk-test-secret".to_string(),
+        models: vec![
+            model("model-on", Some(true)),
+            model("model-off", Some(false)),
+            model("model-unknown", None),
+        ],
+    })?;
+    isolated.apply(
+        "p1",
+        ProviderAppId::Zcode,
+        &["model-on", "model-off", "model-unknown"],
+        "model-on",
+        None,
+    )?;
+
+    let applied: JsonValue = serde_json::from_str(&read_text(&path))?;
+    let rule_of_model = |model_id: &str| {
+        zcode_model_rules(&applied, "reins-p1")
+            .into_iter()
+            .find(|rule| rule["modelId"].as_str() == Some(model_id))
+            .cloned()
+    };
+    assert_eq!(
+        rule_of_model("model-on").expect("reasoning=true 应写值域")
+            ["config"]["optionSpecs"]["reasoningLevel"]["values"],
+        json!(["low", "medium", "high"])
+    );
+    assert_eq!(
+        rule_of_model("model-off").expect("reasoning=false 应写关闭档")
+            ["config"]["optionSpecs"]["reasoningLevel"]["values"],
+        json!(["disabled"])
+    );
+    // 无元数据且无既有叶子：不产生空规则，全部继承内置兜底。
+    assert!(rule_of_model("model-unknown").is_none());
+    Ok(())
+}
+
+// 用户已手动配置的模型跳过不写：schema 禁止同一 (provider, model) 同时存在
+// 智能与手动规则，写了会让整份配置校验失败，用户的显式选择优先；智能规则
+// 里的非自有叶子（如启用开关）在重写时保留。
+#[test]
+fn zcode_apply_skips_manual_models_and_preserves_user_leaves() -> Result<()> {
+    let isolated = Isolated::new()?;
+    let path = provider_config_path(&isolated.env)?;
+    zcode_seed_user_config(&path)?;
+
+    // 预置：model-a 有用户手动规则；model-b 的智能规则带 enabled=false。
+    let mut seeded: JsonValue = serde_json::from_str(&read_text(&path))?;
+    seeded["config"]["modelConfigRules"]["manualProviderModelRules"] = json!([{
+        "providerId": "reins-p1",
+        "modelId": "model-a",
+        "config": {
+            "enabled": false,
+            "properties": {"contextWindow": 100000},
+            "optionSpecs": {"reasoningLevel": {"values": ["low"], "map": "{}"}}
+        }
+    }]);
+    seeded["config"]["modelConfigRules"]["providerModelRules"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({
+            "providerId": "reins-p1",
+            "modelId": "model-b",
+            "config": {"enabled": false}
+        }));
+    fs::write(&path, seeded.to_string())?;
+
+    isolated.seed_provider_with_models(
+        "p1",
+        ProviderProtocol::AnthropicMessages,
+        "https://p1.test/v1",
+        vec!["model-a".to_string(), "model-b".to_string()],
+    )?;
+    isolated.apply(
+        "p1",
+        ProviderAppId::Zcode,
+        &["model-a", "model-b"],
+        "model-a",
+        None,
+    )?;
+
+    let applied: JsonValue = serde_json::from_str(&read_text(&path))?;
+    // model-a 有手动规则：不写智能规则，手动规则原样保留（含用户的 map）。
+    assert!(
+        zcode_model_rules(&applied, "reins-p1")
+            .iter()
+            .all(|rule| rule["modelId"].as_str() != Some("model-a"))
+    );
+    let manual = zcode_manual_model_rules(&applied, "reins-p1");
+    assert_eq!(manual.len(), 1);
+    assert_eq!(manual[0]["modelId"], "model-a");
+    assert_eq!(
+        manual[0]["config"]["optionSpecs"]["reasoningLevel"]["map"],
+        "{}"
+    );
+    // model-b：保留用户的 enabled=false，同时并入本次元数据。
+    let rule_b = zcode_model_rules(&applied, "reins-p1")
+        .into_iter()
+        .find(|rule| rule["modelId"].as_str() == Some("model-b"))
+        .cloned()
+        .expect("model-b 应有智能规则");
+    assert_eq!(rule_b["config"]["enabled"], false);
+    assert_eq!(rule_b["config"]["properties"]["contextWindow"], 200_000);
+    assert_eq!(
+        rule_b["config"]["optionSpecs"]["reasoningLevel"]["values"],
+        json!(["low", "medium", "high"])
+    );
+    Ok(())
+}
+
+#[test]
+fn zcode_remove_clears_entry_and_keeps_external() -> Result<()> {
+    let isolated = Isolated::new()?;
+    let path = provider_config_path(&isolated.env)?;
+    zcode_seed_user_config(&path)?;
+
+    isolated.seed_provider_with_models(
+        "p1",
+        ProviderProtocol::OpenaiResponses,
+        "https://p1.test/v1",
+        vec!["model-a".to_string()],
+    )?;
+    isolated.apply("p1", ProviderAppId::Zcode, &["model-a"], "model-a", None)?;
+
+    // 用户给该平台的一个模型加了手动规则；ZCode 自己的 deletePersonalProvider
+    // 会连同手动规则一起清（deleteExactForProvider 覆盖两类）。
+    let mut with_manual: JsonValue = serde_json::from_str(&read_text(&path))?;
+    with_manual["config"]["modelConfigRules"]["manualProviderModelRules"] = json!([{
+        "providerId": "reins-p1",
+        "modelId": "model-b",
+        "config": {"enabled": false}
+    }]);
+    fs::write(&path, with_manual.to_string())?;
+
+    isolated.remove_from("p1", ProviderAppId::Zcode)?;
+
+    let removed: JsonValue = serde_json::from_str(&read_text(&path))?;
+    assert!(zcode_rule(&removed, "reins-p1").is_none());
+    assert!(zcode_rule(&removed, "minimax").is_some());
+    assert!(zcode_rule(&removed, "new-provider").is_some());
+    let order = removed["config"]["providerOrder"].as_array().unwrap();
+    assert!(!order.iter().any(|v| v.as_str() == Some("reins-p1")));
+    assert!(zcode_model_rules(&removed, "reins-p1").is_empty());
+    assert!(zcode_manual_model_rules(&removed, "reins-p1").is_empty());
+
+    // 反读只剩外部条目。
+    let state = isolated.state()?;
+    let zcode = state
+        .apps
+        .iter()
+        .find(|app| app.app == ProviderAppId::Zcode)
+        .unwrap();
+    assert!(zcode
+        .entries
+        .iter()
+        .all(|entry| !entry.key.starts_with("reins-")));
+    Ok(())
+}
+
+#[test]
+fn zcode_remove_rejects_modified_entry() -> Result<()> {
+    let isolated = Isolated::new()?;
+    let path = provider_config_path(&isolated.env)?;
+    zcode_seed_user_config(&path)?;
+
+    isolated.seed_model("p1", "model-a")?;
+    isolated.apply("p1", ProviderAppId::Zcode, &["model-a"], "model-a", None)?;
+
+    // 手工把 api.type 改成协议表外的取值：内容不可识别，不自动删。
+    let mut modified: JsonValue = serde_json::from_str(&read_text(&path))?;
+    modified["config"]["providerConfigRules"]["providerRules"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|rule| rule["providerId"].as_str() == Some("reins-p1"))
+        .unwrap()["config"]["api"]["type"] = json!("custom-thing");
+    fs::write(&path, modified.to_string())?;
+
+    let error = isolated
+        .remove_from("p1", ProviderAppId::Zcode)
+        .expect_err("漂移条目应拒绝移除");
+    assert!(error.to_string().contains("已被手工修改"));
+    Ok(())
+}
+
+#[test]
+fn zcode_remove_external_deletes_user_entry() -> Result<()> {
+    let isolated = Isolated::new()?;
+    let path = provider_config_path(&isolated.env)?;
+    zcode_seed_user_config(&path)?;
+
+    isolated.remove_external(ProviderAppId::Zcode, "new-provider")?;
+
+    let removed: JsonValue = serde_json::from_str(&read_text(&path))?;
+    assert!(zcode_rule(&removed, "new-provider").is_none());
+    assert!(zcode_rule(&removed, "minimax").is_some());
+    let order = removed["config"]["providerOrder"].as_array().unwrap();
+    assert!(!order.iter().any(|v| v.as_str() == Some("new-provider")));
+    let model_rules = removed["config"]["modelConfigRules"]["providerModelRules"]
+        .as_array()
+        .unwrap();
+    assert!(!model_rules
+        .iter()
+        .any(|rule| rule["providerId"].as_str() == Some("new-provider")));
     Ok(())
 }

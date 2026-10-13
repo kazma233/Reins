@@ -6,13 +6,14 @@ use crate::providers::apps::adapter_for;
 use crate::providers::apps::dialect::PI_AI_REASONING;
 use crate::providers::types::{ProviderAppId, ProviderProtocol, ReasoningLevel};
 
-const APPS: [ProviderAppId; 6] = [
+const APPS: [ProviderAppId; 7] = [
     ProviderAppId::Codex,
     ProviderAppId::Claude,
     ProviderAppId::Opencode,
     ProviderAppId::Pi,
     ProviderAppId::Grokbuild,
     ProviderAppId::Dsh,
+    ProviderAppId::Zcode,
 ];
 
 // 支持档位的拼写能反读回原档位；有损折叠（grok max→xhigh）按声明豁免。
@@ -45,6 +46,17 @@ fn dsh_off_level_spells_off() {
     let dialect = adapter_for(ProviderAppId::Dsh).reasoning_dialect();
     assert_eq!(dialect.spell(ReasoningLevel::Off), "off");
     assert_eq!(dialect.parse("off"), Some(ReasoningLevel::Off));
+}
+
+// ZCode 回归：off 档写 "disabled"（唯一的关闭拼写；"none" 只在
+// chat-completions 兜底里被当关闭，anthropic-messages 与 openai-responses
+// 会把它当普通 effort 透传）。
+#[test]
+fn zcode_off_level_spells_disabled() {
+    let dialect = adapter_for(ProviderAppId::Zcode).reasoning_dialect();
+    assert_eq!(dialect.spell(ReasoningLevel::Off), "disabled");
+    assert_eq!(dialect.parse("disabled"), Some(ReasoningLevel::Off));
+    assert_eq!(dialect.spell(ReasoningLevel::Max), "max");
 }
 
 // dsh 的 LLM 层就是 pi-ai：两个适配器必须引用同一份方言常量，防止再长出

@@ -34,6 +34,7 @@ export const APP_LABELS: Record<ProviderAppId, string> = {
   pi: AGENT_LABELS.pi,
   grokbuild: AGENT_LABELS.grokbuild,
   dsh: AGENT_LABELS.dsh,
+  zcode: AGENT_LABELS.zcode,
 };
 
 export const PROTOCOL_LABELS: Record<ProviderProtocol, string> = {

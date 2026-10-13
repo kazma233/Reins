@@ -252,6 +252,23 @@
 - 对照 magpie（`internal/codexcat/codex_prompt.md`，7589 字节）嵌的是 per-model 提示词 `core/gpt-5.2-codex_prompt.md` 而非这份兜底；cc-switch 用手工 per-provider 模板。三工具都内嵌提示词拷贝，Reins 的「对齐兜底」口径不变。
 - 附带发现：cc-switch 源码（services/provider/codex_client_catalog.rs）记录 codex 0.159 起 TUI 默认连托管守护进程（`codex app-server --managed-daemon`），模型目录只在守护进程重启时重读——Reins apply 后已运行的 codex 不会自动读到新目录，已在应用弹窗加提示。
 
+## 2026-10-13 补充（七）：ZCode 纳管（provider_config.json 契约实证）
+
+- 落点 `~/.zcode/v2/provider_config.json`（v2 布局；无官方重定向变量，根走 Home）。官方 OAuth 登录不经该文件（凭据在 `~/.zcode/v2/credentials.json`，属 ZCode 自管敏感存储，适配器不读写）。
+- 格式实证（ZCode.app bundle `/Applications/ZCode.app/Contents/Resources/glm/zcode.cjs` 的 zod schema + 本机文件，2026-10-13）：
+  - `api.type` 枚举 `["anthropic-messages","openai-chat-completions","openai-responses"]`，三种协议全支持，拼写 kebab-case；
+  - `group` 枚举 `["standard-personal","zai-family","bigmodel-family"]`，Reins 写 `standard-personal`；
+  - `providerRules[]`：`providerId`（键）/ `templateId`（官方模板平台才有）/ `providerName` / `config.access{type:"api-key",apiKey}`（**key 明文内嵌该文件**）/ `config.api{type,baseUrl}`（自定义平台才有）/ `personalModelIds` / `modelOrder`；
+  - 模型元数据落 `modelConfigRules.providerModelRules[]` 的 `config`：`enabled`、`properties.contextWindow`、`properties.inputFormat.supportsImage`、`optionSpecs.maxOutputTokens.max`、`optionSpecs.reasoningLevel.values`；
+  - 官方内置模板库在 app 包 `config/provider/zcode-builtin.json`（templateRules，含内置 baseUrl/协议/builtinModelIds），与用户文件分离。
+- 源码复核（开源仓库 `zai-org/ZCode`，2026-10-13，替代此前 bundle 推断）：
+  - `reasoningLevel` 的完整结构在 `packages/shared/src/model-config.ts`：`{values: string[], map: string}`，两者都是可独立继承的稀疏 overlay 叶子。`values` 按语义强度低→高排列、非空、不重复，首项是辅助调用的最低公开档位；`map` 是受限 CEL 表达式（读同名变量 `reasoningLevel`），返回 RFC 7396 JSON Merge Patch。
+  - 档位词汇：关闭档拼 `"disabled"`（三种协议兜底都认；`"none"` 只在 chat-completions 兜底里被当关闭，anthropic-messages / openai-responses 会当普通 effort 透传），其余档位名原样透传成各家 effort。**Reins 只写 `values` 不写 `map`**：内置 `modelApiRules` 有按 `api.type` 的 `.*` 兜底 map（anthropic-messages 写 `thinking.type`+`output_config.effort`，chat-completions 写 `thinking.type`/`enable_thinking`/`reasoning_effort`/`reasoning.effort`，responses 写 `reasoning.effort`），稀疏 overlay 下自动继承；自编 CEL 只会引入第二份协议知识。
+  - 稀疏 overlay 语义（`packages/provider/src/config/model-config.ts` 的 `ConfigOverlay`）：apply 以同 (provider, model) 的既有规则为底，只改写自有叶子（contextWindow / inputFormat.supportsImage / maxOutputTokens.max / reasoningLevel.values），保留 `enabled` 等非自有叶子；不写 `enabled`（内置 `.*` 兜底默认启用，显式写会覆盖用户的启停选择）。
+  - 手动规则互斥：`personalModelConfigRulesSchema` 禁止同一 (provider, model) 同时出现在 `providerModelRules` 与 `manualProviderModelRules`（冲突会让整份配置校验失败）。用户已手动配置的模型 apply 时跳过不写；remove 时 `manualProviderModelRules` 同 providerId 一并清理，对齐 ZCode 自己的 `deletePersonalProvider`（`deleteExactForProvider` 覆盖两类规则）。
+- 语义：additive（`providerOrder` 数组多平台并存）；条目级替换（同名 reins- 条目覆盖）；默认模型是 ZCode 会话级选择、无落盘字段，不写；无工具级默认思考档位（档位是每模型值域 + 会话级选择），故 `supported_reasoning_levels` 为空。
+- 处置：✅ 新增 `apps/zcode.rs` 适配器（inspect/apply/remove/remove_external + 方言表 `ZCODE_PROTOCOL`、`ZCODE_REASONING`），`ProviderAppId` 加 `Zcode`（6→7），agents 清单 `provider_app: Some(Zcode)`；思考档位随模型元数据写入（values 排序去重、off 拼 `disabled`），`unwritten_model_fields` 清空；新增测试 `zcode_apply_writes_entry_and_reads_back`、`zcode_reapply_replaces_models_and_keeps_user_entries`、`zcode_apply_sorts_reasoning_values_and_spells_off_as_disabled`、`zcode_apply_derives_reasoning_values_from_boolean_flag`、`zcode_apply_skips_manual_models_and_preserves_user_leaves`、`zcode_remove_clears_entry_and_keeps_external`、`zcode_remove_rejects_modified_entry`、`zcode_remove_external_deletes_user_entry`、`zcode_off_level_spells_disabled`。
+- `unverified`：写入形状按仓库 schema 与官方内置规则对齐，但未跑过 ZCode 自身加载校验（未在真实 ZCode 里应用过 reins 生成的 provider_config.json）。
 
 ## 处置结果
 
