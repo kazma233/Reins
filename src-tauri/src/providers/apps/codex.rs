@@ -33,8 +33,10 @@ fn wire_api() -> &'static str {
 
 pub(crate) const CATALOG_FILE_NAME: &str = "reins-models.json";
 
-// codex 内置兜底提示词（codex-rs/models-manager/prompt.md，Apache-2.0，
-// 取自 openai/codex rust-v0.145.0）。目录条目的 instructions_template 是
+// codex 内置兜底提示词（Apache-2.0，取自 openai/codex rust-v0.145.0 的
+// codex-rs/models-manager/prompt.md；0.158.0 起同一内容另存于
+// codex-rs/protocol/src/prompts/base_instructions/default.md，两路径并存，
+// 0.145→0.162.1 实测内容零漂移）。目录条目的 instructions_template 是
 // 逐模型系统提示，留空会让 Codex 发出空提示词，因此对齐兜底值：从
 // 「未知模型走 fallback」切到「目录条目」行为零变化。
 const CODEX_PROMPT: &str = include_str!("codex_prompt.md");

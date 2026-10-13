@@ -245,6 +245,14 @@
 取舍：`base_instructions` 在 0.145.0 是必填字段（无 serde default），因此新格式在旧版 codex 上会让配置加载**整体失败**（非静默降级）——迁移后要求用户侧 codex 已支持 `model_messages`（0.155 / 0.158 实测支持，引入版本未逐版考证）；codex 更新节奏快（0.145 → 0.158 约一个月），不再兼顾旧版。
 
 
+## 2026-10-13 补充（六）：兜底提示词上游路径复验
+
+- 上游 rust-v0.158.0、rust-v0.162.1 的 `codex-rs/models-manager/prompt.md` 与 Reins 嵌入版（取自 0.145.0）**逐字节一致**（20903 字节，diff 为空）：两个月内该提示词零漂移。
+- 0.158.0 起协议层新增第二处引用：`codex-rs/protocol/src/prompts/base_instructions/default.md`（`BASE_INSTRUCTIONS_DEFAULT`，protocol/src/models.rs），与嵌入版同样逐字节一致。旧路径仍在，两路径并存；后续 diff 上游时应同时检查两处。
+- 对照 magpie（`internal/codexcat/codex_prompt.md`，7589 字节）嵌的是 per-model 提示词 `core/gpt-5.2-codex_prompt.md` 而非这份兜底；cc-switch 用手工 per-provider 模板。三工具都内嵌提示词拷贝，Reins 的「对齐兜底」口径不变。
+- 附带发现：cc-switch 源码（services/provider/codex_client_catalog.rs）记录 codex 0.159 起 TUI 默认连托管守护进程（`codex app-server --managed-daemon`），模型目录只在守护进程重启时重读——Reins apply 后已运行的 codex 不会自动读到新目录，已在应用弹窗加提示。
+
+
 ## 处置结果
 
 1. ✅ Pi `off` 档：单独映射为 `"off"`（pi.rs `thinking_level`），新增测试 `pi_off_level_writes_off`。
