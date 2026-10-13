@@ -26,6 +26,14 @@ type SessionListProps = {
 
 const props = defineProps<SessionListProps>();
 
+// 存储状态角标:各来源共用同一套文案。归档=来源自己把会话移出了默认列表
+// (Codex 的 archived_sessions/、DSH 的归档集、ZCode/OpenCode 的归档时间),
+// 压缩=转录在磁盘上不是该来源的明文常态(Codex 的 .jsonl.zst 冷会话)。
+const ARCHIVED_LABEL = "已归档";
+const ARCHIVED_HINT = "该会话已被工具自身归档，默认不出现在它的会话列表里。";
+const COMPRESSED_LABEL = "已压缩";
+const COMPRESSED_HINT = "转录以压缩形式存储的冷会话，打开时会先解压。";
+
 const emit = defineEmits<{
   loadMore: [];
   queryChange: [query: string];
@@ -169,7 +177,21 @@ function handleReverseClick() {
             session.title
           }}</span>
           <div class="session-meta-row">
-            <small>{{ formatTimestamp(session.updatedAt) }}</small>
+            <small class="session-meta-left">
+              <span>{{ formatTimestamp(session.updatedAt) }}</span>
+              <span
+                v-if="session.archived"
+                :title="ARCHIVED_HINT"
+                class="session-state-chip session-state-chip--archived"
+                >{{ ARCHIVED_LABEL }}</span
+              >
+              <span
+                v-if="session.compressed"
+                :title="COMPRESSED_HINT"
+                class="session-state-chip"
+                >{{ COMPRESSED_LABEL }}</span
+              >
+            </small>
             <small
               v-if="session.tokenUsage"
               class="session-token-usage"

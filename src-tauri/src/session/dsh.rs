@@ -5,7 +5,6 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::{Context, Result, anyhow, bail};
-use ruzstd::decoding::{BlockDecodingStrategy, FrameDecoder};
 use serde_json::{Value, json};
 
 use super::family_index::{Family, FamilyRow};
@@ -14,6 +13,7 @@ use super::reader_engine::{
     FamilyReader, FamilySpec, Freshness, MarkerShape, MemberTimeline, RowErrorPolicy, SummaryKind,
     scan_files,
 };
+use super::transcript;
 use super::{
     ContentBlock, SessionEvent, SessionMessage, SessionSummary, SessionTokenUsage, SourceApp,
     UsageHourBuckets,
@@ -28,44 +28,6 @@ pub(crate) fn root() -> Result<PathBuf> {
 
 pub(crate) fn sessions_root() -> Result<PathBuf> {
     Ok(root()?.join("sessions"))
-}
-
-// dsh 转录是按写入批次追加的独立 zstd 帧拼接;ruzstd 的 StreamingDecoder 只解
-// 首帧,必须逐帧解码。live 文件尾帧可能截断,解到能解的位置为止。
-fn decode_zstd_frames(data: &[u8]) -> Result<Vec<u8>> {
-    let mut decoder = FrameDecoder::new();
-    let mut input = data;
-    let mut output = Vec::new();
-    let mut frames = 0usize;
-
-    while !input.is_empty() {
-        match decode_one_frame(&mut decoder, &mut input) {
-            Ok(bytes) => {
-                frames += 1;
-                output.extend_from_slice(&bytes);
-            }
-            Err(error) => {
-                // 首帧就失败说明文件损坏而不是 live 截断,向上报错。
-                if frames == 0 {
-                    bail!("Failed to decode DSH zstd transcript: {error}");
-                }
-                break;
-            }
-        }
-    }
-
-    Ok(output)
-}
-
-// 帧边界由解码器自己消费的字节决定,不靠扫 magic,避免压缩数据里偶然出现
-// magic 字节造成错切。
-fn decode_one_frame(decoder: &mut FrameDecoder, input: &mut &[u8]) -> Result<Vec<u8>> {
-    decoder.init(&mut *input)?;
-    decoder.decode_blocks(&mut *input, BlockDecodingStrategy::All)?;
-    // reset 会丢弃缓冲,先收集;帧解完时 collect 清空全部输出。
-    decoder
-        .collect()
-        .context("Failed to collect DSH zstd frame")
 }
 
 struct DshHeader {
@@ -95,12 +57,8 @@ struct DshTranscript {
 }
 
 fn read_transcript(path: &Path) -> Result<DshTranscript> {
-    let raw = fs::read(path).with_context(|| format!("Failed to read {}", path.display()))?;
-    let bytes = if path.extension().and_then(|ext| ext.to_str()) == Some("zstd") {
-        decode_zstd_frames(&raw)?
-    } else {
-        raw
-    };
+    // 转录是逐帧 zstd(压缩可选),整份解出后统一按行解析。
+    let bytes = transcript::read_frames(path)?;
     // 尾帧截断可能切在多字节字符中间,损失地转成字符串而不是报错。
     let text = String::from_utf8_lossy(&bytes);
 
@@ -567,17 +525,27 @@ fn assistant_blocks(data: &Value) -> Vec<ContentBlock> {
 
 // --- 目录扫描 ---
 
-// 会话文件名 session.v{N}.jsonl[.zstd],同目录多代共存取最高代;压缩可选。
+// 会话文件名 session[.v{N}].jsonl[.zstd]:v0 不带版本段(session.jsonl),
+// 压缩可选;同目录多代共存取最高代,先比版本号再让压缩形态优先。
 fn transcript_generation(file_name: &str) -> Option<(u32, bool)> {
-    let rest = file_name.strip_prefix("session.v")?;
-    let (stem, compressed) = if let Some(stem) = rest.strip_suffix(".jsonl.zstd") {
-        (stem, true)
-    } else if let Some(stem) = rest.strip_suffix(".jsonl") {
-        (stem, false)
-    } else {
-        return None;
+    let rest = file_name.strip_prefix("session")?;
+
+    let (version, rest) = match rest.strip_prefix(".v") {
+        Some(rest) => {
+            let digits = rest.split_once('.')?.0;
+            (digits.parse().ok()?, &rest[digits.len()..])
+        }
+        None => (0, rest),
     };
-    Some((stem.parse().ok()?, compressed))
+
+    // 版本段之后必须正好是后缀,不多不少。
+    let compressed = match rest {
+        ".jsonl" => false,
+        ".jsonl.zstd" => true,
+        _ => return None,
+    };
+
+    Some((version, compressed))
 }
 
 fn session_transcript_paths_at(root: &Path) -> Result<Vec<PathBuf>> {
@@ -624,6 +592,61 @@ pub(crate) fn session_transcript_paths() -> Result<Vec<PathBuf>> {
     session_transcript_paths_at(&sessions_root()?)
 }
 
+// --- 归档集 ---
+
+// 归档是 storages/workspace.json 里的 global.archivedSessionIds:归档只写这份
+// 账本,转录文件原样留在 sessions 下,所以列表必须显式读它,否则归档会话与
+// 未归档会话在磁盘上完全同形。
+fn archive_registry_path(sessions_root: &Path) -> PathBuf {
+    sessions_root
+        .with_file_name("storages")
+        .join("workspace.json")
+}
+
+// 账本缺失或字段缺失都是合法状态(该来源还没有归档动作,老数据也可能没有
+// 这个后加的字段),此时归档集为空;读取失败只降级归档角标,不影响列表本身。
+fn archived_session_ids(sessions_root: &Path) -> Result<HashSet<String>> {
+    let path = archive_registry_path(sessions_root);
+    let contents = match fs::read_to_string(&path) {
+        Ok(contents) => contents,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(HashSet::new()),
+        Err(error) => {
+            crate::logger::log_error(format!(
+                "dsh archive registry unreadable at {}: {error}",
+                path.display()
+            ));
+            return Ok(HashSet::new());
+        }
+    };
+
+    let value: Value = match serde_json::from_str(&contents) {
+        Ok(value) => value,
+        Err(error) => {
+            crate::logger::log_error(format!(
+                "dsh archive registry unparsable at {}: {error}",
+                path.display()
+            ));
+            return Ok(HashSet::new());
+        }
+    };
+
+    Ok(value["global"]["archivedSessionIds"]
+        .as_array()
+        .map(|ids| {
+            ids.iter()
+                .filter_map(Value::as_str)
+                .map(ToString::to_string)
+                .collect()
+        })
+        .unwrap_or_default())
+}
+
+// 归档集的变更时刻,参与索引指纹(归档不改转录文件,mtime 指纹看不见它)。
+fn archive_registry_stamp(sessions_root: &Path) -> i64 {
+    crate::support::time::file_modified_timestamp_millis(&archive_registry_path(sessions_root))
+        .unwrap_or_default()
+}
+
 // --- family 索引 ---
 
 #[derive(Clone)]
@@ -637,6 +660,7 @@ struct DshSessionRow {
     updated_at: i64,
     token_usage: Option<SessionTokenUsage>,
     catalog_children: Vec<CatalogChild>,
+    archived: bool,
 }
 
 #[derive(Clone)]
@@ -705,9 +729,15 @@ impl FamilySpec for DshSpec {
 
     fn list_rows(&self, scan_root: &Path) -> Result<Vec<DshFamilyRow>> {
         let paths = session_transcript_paths_at(scan_root)?;
+        let archived = archived_session_ids(scan_root)?;
         let rows = scan_files(
             paths,
-            |path| Ok(session_row(path.to_path_buf(), read_transcript(path)?)),
+            |path| {
+                let transcript = read_transcript(path)?;
+                // 归档集按 header 里的会话 id 匹配(目录名只是提示)。
+                let archived = archived.contains(&transcript.header.id);
+                Ok(session_row(path.to_path_buf(), transcript, archived))
+            },
             RowErrorPolicy::SkipLogged,
             "DSH",
         )?;
@@ -740,9 +770,15 @@ impl FamilySpec for DshSpec {
 
     // dsh 的双口径:index 失效用指纹(文件集合增删也触发重建),timeline
     // 失效用成员 mtime 最大值(引擎默认)。这是现状的刻意差异,不是遗漏。
+    // 归档只改 workspace.json 不改转录,指纹必须把这份账本的时刻一起计入,
+    // 否则归档/取消归档后角标要等到转录文件自己变化才更新。
     fn index_freshness(&self, scan_root: &Path) -> Result<Freshness> {
         let paths = session_transcript_paths_at(scan_root)?;
-        super::sessions_fingerprint(&paths).map(Freshness::Fingerprint)
+        let fingerprint = super::sessions_fingerprint(&paths)?;
+        Ok(Freshness::Fingerprint(format!(
+            "{fingerprint}\narchive:{}",
+            archive_registry_stamp(scan_root)
+        )))
     }
 
     fn summary_kind(&self) -> SummaryKind {
@@ -829,7 +865,7 @@ pub(crate) fn engine_at(
     super::reader_engine::ReaderEngine::new(DshSpec, root, store_dir)
 }
 
-fn session_row(path: PathBuf, transcript: DshTranscript) -> DshSessionRow {
+fn session_row(path: PathBuf, transcript: DshTranscript, archived: bool) -> DshSessionRow {
     let title = transcript
         .title
         .or(transcript.first_user_title)
@@ -846,6 +882,7 @@ fn session_row(path: PathBuf, transcript: DshTranscript) -> DshSessionRow {
         path,
         token_usage: transcript.usage_total,
         catalog_children: transcript.catalog_children,
+        archived,
     }
 }
 
@@ -942,6 +979,10 @@ fn session_summary(row: &DshSessionRow) -> SessionSummary {
         created_at: Some(row.created_at),
         updated_at: Some(row.updated_at),
         token_usage: row.token_usage,
+        archived: row.archived,
+        // dsh 的 zstd 是该来源的默认存储形态(每个转录都压缩),标注成角标
+        // 没有区分度,所以压缩位恒假;只有归档是"偏离常态"的状态。
+        compressed: false,
     }
 }
 

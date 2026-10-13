@@ -27,6 +27,8 @@ pub(crate) struct ZcodeSessionRow {
     title: String,
     time_created: i64,
     time_updated: i64,
+    // 归档时间戳,NULL 表示未归档;老库可能没有该列,探测后缺失即视为未归档。
+    time_archived: Option<i64>,
     // 一次 GROUP BY 查询按 session_id 预聚合,避免列表逐会话全表扫。
     token_usage: Option<SessionTokenUsage>,
     // "db路径:id" 组合串:list_rows 时按实例 db 生成,作为该记录的稳定
@@ -139,6 +141,9 @@ impl FamilySpec for ZcodeSpec {
             created_at: Some(root.time_created),
             updated_at: Some(root.time_updated),
             token_usage: None,
+            archived: root.time_archived.is_some(),
+            // ZCode 的转录只存在 sqlite(part.data 为明文 JSON),没有压缩形态。
+            compressed: false,
         }
     }
 
@@ -317,9 +322,16 @@ fn list_session_rows(scan_root: &Path) -> Result<Vec<ZcodeSessionRow>> {
     }
 
     let token_usages = session_token_usages(&connection)?;
-    let mut statement = connection.prepare(
-        "SELECT id, parent_id, directory, title, time_created, time_updated FROM session ORDER BY time_updated DESC",
-    )?;
+    // time_archived 是后加的列,老库没有它;缺失时列表照常产出,归档位恒假。
+    let archived_column = super::sqlite_column_exists(&connection, "session", "time_archived")?;
+    let archived_expr = if archived_column {
+        "time_archived"
+    } else {
+        "NULL"
+    };
+    let mut statement = connection.prepare(&format!(
+        "SELECT id, parent_id, directory, title, time_created, time_updated, {archived_expr} FROM session ORDER BY time_updated DESC",
+    ))?;
     let rows = statement.query_map([], |row| {
         let id: String = row.get(0)?;
         let title: Option<String> = row.get(3)?;
@@ -337,6 +349,7 @@ fn list_session_rows(scan_root: &Path) -> Result<Vec<ZcodeSessionRow>> {
             directory: row.get(2)?,
             time_created: row.get(4)?,
             time_updated: row.get(5)?,
+            time_archived: row.get(6)?,
             token_usage,
             path,
         })

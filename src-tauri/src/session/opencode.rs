@@ -30,6 +30,8 @@ pub(crate) struct OpenCodeSessionRow {
     title: String,
     time_created: i64,
     time_updated: i64,
+    // 归档时间戳,NULL 表示未归档;老库可能没有该列,探测后缺失即视为未归档。
+    time_archived: Option<i64>,
     // 一次 GROUP BY 查询按 session_id 预聚合,避免列表逐会话全表扫。
     token_usage: Option<SessionTokenUsage>,
     // "db路径:id" 组合串:list_rows 时按实例 scan_root 的 db 生成,作为该
@@ -140,6 +142,10 @@ impl FamilySpec for OpenCodeSpec {
             created_at: Some(root.time_created),
             updated_at: Some(root.time_updated),
             token_usage: None,
+            archived: root.time_archived.is_some(),
+            // OpenCode v2 的转录只存在 sqlite(session_message.data 为明文
+            // JSON),没有压缩形态。
+            compressed: false,
         }
     }
 
@@ -374,9 +380,17 @@ fn list_session_rows(scan_root: &Path) -> Result<Vec<OpenCodeSessionRow>> {
     }
 
     let token_usages = session_token_usages(&connection)?;
-    let mut statement = connection.prepare(
-        "SELECT id, parent_id, directory, title, time_created, time_updated FROM session_v2 ORDER BY time_updated DESC",
-    )?;
+    // time_archived 由 v1→v2 迁移期加入,老库可能没有该列;缺失时列表照常
+    // 产出,归档位恒假。
+    let archived_column = super::sqlite_column_exists(&connection, "session_v2", "time_archived")?;
+    let archived_expr = if archived_column {
+        "time_archived"
+    } else {
+        "NULL"
+    };
+    let mut statement = connection.prepare(&format!(
+        "SELECT id, parent_id, directory, title, time_created, time_updated, {archived_expr} FROM session_v2 ORDER BY time_updated DESC",
+    ))?;
     // session_v2.title 允许 NULL（v1 时代 NOT NULL），空标题回退到 id，
     // 避免 family 标题渲染成空白。
     let rows = statement.query_map([], |row| {
@@ -395,6 +409,7 @@ fn list_session_rows(scan_root: &Path) -> Result<Vec<OpenCodeSessionRow>> {
             directory: row.get(2)?,
             time_created: row.get(4)?,
             time_updated: row.get(5)?,
+            time_archived: row.get(6)?,
             token_usage,
             path,
         })

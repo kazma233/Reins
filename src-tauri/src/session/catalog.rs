@@ -41,6 +41,14 @@ pub(crate) fn detect_sources_inner(state: &SessionIndexState) -> Result<Vec<Sour
     Ok(sources)
 }
 
+/// 刷新:重新扫盘。持久摘要与用量缓存按 (路径, mtime) 自失效,不参与清理,
+/// 否则每次刷新都要把全部转录重新解析一遍(见 clear_all_caches 的注释)。
+pub(crate) fn rescan_session_caches_inner(state: &SessionIndexState) -> Result<()> {
+    state.clear()?;
+    super::rescan_all_caches()
+}
+
+/// 显式清缓存命令:连持久层一起清空的全量重建。
 pub(crate) fn clear_session_caches_inner(state: &SessionIndexState) -> Result<()> {
     state.clear()?;
     super::clear_all_caches()
@@ -115,7 +123,7 @@ pub(crate) fn refresh_sessions_inner(
     query: &str,
     reverse: bool,
 ) -> Result<SessionRefreshResult> {
-    clear_session_caches_inner(state)?;
+    rescan_session_caches_inner(state)?;
     let sources = detect_sources_inner(state)?;
 
     // 合并视图始终合并所有来源；单一来源保持"请求的不可用时回退到首个可用"。
@@ -157,6 +165,8 @@ pub(crate) fn build_summary(
         created_at: summary.created_at,
         updated_at: summary.updated_at,
         token_usage: summary.token_usage,
+        archived: summary.archived,
+        compressed: summary.compressed,
     })
 }
 

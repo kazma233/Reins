@@ -1009,6 +1009,8 @@ mod tests {
                 created_at: Some(1),
                 updated_at: Some(2),
                 token_usage: None,
+                archived: false,
+                compressed: false,
             })
         }
 
@@ -1023,6 +1025,8 @@ mod tests {
                 created_at: Some(1),
                 updated_at: Some(2),
                 token_usage: None,
+                archived: false,
+                compressed: false,
             }
         }
 

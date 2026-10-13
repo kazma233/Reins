@@ -425,6 +425,10 @@ fn parse_full_summary(path: &Path) -> Result<SessionSummary> {
         created_at,
         updated_at: Some(updated_at),
         token_usage: None,
+        // pi 无归档也无压缩:会话列表就是 sessions 根下的全部 .jsonl,
+        // 上下文压缩只追加 compaction 条目,不动文件。
+        archived: false,
+        compressed: false,
     };
     for entry in &document.entries {
         accumulate_pi_usage(&mut summary.token_usage, &entry.value);

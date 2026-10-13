@@ -28,7 +28,10 @@ rusqlite = { version = "0.40.2", features = ["bundled"] }
 ts-rs = "12"
 uuid = { version = "1.26.0", features = ["v4", "serde"] }
 walkdir = "2.5.0"
-ruzstd = "0.9.0"
+# 转录解压用 libzstd 绑定:codex 的冷会话压缩把可见会话从个位数变成上千个,
+# 单次列表/用量采集要解 3GB 级数据,纯 Rust 解码器(83MB/s,且读一行也会解
+# 大半个帧)会把首屏拖到一分钟级。
+zstd = "0.13.3"
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls", "system-proxy"] }
 
 [target.'cfg(windows)'.dependencies]

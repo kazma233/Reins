@@ -1,4 +1,5 @@
 use super::*;
+use crate::tests::session_storage_state::{CODEX_COLD_ID, CODEX_ROLLOUT_ZST, cold_rollout_lines};
 
 // 用量小时聚合的口径测试:跨天会话按消耗事件的时间戳拆分,Codex 累计值差分,
 // 各来源归一后的四项与列表页 family 求和一致;日序列与今日小时序列都由
@@ -65,7 +66,9 @@ fn hour_buckets(
 }
 
 // 实际桶的总量视图:与 hour_buckets 同形态比较,模型切片另行断言。
-fn total_view(buckets: &session::model::UsageHourBuckets) -> BTreeMap<String, session::model::SessionTokenUsage> {
+fn total_view(
+    buckets: &session::model::UsageHourBuckets,
+) -> BTreeMap<String, session::model::SessionTokenUsage> {
     buckets
         .iter()
         .map(|(key, bucket)| (key.clone(), bucket.usage))
@@ -655,6 +658,43 @@ fn zcode_usage_hours_groups_by_model_call_started_at() -> Result<()> {
         hours.buckets["2026-04-23T12"].models,
         model_bucket(&[("GLM-5.3-Flash", usage(200, 5, 0, 0))])
     );
+
+    Ok(())
+}
+
+#[test]
+fn codex_usage_counts_compressed_and_archived_rollouts() -> Result<()> {
+    let home = TempHome::new()?;
+    let _guard = TestEnvGuard::set_home(&home.path);
+
+    // 压缩(冷会话)与归档只是转录的存储形态,消耗记录仍属于用户用量,会话数
+    // 与 token 都要计入;夹具两份内容一致,期望值即单份的两倍。
+    let sessions = home.path.join(".codex/sessions/2026/03/01");
+    let archived = home.path.join(".codex/archived_sessions");
+    fs::create_dir_all(&sessions)?;
+    fs::create_dir_all(&archived)?;
+    fs::write(
+        sessions.join(format!(
+            "rollout-2026-03-01T10-00-00-{CODEX_COLD_ID}.jsonl.zst"
+        )),
+        CODEX_ROLLOUT_ZST,
+    )?;
+    let archived_id = "22222222-2222-4222-8222-222222222222";
+    write_jsonl(
+        &archived.join(format!("rollout-2026-03-01T11-00-00-{archived_id}.jsonl")),
+        &cold_rollout_lines(archived_id),
+    )?;
+
+    let stats = session::sources::spec(SourceApp::Codex)
+        .usage_days()?
+        .expect("codex usage stats");
+
+    assert_eq!(stats.session_count, 2);
+    let total = stats.days.iter().fold(usage(0, 0, 0, 0), |mut sum, day| {
+        sum.accumulate(&day.usage);
+        sum
+    });
+    assert_eq!(total, usage(1600, 100, 400, 20));
 
     Ok(())
 }

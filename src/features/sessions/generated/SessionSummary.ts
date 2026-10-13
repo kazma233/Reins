@@ -2,4 +2,4 @@
 import type { SessionTokenUsage } from "./SessionTokenUsage";
 import type { SourceApp } from "./SourceApp";
 
-export type SessionSummary = { sourceApp: SourceApp, sourceSessionId: string, title: string, cwd: string | null, gitBranch: string | null, transcriptPath: string, createdAt: number | null, updatedAt: number | null, tokenUsage?: SessionTokenUsage, };
+export type SessionSummary = { sourceApp: SourceApp, sourceSessionId: string, title: string, cwd: string | null, gitBranch: string | null, transcriptPath: string, createdAt: number | null, updatedAt: number | null, tokenUsage?: SessionTokenUsage, archived: boolean, compressed: boolean, };

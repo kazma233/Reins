@@ -217,6 +217,8 @@ impl GrokIndex {
                         updated_at,
                         // 子会话文件缺失,无法读 usage.json。
                         token_usage: None,
+                        archived: false,
+                        compressed: false,
                     },
                     meta: None,
                     readable: false,
@@ -619,6 +621,10 @@ fn summary(path: &Path) -> Result<SessionSummary> {
                 .context("Invalid Grok Build updated_at")?,
         ),
         token_usage: session_usage(&path)?,
+        // Grok Build 既无归档也无压缩:上游 Summary 没有 archived 字段,
+        // 转录一律明文(session/persistence.rs)。
+        archived: false,
+        compressed: false,
     })
 }
 

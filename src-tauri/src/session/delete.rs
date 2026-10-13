@@ -72,7 +72,9 @@ pub(crate) fn delete_session_inner(
 
     super::delete_session(source_app, source_session_id)?;
     state.clear()?;
-    super::clear_all_caches()?;
+    // 重新扫盘即可:被删文件的目录指纹已变,索引会重建;持久层按路径自失效,
+    // 清空它只会让下一次加载重新解析全部留存转录。
+    super::rescan_all_caches()?;
 
     Ok(DeleteSessionResult {
         source_app,

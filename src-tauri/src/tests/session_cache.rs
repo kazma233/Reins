@@ -1,7 +1,7 @@
 use super::*;
 use crate::session::SessionReader;
 
-const CACHE_DB_RELATIVE_PATH: &str = ".reins/session-summary-cache_v2.db";
+const CACHE_DB_RELATIVE_PATH: &str = ".reins/session-summary-cache_v3.db";
 
 fn cache_db_path(temp_home: &Path) -> PathBuf {
     temp_home.join(CACHE_DB_RELATIVE_PATH)
@@ -128,6 +128,8 @@ fn cached_summary() -> SessionSummary {
         created_at: Some(1),
         updated_at: Some(2),
         token_usage: None,
+        archived: false,
+        compressed: false,
     }
 }
 
@@ -416,11 +418,56 @@ fn clear_session_caches_empties_persistent_cache() -> Result<()> {
     assert_eq!(codex_titles()?, ["First question"]);
     assert_eq!(cache_row_count(&temp_home)?, 1);
 
-    // 用户触发的刷新是全量重建的逃生通道：持久缓存必须一并清空。
+    // 显式清缓存是全量重建的逃生通道：持久缓存必须一并清空。
     session::catalog::clear_session_caches_inner(
         &state::session_index::SessionIndexState::default(),
     )?;
     assert_eq!(cache_row_count(&temp_home)?, 0);
+
+    fs::remove_dir_all(&temp_home).ok();
+    Ok(())
+}
+
+// 刷新要重新扫盘(新文件必须出现),但不该顺手丢掉仍然有效的持久摘要——
+// 那份摘要按 (路径, mtime) 自失效,清一次等于把全部转录重解一遍。
+#[test]
+fn refresh_rescans_disk_and_keeps_persistent_rows() -> Result<()> {
+    let temp_home = env::temp_dir().join(format!("reins-test-{}", Uuid::new_v4()));
+    fs::create_dir_all(&temp_home)?;
+    let _guard = TestEnvGuard::set_home(&temp_home);
+
+    write_codex_transcript(
+        &temp_home,
+        "88888888-8888-4888-8888-888888888888",
+        "Cached question",
+    )?;
+    assert_eq!(codex_titles()?, ["Cached question"]);
+    // 篡改缓存行:刷新后仍读到篡改值 == 走的是原持久行,没有被清掉重解。
+    tamper_cached_title(&temp_home, "Cached question", "Tampered title")?;
+
+    // 刷新期间出现的新会话必须进列表。
+    write_codex_transcript(
+        &temp_home,
+        "99999999-9999-4999-8999-999999999999",
+        "Fresh question",
+    )?;
+
+    let mut titles = session::catalog::refresh_sessions_inner(
+        &state::session_index::SessionIndexState::default(),
+        session::catalog::SourceSelection::One(SourceApp::Codex),
+        0,
+        10,
+        "",
+        false,
+    )?
+    .page
+    .sessions
+    .into_iter()
+    .map(|session| session.title)
+    .collect::<Vec<_>>();
+    titles.sort();
+
+    assert_eq!(titles, ["Fresh question", "Tampered title"]);
 
     fs::remove_dir_all(&temp_home).ok();
     Ok(())

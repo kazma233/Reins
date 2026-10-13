@@ -58,12 +58,16 @@ impl SourceSpec {
         let root = (self.root)()?;
 
         match &self.usage {
-            UsageKind::CachedJsonl { subdir, extract } => {
+            UsageKind::CachedJsonl {
+                subdir,
+                files,
+                extract,
+            } => {
                 let scan_root = match subdir {
                     Some(subdir) => root.join(subdir),
                     None => root,
                 };
-                usage_stats::days_from_cached_jsonl(self.app, scan_root, *extract)
+                usage_stats::days_from_cached_jsonl(self.app, scan_root, *files, *extract)
             }
             UsageKind::RawFiles { paths, extract } => {
                 usage_stats::days_from_paths(self.app, &root, *paths, *extract)
@@ -93,6 +97,8 @@ static CODEX: SourceSpec = SourceSpec {
     },
     usage: UsageKind::CachedJsonl {
         subdir: Some("sessions"),
+        // codex 的转录可能是压缩形态,归档会话与活跃会话一同计入用量。
+        files: codex::transcript_paths,
         extract: codex::usage_hours,
     },
 };
@@ -117,6 +123,7 @@ static CLAUDE_CODE: SourceSpec = SourceSpec {
     },
     usage: UsageKind::CachedJsonl {
         subdir: Some("projects"),
+        files: crate::support::fs::enumerate_jsonl_files,
         extract: claude_code::usage_hours,
     },
 };
@@ -163,6 +170,7 @@ static PI: SourceSpec = SourceSpec {
     },
     usage: UsageKind::CachedJsonl {
         subdir: None,
+        files: crate::support::fs::enumerate_jsonl_files,
         extract: pi::usage_hours,
     },
 };

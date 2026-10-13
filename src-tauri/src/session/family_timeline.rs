@@ -186,6 +186,8 @@ mod tests {
             created_at: None,
             updated_at: Some(1),
             token_usage: None,
+            archived: false,
+            compressed: false,
         }
     }
 

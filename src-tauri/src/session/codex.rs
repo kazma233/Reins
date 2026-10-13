@@ -1,6 +1,6 @@
-use std::collections::HashMap;
-use std::fs::{self, File};
-use std::io::{BufRead, BufReader};
+use std::collections::{HashMap, HashSet};
+use std::fs;
+use std::io::BufRead;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Arc;
@@ -8,20 +8,27 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use rusqlite::Connection;
 use serde_json::{Value, json};
+use walkdir::WalkDir;
 
 use super::family_index::{
     Family, FamilyRow, OrphanPolicy, ParentChainRow, group_families_by_parent_chain,
 };
 use super::family_timeline::FamilyAgentLabel;
 use super::reader_engine::{
-    FamilyReader, FamilySpec, MarkerShape, MemberTimeline, OverviewCounts, ReaderEngine,
+    FamilyReader, FamilySpec, Freshness, MarkerShape, MemberTimeline, OverviewCounts, ReaderEngine,
     RowErrorPolicy, scan_files,
 };
+use super::transcript;
 use super::{
     ContentBlock, DeletePlanAction, SessionEvent, SessionMessage, SessionSummary,
     SessionTokenUsage, SourceApp, SummaryAccumulator, TimelineRecord, UsageHourBuckets,
     delete::{DeletePlanInput, run_official_cli},
 };
+
+// 归档会话的存放目录,与活跃会话的 sessions/ 并列在 CODEX_HOME 下;上游
+// 归档/取消归档都是在两者之间 rename 文件(thread-store/local/archive_thread.rs),
+// 所以文件所在目录就是归档状态的权威。
+const ARCHIVED_SESSIONS_SUBDIR: &str = "archived_sessions";
 
 #[derive(Clone, Debug)]
 pub(crate) struct CodexSessionRow {
@@ -94,13 +101,45 @@ impl FamilySpec for CodexSpec {
     }
 
     fn list_rows(&self, scan_root: &Path) -> Result<Vec<CodexSessionRow>> {
-        let files = crate::support::fs::enumerate_jsonl_files(scan_root)?;
-        scan_files(
-            files,
-            parse_session_index_row,
-            RowErrorPolicy::Abort,
-            "Codex",
-        )
+        let mut rows = Vec::new();
+        for root in transcript_roots(scan_root) {
+            rows.extend(scan_files(
+                rollout_files_in(&root)?,
+                parse_session_index_row,
+                RowErrorPolicy::Abort,
+                "Codex",
+            )?);
+        }
+        Ok(rows)
+    }
+
+    // 归档与压缩都改文件路径:归档把 rollout 在 sessions/ 与 archived_sessions/
+    // 之间移动,压缩是原地改名。两者只改父目录 mtime,引擎默认的「jsonl 文件
+    // mtime 最大值」看不见,所以 codex 自己走一遍两个根的整棵树。
+    fn index_freshness(&self, scan_root: &Path) -> Result<Freshness> {
+        let mut latest = 0;
+
+        for root in transcript_roots(scan_root) {
+            if !root.is_dir() {
+                continue;
+            }
+            latest = latest.max(crate::support::time::file_modified_timestamp_millis(&root)?);
+            // 遍历期间文件可能正好被压缩或归档搬走,取不到 metadata 的条目跳过
+            // 即可——搬运本身就会让父目录 mtime 变化,从而触发下一次重建。
+            for entry in WalkDir::new(&root)
+                .min_depth(1)
+                .into_iter()
+                .filter_map(std::result::Result::ok)
+            {
+                if let Ok(stamp) =
+                    crate::support::time::file_modified_timestamp_millis(entry.path())
+                {
+                    latest = latest.max(stamp);
+                }
+            }
+        }
+
+        Ok(Freshness::Stamp(latest))
     }
 
     fn group_families(&self, rows: Vec<CodexSessionRow>) -> Result<Vec<CodexSessionFamily>> {
@@ -145,7 +184,7 @@ impl FamilySpec for CodexSpec {
                 let mut messages = Vec::new();
                 let mut events = Vec::new();
 
-                for (index, line) in BufReader::new(File::open(&row.path)?).lines().enumerate() {
+                for (index, line) in transcript::open_lines(&row.path)?.lines().enumerate() {
                     let value = super::parse_json_line(&line?)?;
                     match parse_timeline_record(index, &value) {
                         Some(TimelineRecord::Message(message)) => messages.push(message),
@@ -200,6 +239,82 @@ impl FamilySpec for CodexSpec {
 }
 
 pub(crate) static BACKEND: FamilyReader<CodexSpec> = FamilyReader::new(CodexSpec, root);
+
+/// codex 的两个转录根:活跃的 `sessions/` 与并列的 `archived_sessions/`。
+/// 归档会话仍属于用户的会话历史,列表与用量都按同一份发现规则收进来。
+fn transcript_roots(scan_root: &Path) -> [PathBuf; 2] {
+    [
+        scan_root.to_path_buf(),
+        scan_root.with_file_name(ARCHIVED_SESSIONS_SUBDIR),
+    ]
+}
+
+/// usage 采集用的转录发现(engine 的列表扫描走 list_rows 的同名枚举)。
+pub(crate) fn transcript_paths(scan_root: &Path) -> Result<Vec<PathBuf>> {
+    let mut files = Vec::new();
+    for root in transcript_roots(scan_root) {
+        files.extend(rollout_files_in(&root)?);
+    }
+    Ok(files)
+}
+
+/// 单个根下的 rollout 文件:明文与压缩形态都算转录。同目录同时存在明文与
+/// 压缩兄弟文件时只认明文——上游读取侧就是明文优先
+/// (`rollout/src/compression.rs` should_skip_compressed_sibling),否则同一
+/// 会话会出两条行。
+fn rollout_files_in(root: &Path) -> Result<Vec<PathBuf>> {
+    if !root.is_dir() {
+        return Ok(Vec::new());
+    }
+
+    let mut plain = Vec::new();
+    let mut compressed = Vec::new();
+
+    for entry in WalkDir::new(root)
+        .into_iter()
+        .filter_map(std::result::Result::ok)
+    {
+        if !entry.file_type().is_file() {
+            continue;
+        }
+        let path = entry.into_path();
+        let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+
+        if name.ends_with(".jsonl") {
+            plain.push(path);
+        } else if name.ends_with(transcript::CODEX_COMPRESSED_SUFFIX) {
+            compressed.push(path);
+        }
+    }
+
+    let plain_paths: HashSet<PathBuf> = plain.iter().cloned().collect();
+    for path in compressed {
+        let sibling_name = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .and_then(|name| name.strip_suffix(transcript::CODEX_COMPRESSED_SUFFIX))
+            .map(|stem| format!("{stem}.jsonl"));
+
+        let shadowed = sibling_name
+            .map(|name| plain_paths.contains(&path.with_file_name(name)))
+            .unwrap_or(false);
+        if !shadowed {
+            plain.push(path);
+        }
+    }
+
+    Ok(plain)
+}
+
+// 归档会话由文件所在目录标识(见 ARCHIVED_SESSIONS_SUBDIR)。
+fn is_archived_path(path: &Path) -> bool {
+    path.parent()
+        .and_then(Path::file_name)
+        .and_then(|name| name.to_str())
+        == Some(ARCHIVED_SESSIONS_SUBDIR)
+}
 
 // 测试直接按根构造引擎实例:完全脱离进程 env 与全局锁,可并行。
 #[cfg(test)]
@@ -277,7 +392,7 @@ fn parse_session_index_row(path: &Path) -> Result<CodexSessionRow> {
     let mut agent_role = None;
     let mut is_resume_segment = false;
 
-    for line in BufReader::new(File::open(path)?).lines() {
+    for line in transcript::open_lines(path)?.lines() {
         let value = super::parse_json_line(&line?)?;
 
         if super::json_type(&value) != Some("session_meta") {
@@ -328,8 +443,15 @@ fn parse_session_index_row(path: &Path) -> Result<CodexSessionRow> {
         break;
     }
 
+    // 状态位取自扫描到的物理文件:压缩是命名形态,归档是所在目录。读取路径
+    // 统一经 transcript::resolve 归一,压缩/解压切换后旧路径仍能读。
+    summary.archived = is_archived_path(path);
+    summary.compressed = transcript::is_compressed(path);
+
     let mut summary = super::build_summary(SourceApp::Codex, path, summary)?;
-    summary.updated_at = Some(crate::support::time::file_modified_timestamp_millis(path)?);
+    summary.updated_at = Some(crate::support::time::file_modified_timestamp_millis(
+        &transcript::resolve(path),
+    )?);
 
     Ok(CodexSessionRow {
         path: path.to_path_buf(),
@@ -343,9 +465,13 @@ fn parse_session_index_row(path: &Path) -> Result<CodexSessionRow> {
 }
 
 fn parse_full_session_summary(path: &Path) -> Result<SessionSummary> {
-    let mut summary = SummaryAccumulator::default();
+    let mut summary = SummaryAccumulator {
+        archived: is_archived_path(path),
+        compressed: transcript::is_compressed(path),
+        ..Default::default()
+    };
 
-    for line in BufReader::new(File::open(path)?).lines() {
+    for line in transcript::open_lines(path)?.lines() {
         let value = super::parse_json_line(&line?)?;
         super::update_summary_timestamp(&mut summary, &value);
 
@@ -431,7 +557,7 @@ pub(crate) fn usage_hours(path: &Path) -> Result<UsageHourBuckets> {
     // 声明的模型,文件开头未声明时只进总量。
     let mut current_model: Option<String> = None;
 
-    for line in BufReader::new(File::open(path)?).lines() {
+    for line in transcript::open_lines(path)?.lines() {
         let value = super::parse_json_line(&line?)?;
         if super::json_type(&value) == Some("turn_context") {
             current_model = super::json_string(&value["payload"], &["model"]);
@@ -518,11 +644,11 @@ fn subagent_lifecycle_events(root_path: &Path, members: &[CodexSessionRow]) -> V
         .map(|row| (row.summary.source_session_id.clone(), row))
         .collect::<HashMap<_, _>>();
     let mut events = Vec::new();
-    let Ok(file) = File::open(root_path) else {
+    let Ok(reader) = transcript::open_lines(root_path) else {
         return events;
     };
 
-    for (index, line) in BufReader::new(file).lines().enumerate() {
+    for (index, line) in reader.lines().enumerate() {
         let Ok(line) = line else {
             continue;
         };

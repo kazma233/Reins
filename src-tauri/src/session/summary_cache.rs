@@ -20,7 +20,9 @@ use super::model::{SessionSummary, SourceApp};
 
 // 解析逻辑变更时（如标题提取规则调整）必须 bump 文件名里的版本号：
 // 旧版本库文件整体失效，新版本从空库全量重建一次。
-const DB_FILE_NAME: &str = "session-summary-cache_v2.db";
+// v3：summary 增加 archived/compressed 状态位，旧行反序列化后两个标志恒为
+// false，而缓存键只看 mtime，不重建就会一直漏掉角标。
+const DB_FILE_NAME: &str = "session-summary-cache_v3.db";
 
 /// 实例级句柄:目录随读取器引擎实例注入(测试传临时目录),连接惰性打开。
 /// SQL 与全局层同源,两张脸共享同一份库文件格式。
@@ -202,6 +204,8 @@ mod tests {
             created_at: Some(1),
             updated_at: Some(2),
             token_usage: None,
+            archived: false,
+            compressed: false,
         }
     }
 

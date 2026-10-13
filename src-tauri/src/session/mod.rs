@@ -22,6 +22,7 @@ pub(crate) mod reader_engine;
 pub(crate) mod sources;
 pub(crate) mod summary_cache;
 pub(crate) mod tool_blocks;
+pub(crate) mod transcript;
 pub(crate) mod usage_day_cache;
 pub(crate) mod usage_stats;
 pub(crate) mod zcode;
@@ -104,6 +105,28 @@ pub(crate) fn sqlite_table_exists(connection: &rusqlite::Connection, table: &str
     Ok(exists.is_some())
 }
 
+// 同上,列级探测:zcode/opencode 的归档列是后加的,老库没有该列只说明
+// 该来源还没有归档这一状态,读取器据此跳过,而不是让整条列表报错。
+pub(crate) fn sqlite_column_exists(
+    connection: &rusqlite::Connection,
+    table: &str,
+    column: &str,
+) -> Result<bool> {
+    let exists: Option<i64> = connection
+        .query_row(
+            "SELECT 1 FROM pragma_table_info(?1) WHERE name = ?2",
+            rusqlite::params![table, column],
+            |row| row.get(0),
+        )
+        .map(Some)
+        .or_else(|error| match error {
+            rusqlite::Error::QueryReturnedNoRows => Ok(None),
+            other => Err(other),
+        })
+        .with_context(|| format!("Failed to inspect sqlite column {table}.{column}"))?;
+    Ok(exists.is_some())
+}
+
 // 来源会话根的统一解析:走 agents 清单的 GlobalRoot(重定向优先、HOME
 // 兜底),与 workspace/providers 同一条路径来源——设了 CODEX_HOME 之类的
 // 重定向后,三个域看到同一份数据。pi 例外:它的根有官方 sessionDir 链等
@@ -118,11 +141,23 @@ pub(crate) fn spec_root(app: SourceApp) -> Result<PathBuf> {
         .ok_or_else(|| anyhow!("Unable to determine home directory"))
 }
 
-pub(crate) fn clear_all_caches() -> Result<()> {
+/// 重新扫盘:只丢内存层(目录索引、时间线、内存摘要),持久层不动。
+/// 刷新与删除走这条:文件集合与 mtime 的变化由索引失效与缓存键自己发现。
+pub(crate) fn rescan_all_caches() -> Result<()> {
     for spec in sources::SOURCES {
         spec.reader.clear_cache()?;
     }
-    // 持久缓存一并清空：用户触发的刷新是"全量重建"的逃生通道。
+    Ok(())
+}
+
+/// 全量重建的逃生通道(显式清缓存命令):持久层一并清空。
+///
+/// 持久摘要与用量缓存按 (路径, mtime) 自失效,清空它们并不是刷新正确性所需,
+/// 而是"怀疑缓存本身"时的手段;代价随会话总量增长——本机 codex 侧清一次要
+/// 重新解析 1329 个转录(27.6s),只丢内存层是 1.4s。解析逻辑变更走缓存文件
+/// 版本号 bump(summary_cache::DB_FILE_NAME),不靠这条路径。
+pub(crate) fn clear_all_caches() -> Result<()> {
+    rescan_all_caches()?;
     // 持久摘要跨来源共用同一份库文件，所以清一次即覆盖所有用到它的来源。
     summary_cache::SummaryDb::at_store_dir()?.clear_all();
     usage_day_cache::clear_all();

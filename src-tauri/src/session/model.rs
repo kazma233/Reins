@@ -220,6 +220,15 @@ pub(crate) struct SessionSummary {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub(crate) token_usage: Option<SessionTokenUsage>,
+    // 会话在当前来源里的存储状态,由各读取器按自家契约填写:
+    // archived = 来源已把会话移出默认集合(codex 移到 archived_sessions/、
+    // dsh 写进 workspace.json 的归档集、zcode/opencode 的 time_archived);
+    // compressed = 转录在磁盘上不是该来源的明文常态(codex 的 .jsonl.zst)。
+    // 无归档/无压缩契约的来源恒为 false(pi、grokbuild、claude code)。
+    #[serde(default)]
+    pub(crate) archived: bool,
+    #[serde(default)]
+    pub(crate) compressed: bool,
 }
 
 #[derive(Clone, Debug, Serialize, TS)]
@@ -400,4 +409,6 @@ pub(crate) struct SummaryAccumulator {
     pub(crate) created_at: Option<i64>,
     pub(crate) updated_at: Option<i64>,
     pub(crate) token_usage: Option<SessionTokenUsage>,
+    pub(crate) archived: bool,
+    pub(crate) compressed: bool,
 }

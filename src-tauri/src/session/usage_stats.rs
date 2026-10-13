@@ -21,9 +21,11 @@ use super::model::{
 #[derive(Clone, Copy)]
 pub(crate) enum UsageKind {
     /// jsonl 目录扫描 + mtime 命中持久缓存,未变更文件跳过整文件解析
-    /// (codex/claude/pi);扫描目录是来源根目录或其子目录。
+    /// (codex/claude/pi);扫描目录是来源根目录或其子目录,文件发现规则由
+    /// 来源自己声明——codex 的转录可能是压缩形态,归档目录也算会话。
     CachedJsonl {
         subdir: Option<&'static str>,
+        files: fn(&Path) -> Result<Vec<PathBuf>>,
         extract: fn(&Path) -> Result<UsageHourBuckets>,
     },
     /// 来源自带的转录文件列表,逐文件直接解析不走持久缓存
@@ -56,6 +58,7 @@ pub(crate) fn usage_stats_inner() -> Result<UsageStats> {
 pub(crate) fn days_from_cached_jsonl(
     source_app: SourceApp,
     root: PathBuf,
+    files: fn(&Path) -> Result<Vec<PathBuf>>,
     extract: fn(&Path) -> Result<UsageHourBuckets>,
 ) -> Result<Option<UsageSourceStats>> {
     if !root.exists() {
@@ -67,7 +70,7 @@ pub(crate) fn days_from_cached_jsonl(
     let mut session_count = 0usize;
     let mut today_session_count = 0usize;
 
-    for path in crate::support::fs::enumerate_jsonl_files(&root)? {
+    for path in files(&root)? {
         let mtime = match crate::support::time::file_modified_timestamp_millis(&path) {
             Ok(mtime) => mtime,
             Err(error) => {
