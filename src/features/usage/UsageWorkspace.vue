@@ -1,7 +1,9 @@
 <script setup lang="ts">
 import { computed, onMounted, watch } from "vue";
+import { useAppStore } from "../../app/stores/app";
 import AppCard from "@shared/ui/AppCard.vue";
 import AppSelect, { type AppSelectOption } from "@shared/ui/AppSelect.vue";
+import BackLink from "@shared/ui/BackLink.vue";
 import UsageMetricsRow from "./components/UsageMetricsRow.vue";
 import UsageTrendChart from "./components/UsageTrendChart.vue";
 import { useUsageState } from "./composables/useUsageState";
@@ -30,6 +32,8 @@ import {
 import type { UsageSourceStats } from "./types";
 import { totalConsumedTokens } from "../sessions/token-usage";
 import "./styles.css";
+
+const appStore = useAppStore();
 
 const {
   stats,
@@ -155,6 +159,7 @@ const chartSeries = computed(() =>
     <header class="usage-header">
       <div class="usage-header__inner">
         <div class="usage-header__main">
+          <BackLink @back="appStore.setAppMode('sessions')" />
           <h2 class="usage-header__title">用量统计</h2>
           <p class="usage-header__meta">按会话内消耗事件的实际时间归日统计</p>
         </div>
@@ -184,13 +189,14 @@ const chartSeries = computed(() =>
               {{ option.label }}
             </button>
           </div>
+          <!-- 加载中只置灰,不改文案:文案一变按钮宽度会跳 -->
           <button
             type="button"
             class="secondary-button usage-refresh-button"
             :disabled="loading"
             @click="loadUsageStats"
           >
-            {{ loading ? "扫描中…" : "刷新" }}
+            刷新
           </button>
         </div>
       </div>

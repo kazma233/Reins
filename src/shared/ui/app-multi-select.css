@@ -40,7 +40,7 @@
 }
 
 .app-multi-select__trigger--sm {
-  height: 30px;
+  height: var(--button-height-compact);
   font-size: var(--font-size-md);
 }
 
@@ -76,6 +76,8 @@
   font-size: var(--font-size-md);
 }
 
-.app-multi-select__option:hover {
-  background: var(--color-surface-soft);
+@media (hover: hover) {
+  .app-multi-select__option:hover {
+    background: var(--color-surface-soft);
+  }
 }

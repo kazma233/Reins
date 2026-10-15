@@ -1,3 +1,4 @@
+import { formatTokenCount } from "@shared/lib/format";
 import type { SessionTokenUsage } from "./types";
 
 // 会话 token 展示口径的唯一来源：会话列表 chip、会话详情、用量统计
@@ -31,4 +32,11 @@ export function formatCacheHitRate(rate: number | null): string {
   }
   const percent = Math.floor(rate * 1000) / 10;
   return Number.isInteger(percent) ? `${percent}%` : `${percent.toFixed(1)}%`;
+}
+
+// 会话列表的用量文案：总消耗 + 缓存命中率（分项明细留在详情页）。
+export function formatSessionUsage(usage: SessionTokenUsage): string {
+  return `⛁ ${formatTokenCount(totalConsumedTokens(usage))} (${formatCacheHitRate(
+    cacheHitRate(usage)
+  )})`;
 }

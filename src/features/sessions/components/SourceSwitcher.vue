@@ -15,13 +15,11 @@ type SourceSwitcherProps = {
   selectedSource: SourceSelection;
   disabled?: boolean;
   refreshing?: boolean;
-  loading?: boolean;
 };
 
 const props = withDefaults(defineProps<SourceSwitcherProps>(), {
   disabled: false,
-  refreshing: false,
-  loading: false
+  refreshing: false
 });
 
 const emit = defineEmits<{
@@ -54,16 +52,9 @@ const selectedValue = computed<string>({
 
 <template>
   <div class="source-switcher">
-    <div v-if="loading" class="source-switcher__loading" role="status" aria-label="正在检测会话来源" />
+    <!-- 刷新排在选择器左边:DOC 顺序与视觉、Tab 顺序一致(不用 CSS order 颠倒了
+         顺序却留下不同的键盘路径)。 -->
     <div class="source-switcher__control">
-      <AppSelect
-        v-model="selectedValue"
-        aria-label="选择会话来源"
-        class-name="source-switcher__select"
-        :disabled="disabled"
-        label="会话来源"
-        :options="options"
-      />
       <button
         :aria-label="refreshing ? '刷新中' : '刷新会话来源'"
         :class="joinClasses('source-switcher__refresh', refreshing && 'is-refreshing')"
@@ -73,6 +64,14 @@ const selectedValue = computed<string>({
       >
         {{ refreshing ? "刷新中" : "刷新" }}
       </button>
+      <AppSelect
+        v-model="selectedValue"
+        aria-label="选择会话来源"
+        class-name="source-switcher__select"
+        :disabled="disabled"
+        label="会话来源"
+        :options="options"
+      />
     </div>
   </div>
 </template>

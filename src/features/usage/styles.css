@@ -73,12 +73,16 @@
 }
 
 .usage-window-switcher__button {
-  padding: 6px 12px;
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--tab-height);
+  padding: 0 12px;
   border: none;
   background: transparent;
-  font-size: var(--font-size-xs, 11px);
+  font-size: var(--button-font-size);
   color: var(--color-body);
   cursor: pointer;
+  font-weight: var(--button-font-weight);
 }
 
 .usage-window-switcher__button + .usage-window-switcher__button {
@@ -91,7 +95,7 @@
 }
 
 .usage-refresh-button {
-  min-height: 30px;
+  min-height: var(--button-height);
 }
 
 .usage-error {

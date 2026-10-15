@@ -107,6 +107,15 @@ export type TextItem = {
   blocks: SessionMessage["blocks"];
 };
 
+// 「只看对话」把连续的思考/工具/错误过程行收成一组：主时间线上只留一行摘要，
+// 点开后仍是原来那些单条过程行（每条仍可单独展开）。过程行本身默认就是收起
+// 状态，不分组的话这个模式没有任何可见效果。
+export type ProcessGroupItem = {
+  kind: "process-group";
+  key: string;
+  items: TimelineItem[];
+};
+
 export type TimelineItem =
   | TextItem
   | ToolRowItem
@@ -114,7 +123,68 @@ export type TimelineItem =
   | SubagentGroupItem
   | CollapsedBlockItem
   | MessageErrorItem
-  | ImageItem;
+  | ImageItem
+  | ProcessGroupItem;
+
+// 「只看对话」管辖的过程行:思考/杂项块、工具调用、错误报文。
+// 文本(对话)、图片(用户附件)、子代理入口不在其中——子代理行本身就是一行入口,
+// 收进组里只会多一层点击。
+export function isProcessItem(item: TimelineItem): boolean {
+  return (
+    item.kind === "tool" ||
+    item.kind === "collapsed-block" ||
+    item.kind === "message-error"
+  );
+}
+
+// 连续过程行合并成一组,组的 key 取首项(同一批过程在多次渲染间保持一致)。
+// 单条过程也收进组:这个模式的承诺就是"只看对话",留下裸过程行会让结果与叫法
+// 不符;组行仍可点开,信息与操作都不少。
+export function groupProcessItems(items: TimelineItem[]): TimelineItem[] {
+  const grouped: TimelineItem[] = [];
+  let run: TimelineItem[] = [];
+
+  const flushRun = () => {
+    if (run.length > 0) {
+      grouped.push({ kind: "process-group", key: `${run[0].key}:process`, items: run });
+    }
+    run = [];
+  };
+
+  for (const item of items) {
+    if (isProcessItem(item)) {
+      run.push(item);
+      continue;
+    }
+    flushRun();
+    grouped.push(item);
+  }
+  flushRun();
+
+  return grouped;
+}
+
+// 组行摘要:各过程类别的条数,只列出现过的类别(顺序固定,便于比较)。
+export function processGroupSummary(items: TimelineItem[]): string {
+  const counts = { tool: 0, thinking: 0, error: 0 };
+  for (const item of items) {
+    if (item.kind === "tool") {
+      counts.tool += 1;
+    } else if (item.kind === "collapsed-block") {
+      counts.thinking += 1;
+    } else if (item.kind === "message-error") {
+      counts.error += 1;
+    }
+  }
+
+  const parts = [
+    counts.thinking > 0 ? `思考 ${counts.thinking}` : null,
+    counts.tool > 0 ? `工具 ${counts.tool}` : null,
+    counts.error > 0 ? `错误 ${counts.error}` : null
+  ].filter((part): part is string => part !== null);
+
+  return `${items.length} 项（${parts.join(" · ")}）`;
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
@@ -581,6 +651,9 @@ export function itemSearchText(item: TimelineItem): string {
     }
     case "subagent-group":
       parts.push(item.label, ...item.items.map(itemSearchText));
+      break;
+    case "process-group":
+      parts.push(...item.items.map(itemSearchText));
       break;
   }
   return parts

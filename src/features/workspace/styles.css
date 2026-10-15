@@ -106,9 +106,11 @@
 }
 
 .manager-nav__button {
-  min-height: 32px;
-  padding: 4px 10px;
+  min-height: var(--tab-height);
+  padding: 0 12px;
+  font-size: var(--button-font-size);
   cursor: pointer;
+  font-weight: var(--button-font-weight);
 }
 
 .manager-content {
@@ -417,10 +419,11 @@
 }
 
 .manager-skill-more-button {
-  min-height: 22px;
-  padding: 1px 7px;
+  min-height: var(--button-height-compact);
+  padding: 0 10px;
   border-radius: 0;
-  font-size: var(--font-size-sm);
+  font-size: var(--button-font-size-compact);
+  font-weight: var(--button-font-weight);
 }
 
 .manager-target-buttons {
@@ -454,16 +457,19 @@
 }
 
 .manager-target-button {
-  min-height: 26px;
-  padding: 3px 10px;
-  font-size: var(--font-size-sm);
+  min-height: var(--button-height-compact);
+  padding: 0 10px;
+  font-size: var(--button-font-size-compact);
   transition: box-shadow 0.16s ease;
+  font-weight: var(--button-font-weight);
 }
 
 /* 悬停只加浮起阴影：底色由 is-installed / is-warning / is-partial 等状态类
    决定，这里覆盖会在 hover 时抹掉状态色 */
-.manager-target-button:hover:not(:disabled) {
-  box-shadow: 0 1px 4px rgba(10, 11, 13, 0.12);
+@media (hover: hover) {
+  .manager-target-button:hover:not(:disabled) {
+    box-shadow: 0 1px 4px rgba(10, 11, 13, 0.12);
+  }
 }
 
 /* 已安装用圆点标记：扫视一列按钮时比底色更快识别 */
@@ -591,11 +597,12 @@
 }
 
 .manager-sync-target-group__action {
-  min-height: 22px;
-  padding: 1px 7px;
-  font-size: var(--font-size-xs);
+  min-height: var(--button-height-compact);
+  padding: 0 10px;
+  font-size: var(--button-font-size-compact);
   text-transform: none;
   letter-spacing: 0;
+  font-weight: var(--button-font-weight);
 }
 
 .manager-sync-target-row {
@@ -616,8 +623,10 @@
   border-bottom: 0;
 }
 
-.manager-sync-target-row:hover {
-  background-color: var(--color-surface-soft);
+@media (hover: hover) {
+  .manager-sync-target-row:hover {
+    background-color: var(--color-surface-soft);
+  }
 }
 
 .manager-sync-target-row input[type="checkbox"] {
@@ -719,8 +728,10 @@
   cursor: not-allowed;
 }
 
-.manager-sync-target-row--disabled:hover {
-  background-color: transparent;
+@media (hover: hover) {
+  .manager-sync-target-row--disabled:hover {
+    background-color: transparent;
+  }
 }
 
 .manager-sync-target-row--disabled input[type="checkbox"] {
@@ -839,9 +850,11 @@
   cursor: pointer;
 }
 
-.manager-sync-target-link__remove:hover:not(:disabled) {
-  color: var(--color-danger);
-  border-color: var(--color-danger);
+@media (hover: hover) {
+  .manager-sync-target-link__remove:hover:not(:disabled) {
+    color: var(--color-danger);
+    border-color: var(--color-danger);
+  }
 }
 
 .manager-sync-target-link__remove:disabled {
@@ -933,9 +946,10 @@
 }
 
 .manager-sync-column__action {
-  min-height: 24px;
-  padding: 2px 8px;
-  font-size: var(--font-size-sm);
+  min-height: var(--button-height-compact);
+  padding: 0 10px;
+  font-size: var(--button-font-size-compact);
+  font-weight: var(--button-font-weight);
 }
 
 /* 破坏性操作靠左，与右下角的“取消/开始同步”拉开距离，避免误点 */
@@ -1035,7 +1049,8 @@
 /* Search input inside sync dialog's skill column. */
 .manager-search-input {
   width: 100%;
-  padding: 6px 10px;
+  min-height: var(--control-height);
+  padding: 0 10px;
   border: 1px solid var(--color-hairline);
   border-radius: 6px;
   font-size: var(--font-size-md);
@@ -1099,8 +1114,8 @@
 }
 
 .manager-target-group__header .secondary-button {
-  min-height: 24px;
-  padding: 2px 8px;
+  min-height: var(--button-height-compact);
+  padding: 0 10px;
   font-size: var(--font-size-sm);
   text-transform: none;
   letter-spacing: 0;
@@ -1228,8 +1243,8 @@
 
 .manager-target-row__actions .secondary-button,
 .manager-target-row__actions .danger-button {
-  min-height: 26px;
-  padding: 3px 8px;
+  min-height: var(--button-height-compact);
+  padding: 0 10px;
   font-size: var(--font-size-sm);
 }
 
@@ -1333,9 +1348,10 @@
 
 .manager-skill-source-row__action {
   flex: 0 0 auto;
-  min-height: 26px;
-  padding: 3px 8px;
-  font-size: var(--font-size-sm);
+  min-height: var(--button-height-compact);
+  padding: 0 10px;
+  font-size: var(--button-font-size-compact);
+  font-weight: var(--button-font-weight);
 }
 
 .manager-pre {
@@ -1378,9 +1394,11 @@
   background: var(--color-canvas);
 }
 
+/* 页面留白与模型配置页对齐:顶部 14、两侧 16、底部 16;header 下 12 + 分隔线,
+   与 panel 的 16 一起构成参照页同样的 header→内容间距 */
 .manager-content {
-  gap: 24px;
-  padding: 24px 32px 32px;
+  gap: 16px;
+  padding: 14px 16px 16px;
   border: 0;
   border-radius: 0;
   background: var(--color-canvas);
@@ -1388,7 +1406,7 @@
 }
 
 .manager-content__header {
-  padding-bottom: 20px;
+  padding-bottom: 12px;
   border-bottom: 1px solid var(--color-hairline-soft);
 }
 
@@ -1456,10 +1474,12 @@
 
 /* 选中态悬停时保持主色底：secondary-button 的 hover 变灰规则优先级更高，
    不补这条会抹掉底色、只留白字在浅底上 */
-.manager-target-button.is-active:hover:not(:disabled) {
-  border-color: var(--color-primary);
-  background: var(--color-primary);
-  color: var(--color-on-primary);
+@media (hover: hover) {
+  .manager-target-button.is-active:hover:not(:disabled) {
+    border-color: var(--color-primary);
+    background: var(--color-primary);
+    color: var(--color-on-primary);
+  }
 }
 
 .manager-segmented__button:focus-visible,

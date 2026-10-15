@@ -25,7 +25,17 @@
   --radius-control: 8px;
   --radius-button: 8px;
   --control-height: 36px;
+  /* 按钮只有三档:页面级动作 36、标签/分段控件 32、行内小动作 28。
+     新增按钮请复用档位,不要再引入 22/24/26/30 这类一次性尺寸。 */
   --button-height: 36px;
+  --tab-height: 32px;
+  --button-height-compact: 28px;
+  /* 按钮文字同样只有两套:动作按钮(md/600)与标签、紧凑按钮(md 或 sm/500),
+     不按按钮各写一个字号字重。 */
+  --button-font-size: var(--font-size-md);
+  --button-font-size-compact: var(--font-size-sm);
+  --button-font-weight: 500;
+  --button-font-weight-strong: 600;
   --z-dialog: 100;
   /* 气泡挂在 body 上，需要盖过弹窗 */
   --z-tooltip: 1000;
@@ -86,8 +96,10 @@ button {
   background: var(--color-hairline);
 }
 
-::-webkit-scrollbar-thumb:hover {
-  background: var(--color-muted-soft);
+@media (hover: hover) {
+  ::-webkit-scrollbar-thumb:hover {
+    background: var(--color-muted-soft);
+  }
 }
 
 pre {

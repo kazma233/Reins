@@ -2,6 +2,7 @@
 import { computed, inject, ref, toRef, watch, type Ref } from "vue";
 import { refDebounced } from "@vueuse/core";
 import { getSessionAgentMessages } from "../api";
+import { useKeepAliveScroll } from "../composables/useKeepAliveScroll";
 import { useSessionDetailActions } from "../composables/useSessionDetailActions";
 import { useSessionTimeline } from "../composables/useSessionTimeline";
 import {
@@ -15,6 +16,7 @@ import {
 } from "../composables/session-detail-helpers";
 import {
   buildTimelineItems,
+  groupProcessItems,
   itemSearchText,
   type TimelineItem
 } from "../timeline-group";
@@ -23,6 +25,7 @@ import { useInfiniteScroll } from "@shared/lib/infinite-scroll";
 import { createRequestGuard } from "@shared/lib/request-guard";
 import { formatTimestamp, formatTokenCount } from "@shared/lib/format";
 import { formatSourceAppName } from "../source-app";
+import { formatSessionModels } from "../session-models";
 import { cacheHitRate, formatCacheHitRate } from "../token-usage";
 import SessionDetailDialogs from "./SessionDetailDialogs.vue";
 import MessageTimeline from "./MessageTimeline.vue";
@@ -64,6 +67,12 @@ const scrollContainer = inject<Ref<HTMLElement | null>>(
 const timelineTab = ref<"messages" | "events">("messages");
 const timelineFilter = ref("");
 const deferredTimelineFilter = refDebounced(timelineFilter, 300);
+// 只看对话:把连续的过程行(思考/工具/错误)收成一行摘要,点开仍是原有的过程行。
+// 过程行默认本就收起,不分组的话这个开关没有任何可见效果。
+const conversationOnly = ref(false);
+
+// 同 SessionList:模式切换后回到这条会话,阅读位置还在。
+useKeepAliveScroll("sessions-detail", () => scrollContainer.value);
 
 // --- timeline ---
 
@@ -143,6 +152,14 @@ const visibleItems = computed(() => {
   }
   return list;
 });
+
+// 渲染用序列：「只看对话」把连续的过程行收成组；筛选时不分组，命中项必须直接
+// 可见。标签计数仍用未分组的 visibleItems，否则分组会把"已显示 N 条消息"改小。
+const displayItems = computed(() =>
+  conversationOnly.value && normalizedTimelineFilter.value.length === 0
+    ? groupProcessItems(visibleItems.value)
+    : visibleItems.value
+);
 
 const filteredEvents = computed(() => {
   const filter = normalizedTimelineFilter.value;
@@ -373,7 +390,7 @@ useInfiniteScroll({
     <section class="detail-section">
       <div class="detail-header">
         <div class="detail-header-info">
-          <h2>{{ overview.summary.title }}</h2>
+          <h2 :title="overview.summary.title">{{ overview.summary.title }}</h2>
           <p :title="overview.summary.sourceSessionId">
             {{ overview.summary.sourceSessionId }}
           </p>
@@ -414,6 +431,10 @@ useInfiniteScroll({
         <div class="summary-grid__wide">
           <dt>工作目录</dt>
           <dd>{{ overview.summary.cwd ?? "未知" }}</dd>
+        </div>
+        <div v-if="overview.summary.models.length > 0" class="summary-grid__wide">
+          <dt>模型</dt>
+          <dd>{{ formatSessionModels(overview.summary.models) }}</dd>
         </div>
         <div v-if="overview.summary.tokenUsage" class="summary-grid__wide">
           <dt>Token 消耗</dt>
@@ -471,6 +492,22 @@ useInfiniteScroll({
             :placeholder="timelineFilterPlaceholder"
             type="search"
           />
+          <!-- 勾选开关而不是标签页:它不切换视图,只是把过程行收进组行。
+               只属于消息页,raw 页没有过程行可收,放在那里会点了没反应。 -->
+          <label
+            v-if="timelineTab === 'messages'"
+            :class="
+              `timeline-toggle-control conversation-toggle${conversationOnly ? ' active' : ''}`
+            "
+            :title="
+              conversationOnly
+                ? '取消只看对话，恢复逐条过程行'
+                : '只看对话：把思考与工具过程收成一行摘要，点开仍可逐条查看'
+            "
+          >
+            <input v-model="conversationOnly" type="checkbox" />
+            <span>只看对话</span>
+          </label>
         </div>
         <div v-if="agentOptions.length > 0" class="agent-tab-group">
           <button
@@ -488,8 +525,9 @@ useInfiniteScroll({
       <MessageTimeline
         v-if="timelineTab === 'messages'"
         :active-detail="overview"
+        :conversation-only="conversationOnly"
         :empty-text="emptyVisibleMessageText"
-        :items="visibleItems"
+        :items="displayItems"
         :message-error="messageError"
         :messages-loading="messagesLoading"
         :visible-message-label="visibleMessageLabel"

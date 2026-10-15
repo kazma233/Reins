@@ -45,6 +45,11 @@
 }
 
 .detail-header h2 {
+  /* 同上:标题不按字符数截断,只挡极端长的粘贴内容;全文在 tooltip */
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 6;
+  overflow: hidden;
   font-size: var(--font-size-xl);
   font-weight: 600;
   line-height: 1.4;
@@ -184,15 +189,16 @@
 
 .timeline-controls {
   position: sticky;
-  top: -24px;
+  /* 吸附在详情页顶栏(返回入口)之下:偏移量为 0 时,滚动中是紧贴正文列顶部,
+     不会钻到顶栏下面被切掉。负外边距是旧的带内边距面板留下的,现在留白由
+     .content-panel__inner 统一给。 */
+  top: 0;
   z-index: 2;
   display: flex;
   flex-direction: column;
   gap: 8px;
-  margin: -24px -32px 14px;
-  /* 顶部留白必须由工具栏自身的 padding 提供：吸附时条带背景盖住顶端，
-     若改用 sticky top 留缝，滚动内容会从缝隙里穿出来。 */
-  padding: 8px 32px 14px;
+  margin: 0 0 14px;
+  padding: 8px 0 14px;
   border-bottom: 1px solid var(--color-hairline-soft);
   background: var(--color-canvas);
 }
@@ -210,7 +216,8 @@
 .timeline-search-input {
   flex: 1 1 200px;
   min-width: 0;
-  padding: 5px 10px;
+  min-height: var(--control-height);
+  padding: 0 10px;
   border: 1px solid var(--color-hairline);
   border-radius: var(--radius-control);
   background: var(--color-canvas);
@@ -231,6 +238,41 @@
 
 .timeline-toggle-control {
   margin-left: auto;
+  flex: 0 0 auto;
+}
+
+/* 「只看对话」:勾选框而不是标签页——它不切换视图,只是把过程行收进组行。
+   原生 checkbox 承载勾选语义与无障碍名称,样式沿用工具栏的控件语言。 */
+.conversation-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: var(--tab-height);
+  padding: 0 12px;
+  border: 1px solid var(--color-hairline);
+  border-radius: var(--radius-button);
+  background: var(--color-canvas);
+  color: var(--color-body);
+  font-size: var(--button-font-size);
+  white-space: nowrap;
+  cursor: pointer;
+  font-weight: var(--button-font-weight);
+}
+
+@media (hover: hover) {
+  .conversation-toggle:hover {
+    background: var(--color-surface-soft);
+  }
+}
+
+.conversation-toggle.active {
+  border-color: var(--color-primary);
+  color: var(--color-primary);
+}
+
+.conversation-toggle input {
+  margin: 0;
+  accent-color: var(--color-primary);
 }
 
 .agent-tab-group {
@@ -249,20 +291,25 @@
 }
 
 .timeline-tab {
-  padding: 5px 10px;
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--tab-height);
+  padding: 0 12px;
   border: 1px solid var(--color-hairline);
   border-radius: var(--radius-button);
   background: var(--color-canvas);
   color: var(--color-muted);
-  font-size: var(--font-size-md);
-  font-weight: 500;
+  font-size: var(--button-font-size);
+  font-weight: var(--button-font-weight);
   cursor: pointer;
   transition: background 0.15s, color 0.15s;
 }
 
-.timeline-tab:hover {
-  border-color: var(--color-hairline);
-  background: var(--color-surface-soft);
+@media (hover: hover) {
+  .timeline-tab:hover {
+    border-color: var(--color-hairline);
+    background: var(--color-surface-soft);
+  }
 }
 
 .timeline-tab.active {
@@ -456,8 +503,10 @@
   text-decoration: none;
 }
 
-.message-markdown a:hover {
-  text-decoration: underline;
+@media (hover: hover) {
+  .message-markdown a:hover {
+    text-decoration: underline;
+  }
 }
 
 .message-markdown hr {
@@ -478,8 +527,10 @@
   cursor: pointer;
 }
 
-.text-button:hover {
-  color: var(--color-primary-active);
+@media (hover: hover) {
+  .text-button:hover {
+    color: var(--color-primary-active);
+  }
 }
 
 .event-card {
@@ -672,6 +723,35 @@
   padding: 2px 4px;
 }
 
+/* 只看对话下的过程组:一行摘要,展开后逐条过程,左侧竖线标出从属关系 */
+.flow-process-group__body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 6px 0 0 10px;
+  padding-left: 10px;
+  border-left: 2px solid var(--color-hairline);
+}
+
+/* 组行摘要沿用过程行的外观,靠行首 tag 区分 */
+.flow-tool-row.process-group {
+  background: rgba(124, 130, 138, 0.08);
+}
+
+/* 消息级模型标签:挂在输入与输出上,过程行不挂;同一消息只在首段文本出现一次。
+   对齐跟随所在消息——助手文本靠左,用户气泡靠右,否则标签会飘到对面像挂在别人身上。 */
+.flow-model {
+  align-self: flex-start;
+  color: var(--color-muted);
+  font-size: var(--font-size-xs);
+  font-variant-numeric: tabular-nums;
+}
+
+.flow-user .flow-model {
+  align-self: flex-end;
+  color: rgba(0, 82, 255, 0.72);
+}
+
 .flow-tool-row {
   display: flex;
   align-items: center;
@@ -747,8 +827,10 @@
   word-break: break-word;
 }
 
-.flow-tool-row:hover {
-  background: var(--color-surface-strong);
+@media (hover: hover) {
+  .flow-tool-row:hover {
+    background: var(--color-surface-strong);
+  }
 }
 
 
@@ -856,8 +938,10 @@
   cursor: pointer;
 }
 
-.flow-subagent-row:hover {
-  background: rgba(0, 82, 255, 0.09);
+@media (hover: hover) {
+  .flow-subagent-row:hover {
+    background: rgba(0, 82, 255, 0.09);
+  }
 }
 
 .flow-subagent-name {

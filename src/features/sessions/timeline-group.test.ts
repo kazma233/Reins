@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
   buildTimelineItems,
+  groupProcessItems,
   itemSearchText,
+  processGroupSummary,
   type TimelineItem
 } from "./timeline-group";
 import type { ContentBlock, SessionMessage } from "./types";
@@ -466,5 +468,97 @@ describe("buildTimelineItems", () => {
     expect(error.text).toBe("This operation was aborted");
     expect(error.detailText).toContain("deepseek-flash");
     expect(itemSearchText(error)).toContain("operation was aborted");
+  });
+});
+
+describe("groupProcessItems", () => {
+  function tool(key: string): TimelineItem {
+    return {
+      kind: "tool",
+      key,
+      toolName: "bash",
+      label: "运行命令",
+      summary: "ls",
+      detailText: null,
+      status: "ok"
+    };
+  }
+
+  function thinking(key: string): TimelineItem {
+    return { kind: "collapsed-block", key, text: "先看目录", label: "思考", markdown: true };
+  }
+
+  function text(key: string, role: "user" | "assistant"): TimelineItem {
+    return {
+      kind: "text",
+      key,
+      role,
+      message: message(key, role, []),
+      blocks: []
+    };
+  }
+
+  it("连续过程行合并成一组,孤立的单条过程也收进组", () => {
+    const items = groupProcessItems([
+      text("t1", "user"),
+      tool("a"),
+      thinking("b"),
+      tool("c"),
+      text("t2", "assistant"),
+      tool("d")
+    ]);
+
+    // 开启只看对话后时间线里不再出现裸过程行:信息都在组行里。
+    expect(items.map((item) => item.kind)).toEqual([
+      "text",
+      "process-group",
+      "text",
+      "process-group"
+    ]);
+    const group = items[1] as Extract<TimelineItem, { kind: "process-group" }>;
+    expect(group.key).toBe("a:process");
+    expect(group.items.map((item) => item.key)).toEqual(["a", "b", "c"]);
+
+    const lone = items[3] as Extract<TimelineItem, { kind: "process-group" }>;
+    expect(lone.key).toBe("d:process");
+    expect(lone.items.map((item) => item.key)).toEqual(["d"]);
+  });
+
+  it("对话、图片与子代理入口都是分组边界", () => {
+    const image: TimelineItem = { kind: "image", key: "img", reference: "data:image/png;base64,AA", payload: null };
+    const subagent: TimelineItem = {
+      kind: "subagent",
+      key: "sa",
+      label: "子代理",
+      status: "ok",
+      title: null,
+      run: { agent: "researcher", nestedMessages: [] }
+    };
+
+    const items = groupProcessItems([tool("a"), image, tool("b"), subagent, tool("c")]);
+
+    // 图片与子代理入口把过程切成三段,每段各自成组,顺序不变。
+    expect(items.map((item) => item.kind)).toEqual([
+      "process-group",
+      "image",
+      "process-group",
+      "subagent",
+      "process-group"
+    ]);
+    expect(
+      items.map((item) => (item.kind === "process-group" ? item.items[0].key : item.key))
+    ).toEqual(["a", "img", "b", "sa", "c"]);
+  });
+
+  it("没有过程行时序列不变", () => {
+    const items = groupProcessItems([text("t1", "user"), text("t2", "assistant")]);
+    expect(items.map((item) => item.key)).toEqual(["t1", "t2"]);
+  });
+
+  it("摘要只列出现过的类别", () => {
+    expect(processGroupSummary([tool("a"), tool("b"), thinking("c")])).toBe(
+      "3 项（思考 1 · 工具 2）"
+    );
+    expect(processGroupSummary([tool("a")])).toBe("1 项（工具 1）");
   });
 });

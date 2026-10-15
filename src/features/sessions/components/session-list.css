@@ -6,91 +6,11 @@
   gap: 12px;
 }
 
-.session-filter-field {
-  display: flex;
-  flex: 0 0 auto;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.session-filter-controls {
-  display: flex;
-  align-items: stretch;
-  gap: 10px;
-}
-
-.session-filter-label {
-  color: var(--color-body);
-  font-size: var(--font-size-md);
-}
-
-.session-filter-field input {
-  width: 100%;
-  min-width: 0;
-  flex: 1 1 auto;
-  min-height: var(--control-height);
-  padding: 7px 10px;
-  border: 1px solid var(--color-hairline);
-  border-radius: var(--radius-control);
-  background: var(--color-canvas);
-  color: var(--color-ink);
-  font-size: var(--font-size-lg);
-  line-height: 1.4;
-}
-
-.session-filter-field input::placeholder {
-  color: var(--color-muted);
-}
-
-.session-filter-field input:focus {
-  outline: 2px solid rgba(0, 82, 255, 0.22);
-  outline-offset: 1px;
-  border-color: var(--color-primary);
-}
-
 .session-list-refresh-status {
   flex: 0 0 auto;
   padding: 4px 2px;
   color: var(--color-muted);
   font-size: var(--font-size-sm);
-}
-
-.session-sort-button {
-  display: inline-flex;
-  flex: 0 0 auto;
-  align-items: center;
-  justify-content: center;
-  width: var(--button-height);
-  height: var(--button-height);
-  align-self: center;
-  padding: 0;
-  border: 1px solid var(--color-hairline);
-  border-radius: var(--radius-button);
-  background: var(--color-canvas);
-  color: var(--color-muted);
-  cursor: pointer;
-  transition: background 0.15s, border-color 0.15s, color 0.15s;
-}
-
-.session-sort-button:hover {
-  background: var(--color-surface-soft);
-  color: var(--color-ink);
-}
-
-.session-sort-button.active {
-  border-color: var(--color-primary);
-  background: var(--color-primary);
-  color: var(--color-on-primary);
-}
-
-.session-sort-button:focus-visible {
-  outline: 2px solid rgba(0, 82, 255, 0.22);
-  outline-offset: 1px;
-}
-
-.session-sort-icon {
-  width: 18px;
-  height: 18px;
 }
 
 .session-list {
@@ -104,6 +24,7 @@
 }
 
 .session-card {
+  /* 标题整行铺开,附加信息在它下一行;窄窗口只换行不截断 */
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -129,11 +50,14 @@
 }
 
 .session-card-title {
-  /* 两行截断,完整标题放条目 tooltip;overflow 与 -webkit-box 配套才有省略号。 */
+  /* 标题按字符数不再截断,整行换行展示全文;行数上限只为挡住把整段粘贴内容
+     当标题的会话(实测有个 1.1 万字符的 HTTP 报文标题),普通标题远不到 4 行。
+     完整标题始终在条目 tooltip 上。 */
   display: -webkit-box;
   -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
+  -webkit-line-clamp: 4;
   overflow: hidden;
+  min-width: 0;
   font-size: var(--font-size-lg);
   font-weight: 400;
   line-height: 1.4;
@@ -144,12 +68,13 @@
   background: var(--color-canvas);
 }
 
+/* 附加信息一行 flex:时间 / 模型 / 状态角标 / 使用量,放不下整项换行,
+   不拆散单个角标里的文字。 */
 .session-meta-row {
   display: flex;
-  align-items: baseline;
-  justify-content: space-between;
+  align-items: center;
   flex-wrap: wrap;
-  gap: 2px 12px;
+  gap: 6px 12px;
 }
 
 .session-meta-row small {
@@ -174,14 +99,6 @@
   font-variant-numeric: tabular-nums;
 }
 
-/* 时间戳与状态角标同组靠左,与右侧 token 指标分居两端;角标沿用详情页的
-   pill 语言(灰=转录已压缩、黄=已归档),行高与时间戳一致,不撑高列表行。 */
-.session-meta-left {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-}
-
 .session-state-chip {
   display: inline-flex;
   align-items: center;
@@ -197,6 +114,19 @@
 .session-state-chip--archived {
   background: rgba(234, 138, 31, 0.14);
   color: #b45309;
+}
+
+/* 模型角标比状态角标长：过长时省略号截断，不挤掉右侧 token 指标。
+   改回 inline-block 才能让 text-overflow 生效（inline-flex 的文本是匿名
+   flex 项，容器上的 text-overflow 不参与它的渲染）。 */
+.session-state-chip--model {
+  display: inline-block;
+  max-width: 20ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  background: rgba(0, 82, 255, 0.1);
+  color: var(--color-primary);
 }
 
 .session-list-footer {
@@ -232,8 +162,10 @@
   cursor: pointer;
 }
 
-.session-list-error-retry:hover {
-  color: var(--color-primary-active);
+@media (hover: hover) {
+  .session-list-error-retry:hover {
+    color: var(--color-primary-active);
+  }
 }
 
 .session-list-empty {
@@ -241,8 +173,3 @@
   margin-right: -6px;
 }
 
-@media (max-width: 1180px) {
-  .session-list-shell {
-    max-height: 34vh;
-  }
-}

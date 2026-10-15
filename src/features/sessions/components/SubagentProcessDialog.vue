@@ -94,7 +94,12 @@ const usageChips = computed<Array<{ label: string; value: string }>>(() => {
     </div>
     <pre v-if="run.errorMessage" class="subagent-run-stderr">{{ run.errorMessage }}</pre>
     <pre v-if="run.stderr" class="subagent-run-stderr">{{ run.stderr }}</pre>
-    <SubagentFlow v-if="items.length > 0" :items="items" />
+    <!-- 过程弹窗固定展开：只看对话是主时间线的浏览模式。 -->
+    <SubagentFlow
+      v-if="items.length > 0"
+      :conversation-only="false"
+      :items="items"
+    />
     <p v-else class="muted-text">该运行没有留下过程消息。</p>
   </DialogShell>
 </template>

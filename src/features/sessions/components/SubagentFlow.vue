@@ -10,6 +10,8 @@ import ToolRow from "./ToolRow.vue";
 // 弹窗内不会再出现子代理入口，故不分发 subagent 单元；其余单元与主时间线保持一致。
 type SubagentFlowProps = {
   items: TimelineItem[];
+  // 弹窗是"看这次过程"的语境，不跟随主时间线的只看对话开关，由调用方显式给值。
+  conversationOnly: boolean;
 };
 
 defineProps<SubagentFlowProps>();
@@ -29,9 +31,21 @@ defineProps<SubagentFlowProps>();
           :kind="block.kind"
         />
       </div>
-      <ToolRow v-else-if="item.kind === 'tool'" :item="item" />
-      <CollapsedBlockRow v-else-if="item.kind === 'collapsed-block'" :item="item" />
-      <MessageErrorRow v-else-if="item.kind === 'message-error'" :item="item" />
+      <ToolRow
+        v-else-if="item.kind === 'tool'"
+        :conversation-only="conversationOnly"
+        :item="item"
+      />
+      <CollapsedBlockRow
+        v-else-if="item.kind === 'collapsed-block'"
+        :conversation-only="conversationOnly"
+        :item="item"
+      />
+      <MessageErrorRow
+        v-else-if="item.kind === 'message-error'"
+        :conversation-only="conversationOnly"
+        :item="item"
+      />
       <ImageRow v-else-if="item.kind === 'image'" :item="item" />
     </template>
   </div>

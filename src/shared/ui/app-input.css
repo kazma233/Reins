@@ -28,7 +28,7 @@
 }
 
 .app-input--sm {
-  height: 30px;
-  padding: 0 8px;
+  height: var(--button-height-compact);
+  padding: 0 10px;
   font-size: var(--font-size-md);
 }

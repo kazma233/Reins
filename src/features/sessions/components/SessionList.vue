@@ -1,10 +1,13 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from "vue";
 import { joinClasses } from "@shared/lib/join-classes";
-import { formatTimestamp, formatTokenCount } from "@shared/lib/format";
+import { formatTimestamp } from "@shared/lib/format";
 import { useInfiniteScroll } from "@shared/lib/infinite-scroll";
+import { useKeepAliveScroll } from "../composables/useKeepAliveScroll";
 import { sessionIdentityKey } from "../stores/session";
-import { totalConsumedTokens } from "../token-usage";
+import { formatSessionUsage } from "../token-usage";
+import { formatSourceAppName } from "../source-app";
+import { formatSessionModels, sessionModelsBadge } from "../session-models";
 import type { SessionSummary } from "../types";
 import "./session-list.css";
 
@@ -22,9 +25,13 @@ type SessionListProps = {
   // 状态机的最近成功请求 key;null 表示还没有成功加载过。
   resultKey: string | null;
   reverse: boolean;
+  // 跨来源合并视图才需要标出每条会话属于哪个工具;单一来源下是冗余信息。
+  showAgent?: boolean;
 };
 
-const props = defineProps<SessionListProps>();
+const props = withDefaults(defineProps<SessionListProps>(), {
+  showAgent: false
+});
 
 // 存储状态角标:各来源共用同一套文案。归档=来源自己把会话移出了默认列表
 // (Codex 的 archived_sessions/、DSH 的归档集、ZCode/OpenCode 的归档时间),
@@ -34,14 +41,24 @@ const ARCHIVED_HINT = "该会话已被工具自身归档，默认不出现在它
 const COMPRESSED_LABEL = "已压缩";
 const COMPRESSED_HINT = "转录以压缩形式存储的冷会话，打开时会先解压。";
 
+// 模型角标：主模型 + 其余数量，完整清单放 title；没有模型信息的会话不占位。
+function modelsBadge(session: SessionSummary): string | null {
+  return sessionModelsBadge(session.models);
+}
+
+function modelsHint(session: SessionSummary): string {
+  return `模型：${formatSessionModels(session.models)}`;
+}
+
 const emit = defineEmits<{
   loadMore: [];
-  queryChange: [query: string];
-  reverseChange: [reverse: boolean];
   select: [sessionKey: string];
 }>();
 
 const listRef = ref<HTMLDivElement | null>(null);
+
+// 模式切换(如去用量统计)会缓存这个视图,列表滚动位置跟着一起留。
+useKeepAliveScroll("sessions-list", () => listRef.value);
 
 const hasSessions = computed(() => props.sessions.length > 0);
 const showSkeletonRows = computed(() => props.loading && !hasSessions.value);
@@ -85,54 +102,10 @@ useInfiniteScroll({
   ]
 });
 
-function handleQueryInput(event: Event) {
-  emit("queryChange", (event.target as HTMLInputElement).value);
-}
-
-function handleReverseClick() {
-  emit("reverseChange", !props.reverse);
-}
 </script>
 
 <template>
   <div class="panel-shell session-list-shell">
-    <label class="session-filter-field">
-      <span class="session-filter-label">筛选会话</span>
-      <div class="session-filter-controls">
-        <input
-          :placeholder="'按标题或 Session ID 模糊搜索'"
-          type="search"
-          :value="query"
-          @input="handleQueryInput"
-        />
-        <button
-          :aria-label="reverse ? '切换为当前排序' : '切换为反向排序'"
-          :class="joinClasses('session-sort-button', reverse && 'active')"
-          :title="
-            reverse
-              ? '当前为反向排序，点击恢复默认排序'
-              : '当前为默认排序，点击切换为反向排序'
-          "
-          type="button"
-          @click="handleReverseClick"
-        >
-          <svg
-            aria-hidden="true"
-            class="session-sort-icon"
-            fill="none"
-            viewBox="0 0 20 20"
-          >
-            <path
-              d="M7 4V16M7 16L4.5 13.5M7 16L9.5 13.5M13 16V4M13 4L10.5 6.5M13 4L15.5 6.5"
-              stroke="currentColor"
-              stroke-linecap="round"
-              stroke-linejoin="round"
-              stroke-width="1.7"
-            />
-          </svg>
-        </button>
-      </div>
-    </label>
     <div v-if="loading" class="session-list-refresh-status">
       {{ loadingLabel }}
     </div>
@@ -176,27 +149,34 @@ function handleReverseClick() {
           <span class="session-card-title" :title="session.title">{{
             session.title
           }}</span>
+          <!-- 附加信息在标题下一行铺开:时间 / 模型 / 状态角标 / 使用量 -->
           <div class="session-meta-row">
-            <small class="session-meta-left">
-              <span>{{ formatTimestamp(session.updatedAt) }}</span>
-              <span
-                v-if="session.archived"
-                :title="ARCHIVED_HINT"
-                class="session-state-chip session-state-chip--archived"
-                >{{ ARCHIVED_LABEL }}</span
-              >
-              <span
-                v-if="session.compressed"
-                :title="COMPRESSED_HINT"
-                class="session-state-chip"
-                >{{ COMPRESSED_LABEL }}</span
-              >
-            </small>
-            <small
-              v-if="session.tokenUsage"
-              class="session-token-usage"
+            <small class="session-meta-time">{{
+              formatTimestamp(session.updatedAt)
+            }}</small>
+            <small v-if="showAgent" class="session-meta-agent">{{
+              formatSourceAppName(session.sourceApp)
+            }}</small>
+            <span
+              v-if="modelsBadge(session)"
+              :title="modelsHint(session)"
+              class="session-state-chip session-state-chip--model"
+              >{{ modelsBadge(session) }}</span
             >
-              <span>⛁ {{ formatTokenCount(totalConsumedTokens(session.tokenUsage)) }}</span>
+            <span
+              v-if="session.archived"
+              :title="ARCHIVED_HINT"
+              class="session-state-chip session-state-chip--archived"
+              >{{ ARCHIVED_LABEL }}</span
+            >
+            <span
+              v-if="session.compressed"
+              :title="COMPRESSED_HINT"
+              class="session-state-chip"
+              >{{ COMPRESSED_LABEL }}</span
+            >
+            <small v-if="session.tokenUsage" class="session-token-usage">
+              <span>{{ formatSessionUsage(session.tokenUsage) }}</span>
             </small>
           </div>
         </button>

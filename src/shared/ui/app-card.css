@@ -47,8 +47,8 @@
 /* ext 内操作按钮统一小尺寸，与各页签卡片动作按钮一致 */
 .app-card__ext .secondary-button,
 .app-card__ext .danger-button {
-  min-height: 26px;
-  padding: 3px 8px;
+  min-height: var(--button-height-compact);
+  padding: 0 10px;
   font-size: var(--font-size-sm);
 }
 

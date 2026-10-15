@@ -15,6 +15,8 @@ import SessionList from "./components/SessionList.vue";
 import SourceSwitcher from "./components/SourceSwitcher.vue";
 import { createPagedList, type PagedResult } from "./composables/createPagedList";
 import { sessionIdentityKey, useSessionStore } from "./stores/session";
+import { useAppStore } from "../../app/stores/app";
+import { joinClasses } from "@shared/lib/join-classes";
 import { ALL_SOURCES, isSourceApp, type SourceSelection } from "./source-app";
 import type { SessionPage, SessionSummary, SourceStatus } from "./types";
 import { extractErrorMessage } from "@shared/lib/errors";
@@ -25,6 +27,7 @@ const SESSION_PAGE_SIZE = 20;
 const SESSION_QUERY_DEBOUNCE_MS = 200;
 
 const sessionStore = useSessionStore();
+const appStore = useAppStore();
 const {
   deletePlan,
   loadingDetail,
@@ -58,6 +61,10 @@ const loadMoreError = ref<string | null>(null);
 // the store default (e.g. "codex") — setSelectedSource no-ops on equal values,
 // so the watcher would otherwise never fire on first mount.
 const bootstrapToken = ref(0);
+
+// 列表与详情是两个整屏视图:列表页点会话进详情页,详情页的返回入口回到列表。
+// 选中态仍留在 store 里,返回列表时那一行保持高亮,再次进入同一条会话不重拉。
+const view = ref<"list" | "detail">("list");
 
 const contentPanelRef = ref<HTMLElement | null>(null);
 // Share the scroll container with SessionDetail via provide/inject — template
@@ -365,17 +372,43 @@ function handleSourceChange(nextSource: SourceSelection) {
   sessionStore.setSelectedSource(nextSource);
 }
 
+function handleQueryInput(event: Event) {
+  sessionQuery.value = (event.target as HTMLInputElement).value;
+}
+
+function handleReverseClick() {
+  reverseSessions.value = !reverseSessions.value;
+}
+
+function openSession(sessionKey: string) {
+  sessionStore.setSelectedSessionKey(sessionKey);
+  view.value = "detail";
+}
+
+function backToList() {
+  view.value = "list";
+}
+
+// 会话统计是另一个顶层视图(用量统计),这里只做跳转,不复制它的状态。
+function openUsageStats() {
+  appStore.setAppMode("usage");
+}
+
 async function handleSessionDeleted() {
   clearSelectedSession({ invalidateDetailRequest: true });
+  // 详情页对应的会话已不存在,回到列表再看刷新结果。
+  view.value = "list";
   await handleRefresh();
 }
 </script>
 
 <template>
-  <main class="app-shell">
-    <aside class="sidebar">
-      <div class="sidebar-fixed">
-        <header class="sidebar-header">
+  <main class="sessions-shell">
+    <!-- 列表页:整屏宽度,来源与筛选在顶部,列表自身滚动 -->
+    <section v-if="view === 'list'" class="sessions-list-page">
+      <div class="sessions-list-page__inner">
+        <!-- 顶栏一行:来源切换 + 筛选/排序(整屏宽度下不再需要两行) -->
+        <header class="sessions-list-header">
           <SourceSwitcher
             :disabled="
               refreshing ||
@@ -383,13 +416,68 @@ async function handleSessionDeleted() {
               loadingSessions ||
               loadingMoreSessions
             "
-            :loading="loadingSources"
             :refreshing="refreshing"
             :selected-source="selectedSource"
             :sources="sources"
             @change="handleSourceChange"
             @refresh="handleRefresh"
           />
+          <div class="sessions-filter">
+            <input
+              aria-label="筛选会话"
+              placeholder="按标题或 Session ID 模糊搜索"
+              type="search"
+              :value="sessionQuery"
+              @input="handleQueryInput"
+            />
+            <button
+              :aria-label="reverseSessions ? '切换为当前排序' : '切换为反向排序'"
+              :class="joinClasses('sessions-filter__sort', reverseSessions && 'active')"
+              :title="
+                reverseSessions
+                  ? '当前为反向排序，点击恢复默认排序'
+                  : '当前为默认排序，点击切换为反向排序'
+              "
+              type="button"
+              @click="handleReverseClick"
+            >
+              <svg
+                aria-hidden="true"
+                class="sessions-filter__icon"
+                fill="none"
+                viewBox="0 0 20 20"
+              >
+                <path
+                  d="M7 4V16M7 16L4.5 13.5M7 16L9.5 13.5M13 16V4M13 4L10.5 6.5M13 4L15.5 6.5"
+                  stroke="currentColor"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  stroke-width="1.7"
+                />
+              </svg>
+            </button>
+          </div>
+          <button
+            class="secondary-button sessions-stats-button"
+            type="button"
+            @click="openUsageStats"
+          >
+            <!-- lucide trending-up:与左栏"用量统计"同一个图标 -->
+            <svg
+              aria-hidden="true"
+              class="sessions-stats-button__icon"
+              fill="none"
+              stroke="currentColor"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              stroke-width="2"
+              viewBox="0 0 24 24"
+            >
+              <path d="M22 7 13.5 15.5 8.5 10.5 2 17" />
+              <path d="M16 7h6v6" />
+            </svg>
+            会话统计
+          </button>
         </header>
         <AppLoadError
           v-if="sourceError"
@@ -397,46 +485,69 @@ async function handleSessionDeleted() {
           :retrying="loadingSources"
           @retry="retryDetectSources"
         />
+        <AppLoadError
+          v-if="listError"
+          :message="listError"
+          :retrying="loadingSessions"
+          @retry="reloadSessionList"
+        />
+        <!-- 来源检测期间:加载动画放正文中心,不再挂在顶栏上 -->
+        <div
+          v-if="loadingSources"
+          aria-label="正在检测会话来源"
+          class="sessions-loading"
+          role="status"
+        >
+          <span class="sessions-loading__bar" />
+        </div>
+        <SessionList
+          v-else
+          :has-more="hasMoreSessions"
+          :load-more-error="loadMoreError"
+          :loading="loadingSessions"
+          :loading-more="loadingMoreSessions"
+          :query="sessionQuery"
+          :query-key="debouncedSessionQuery"
+          :result-key="sessionListResultKey"
+          :reverse="reverseSessions"
+          :selected-session-key="selectedSessionKey"
+          :sessions="sessions"
+          :show-agent="selectedSource === ALL_SOURCES"
+          :source-key="selectedSource"
+          :total-count="sessionTotalCount"
+          @load-more="handleLoadMoreSessions"
+          @select="openSession"
+        />
       </div>
-      <AppLoadError
-        v-if="listError"
-        :message="listError"
-        :retrying="loadingSessions"
-        @retry="reloadSessionList"
-      />
-      <SessionList
-        :has-more="hasMoreSessions"
-        :load-more-error="loadMoreError"
-        :loading="loadingSessions"
-        :loading-more="loadingMoreSessions"
-        :query="sessionQuery"
-        :query-key="debouncedSessionQuery"
-        :result-key="sessionListResultKey"
-        :reverse="reverseSessions"
-        :selected-session-key="selectedSessionKey"
-        :sessions="sessions"
-        :source-key="selectedSource"
-        :total-count="sessionTotalCount"
-        @load-more="handleLoadMoreSessions"
-        @query-change="(q: string) => (sessionQuery = q)"
-        @reverse-change="(r: boolean) => (reverseSessions = r)"
-        @select="(k: string) => sessionStore.setSelectedSessionKey(k)"
-      />
-    </aside>
-    <section ref="contentPanelRef" class="content-panel">
-      <AppLoadError
-        v-if="detailError"
-        :message="detailError"
-        :retrying="loadingDetail"
-        @retry="retryLoadDetail"
-      />
-      <SessionDetail
-        v-else
-        :delete-plan="deletePlan"
-        :loading="loadingDetail"
-        :overview="sessionOverview"
-        @deleted="handleSessionDeleted"
-      />
+    </section>
+
+    <!-- 详情页:整屏展示整个会话;返回入口在常驻顶栏,正文自己滚动 -->
+    <section v-else class="detail-page">
+      <header class="detail-page__bar">
+        <div class="detail-page__bar-inner">
+          <button class="detail-page__back" type="button" @click="backToList">
+            <span aria-hidden="true">←</span>
+            返回会话列表
+          </button>
+        </div>
+      </header>
+      <div ref="contentPanelRef" class="content-panel">
+        <div class="content-panel__inner">
+          <AppLoadError
+            v-if="detailError"
+            :message="detailError"
+            :retrying="loadingDetail"
+            @retry="retryLoadDetail"
+          />
+          <SessionDetail
+            v-else
+            :delete-plan="deletePlan"
+            :loading="loadingDetail"
+            :overview="sessionOverview"
+            @deleted="handleSessionDeleted"
+          />
+        </div>
+      </div>
     </section>
   </main>
 </template>

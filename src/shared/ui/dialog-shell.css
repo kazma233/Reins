@@ -84,10 +84,12 @@
   cursor: pointer;
 }
 
-.dialog-close-button:hover {
-  color: var(--color-ink);
-  border-color: var(--color-primary);
-  background: var(--color-surface-soft);
+@media (hover: hover) {
+  .dialog-close-button:hover {
+    color: var(--color-ink);
+    border-color: var(--color-primary);
+    background: var(--color-surface-soft);
+  }
 }
 
 .dialog-close-button:disabled {
@@ -162,8 +164,8 @@
   border-radius: var(--radius-button);
   cursor: pointer;
   white-space: nowrap;
-  font-size: var(--font-size-md);
-  font-weight: 600;
+  font-size: var(--button-font-size);
+  font-weight: var(--button-font-weight-strong);
   line-height: 1.2;
   transition:
     border-color 0.16s ease,
@@ -205,24 +207,32 @@
     0 1px 2px rgba(10, 11, 13, 0.08);
 }
 
-.primary-button:hover:not(:disabled) {
-  background: var(--color-primary-active);
-  border-color: var(--color-primary-active);
+@media (hover: hover) {
+  .primary-button:hover:not(:disabled) {
+    background: var(--color-primary-active);
+    border-color: var(--color-primary-active);
+  }
 }
 
-.secondary-button:hover:not(:disabled) {
-  background: var(--color-surface-soft);
-  border-color: var(--color-muted-soft);
+@media (hover: hover) {
+  .secondary-button:hover:not(:disabled) {
+    background: var(--color-surface-soft);
+    border-color: var(--color-muted-soft);
+  }
 }
 
-.danger-button:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--color-danger) 6%, transparent);
-  border-color: var(--color-danger);
+@media (hover: hover) {
+  .danger-button:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--color-danger) 6%, transparent);
+    border-color: var(--color-danger);
+  }
 }
 
-.warning-button:hover:not(:disabled) {
-  background: #c5771a;
-  border-color: #c5771a;
+@media (hover: hover) {
+  .warning-button:hover:not(:disabled) {
+    background: #c5771a;
+    border-color: #c5771a;
+  }
 }
 
 .primary-button:active {

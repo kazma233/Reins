@@ -33,7 +33,8 @@ const titleId = "subagent-group-dialog-title";
     <p v-else-if="error" class="error-text">{{ error }}</p>
     <template v-else>
       <p class="muted-text subagent-group-dialog-meta">{{ items.length }} 条消息</p>
-      <SubagentFlow :items="items" />
+      <!-- 过程弹窗固定展开：只看对话是主时间线的浏览模式。 -->
+      <SubagentFlow :conversation-only="false" :items="items" />
       <p v-if="items.length === 0" class="muted-text">该子代理暂无内容。</p>
     </template>
   </DialogShell>

@@ -44,20 +44,22 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-height: 32px;
-  padding: 4px 14px;
+  min-height: var(--tab-height);
+  padding: 0 12px;
   border: 1px solid var(--color-hairline);
   border-radius: var(--radius-button);
   background: var(--color-surface-soft, rgba(255, 255, 255, 0.9));
   color: var(--color-body);
-  font-size: var(--font-size-md);
-  font-weight: 600;
+  font-size: var(--button-font-size);
+  font-weight: var(--button-font-weight);
   cursor: pointer;
 }
 
-.providers-nav__button:hover {
-  border-color: var(--color-primary);
-  color: var(--color-primary);
+@media (hover: hover) {
+  .providers-nav__button:hover {
+    border-color: var(--color-primary);
+    color: var(--color-primary);
+  }
 }
 
 .providers-nav__button.is-active {
@@ -348,7 +350,7 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  min-height: 30px;
+  min-height: var(--button-height-compact);
   cursor: pointer;
 }
 
@@ -461,9 +463,10 @@
 
 /* 提供商按钮缩小尺寸，避免在标签旁显得过于笨重 */
 .providers-app__chip {
-  min-height: 26px;
-  padding: 3px 10px;
-  font-size: var(--font-size-sm);
+  min-height: var(--button-height-compact);
+  padding: 0 10px;
+  font-size: var(--button-font-size-compact);
+  font-weight: var(--button-font-weight);
 }
 
 .providers-app__meta {
@@ -494,19 +497,22 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-height: 26px;
-  padding: 2px 10px;
+  min-height: var(--button-height-compact);
+  padding: 0 10px;
   border: 1px solid var(--color-hairline);
   border-radius: var(--radius-button);
   background: var(--color-canvas);
   color: var(--color-body);
-  font-size: var(--font-size-sm);
+  font-size: var(--button-font-size-compact);
   cursor: pointer;
+  font-weight: var(--button-font-weight);
 }
 
-.providers-mini-button:hover {
-  border-color: var(--color-primary);
-  color: var(--color-primary);
+@media (hover: hover) {
+  .providers-mini-button:hover {
+    border-color: var(--color-primary);
+    color: var(--color-primary);
+  }
 }
 
 .providers-mini-button:disabled {
@@ -518,10 +524,12 @@
   color: var(--color-danger);
 }
 
-.providers-mini-button--danger:hover {
-  border-color: var(--color-danger);
-  background: rgba(207, 32, 47, 0.06);
-  color: var(--color-danger);
+@media (hover: hover) {
+  .providers-mini-button--danger:hover {
+    border-color: var(--color-danger);
+    background: rgba(207, 32, 47, 0.06);
+    color: var(--color-danger);
+  }
 }
 
 .providers-entry-row {
@@ -538,8 +546,10 @@
 }
 
 /* 悬停时整行泛起浅背景，帮助长列表扫读定位；负 margin 让高亮出格到面板内边距。 */
-.providers-entry-row:hover {
-  background: var(--color-surface-soft);
+@media (hover: hover) {
+  .providers-entry-row:hover {
+    background: var(--color-surface-soft);
+  }
 }
 
 .providers-entry-row__head {
