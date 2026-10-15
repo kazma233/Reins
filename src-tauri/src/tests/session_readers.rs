@@ -1303,11 +1303,180 @@ fn codex_title_strips_markdown_link_syntax() -> Result<()> {
 
     let entries = session::codex::engine_at(root, temp_store()).list_entries()?;
     assert_eq!(entries.len(), 1);
-    // 链接语法必须剥掉只留 label，否则 72 字符截断后标题全是 [label](url)。
+    // 链接语法必须剥掉只留 label，否则标题全是 [label](url)、看不到实际文本。
     assert_eq!(
         entries[0].summary.as_ref().expect("summary").title,
         "$mongo-slow-log-report 帮我看下这份skill有没有问题"
     );
 
+    Ok(())
+}
+
+// 会话级模型来自 session_meta 的 provider + turn_context 的逐轮模型;
+// 消息级按轮归属,用户输入落在该轮的回答模型上。
+#[test]
+fn codex_models_follow_provider_and_turn_context() -> Result<()> {
+    let dir = env::temp_dir().join(format!("reins-codex-models-{}", Uuid::new_v4()));
+    let sessions = dir.join("sessions");
+    fs::create_dir_all(&sessions)?;
+
+    let session_id = "55555555-5555-4555-8555-555555555555";
+    let transcript = sessions.join(format!("rollout-2026-05-01T09-00-00-{session_id}.jsonl"));
+    write_jsonl(
+        &transcript,
+        &[
+            json!({
+                "timestamp": "2026-05-01T09:00:00.000Z",
+                "type": "session_meta",
+                "payload": {
+                    "id": session_id,
+                    "cwd": "/tmp/reins/workspace",
+                    "model_provider": "custom"
+                }
+            }),
+            // 首轮:turn_context 声明模型,之后的用户输入与回答都归它。
+            json!({
+                "timestamp": "2026-05-01T09:00:01.000Z",
+                "type": "turn_context",
+                "payload": { "cwd": "/tmp/reins/workspace", "model": "gpt-5.6-terra" }
+            }),
+            json!({
+                "timestamp": "2026-05-01T09:00:02.000Z",
+                "type": "response_item",
+                "payload": {
+                    "type": "message",
+                    "role": "user",
+                    "content": [{ "type": "input_text", "text": "First question" }]
+                }
+            }),
+            json!({
+                "timestamp": "2026-05-01T09:00:03.000Z",
+                "type": "response_item",
+                "payload": {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{ "type": "output_text", "text": "First answer" }]
+                }
+            }),
+            // 次轮换成另一个模型。
+            json!({
+                "timestamp": "2026-05-01T09:00:04.000Z",
+                "type": "turn_context",
+                "payload": { "cwd": "/tmp/reins/workspace", "model": "deepseek-flash" }
+            }),
+            json!({
+                "timestamp": "2026-05-01T09:00:05.000Z",
+                "type": "response_item",
+                "payload": {
+                    "type": "message",
+                    "role": "user",
+                    "content": [{ "type": "input_text", "text": "Second question" }]
+                }
+            }),
+            json!({
+                "timestamp": "2026-05-01T09:00:06.000Z",
+                "type": "response_item",
+                "payload": {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{ "type": "output_text", "text": "Second answer" }]
+                }
+            }),
+        ],
+    )?;
+
+    let reader = session::codex::engine_at(dir.clone(), temp_store());
+    let summary = reader.parse_summary(session_id)?;
+    assert_eq!(
+        summary.models,
+        vec![
+            SessionModel::new(Some("custom"), "gpt-5.6-terra"),
+            SessionModel::new(Some("custom"), "deepseek-flash"),
+        ]
+    );
+
+    let detail = read_detail(&reader, session_id)?;
+    let models: Vec<(String, Option<String>)> = detail
+        .messages
+        .iter()
+        .filter(|message| message.role == "user" || message.role == "assistant")
+        .map(|message| {
+            let model = message.model.as_ref().expect("每轮都有声明");
+            (model.model.clone(), model.provider.clone())
+        })
+        .collect();
+    assert_eq!(
+        models,
+        vec![
+            ("gpt-5.6-terra".to_string(), Some("custom".to_string())),
+            ("gpt-5.6-terra".to_string(), Some("custom".to_string())),
+            ("deepseek-flash".to_string(), Some("custom".to_string())),
+            ("deepseek-flash".to_string(), Some("custom".to_string())),
+        ]
+    );
+
+    fs::remove_dir_all(&dir).ok();
+    Ok(())
+}
+
+// SQL 来源的会话级模型按 assistant 消息预聚合,消息级取该次调用的 data.model;
+// 用户输入没有模型,落到这一轮回答的模型上。
+#[test]
+fn opencode_models_come_from_assistant_message_data() -> Result<()> {
+    let root = env::temp_dir().join(format!("reins-opencode-models-{}", Uuid::new_v4()));
+    let session_id = "ses_models_root";
+    seed_opencode_family_at(&root, session_id, "ses_models_child")?;
+
+    let connection = Connection::open(root.join("opencode.db"))?;
+    seed_opencode_message_row(
+        &connection,
+        session_id,
+        "root-msg-2",
+        1_744_366_402_000,
+        2,
+        "assistant",
+        &json!({
+            "time": { "created": 1_744_366_402_000_i64 },
+            "model": { "providerID": "tokenflux", "id": "gpt-5.5" },
+            "content": [{ "type": "text", "text": "Root answer" }],
+        }),
+    )?;
+    seed_opencode_message_row(
+        &connection,
+        "ses_models_child",
+        "child-msg-2",
+        1_744_366_403_000,
+        2,
+        "assistant",
+        &json!({
+            "time": { "created": 1_744_366_403_000_i64 },
+            "model": { "providerID": "tokenflux", "id": "gpt-5.6-terra" },
+            "content": [{ "type": "text", "text": "Child follow-up" }],
+        }),
+    )?;
+
+    let reader = session::opencode::engine_at(root.clone(), temp_store());
+    let summary = reader.parse_summary(session_id)?;
+    // family 级:子会话自己的 assistant 模型也计入,root 的排在最前。
+    assert_eq!(
+        summary.models,
+        vec![
+            SessionModel::new(Some("tokenflux"), "gpt-5.5"),
+            SessionModel::new(Some("tokenflux"), "gpt-5.6-terra"),
+        ]
+    );
+
+    let detail = read_detail(&reader, session_id)?;
+    let question = detail
+        .messages
+        .iter()
+        .find(|message| message.id == "root-msg-1")
+        .expect("user message");
+    assert_eq!(
+        question.model,
+        Some(SessionModel::new(Some("tokenflux"), "gpt-5.5"))
+    );
+
+    fs::remove_dir_all(&root).ok();
     Ok(())
 }

@@ -165,6 +165,7 @@ pub(crate) fn build_summary(
         created_at: summary.created_at,
         updated_at: summary.updated_at,
         token_usage: summary.token_usage,
+        models: summary.models.into_models(),
         archived: summary.archived,
         compressed: summary.compressed,
     })

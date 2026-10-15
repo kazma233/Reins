@@ -11,7 +11,7 @@ use serde_json::{Value, json};
 use uuid::Uuid;
 
 use crate::session;
-use crate::session::model::{SessionEvent, SessionMessage, SessionSummary, SourceApp};
+use crate::session::model::{SessionEvent, SessionMessage, SessionModel, SessionSummary, SourceApp};
 use crate::state;
 use crate::support;
 use crate::test_support::TestEnvGuard;

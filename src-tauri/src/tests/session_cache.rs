@@ -1,10 +1,11 @@
 use super::*;
 use crate::session::SessionReader;
 
-const CACHE_DB_RELATIVE_PATH: &str = ".reins/session-summary-cache_v3.db";
-
+// 缓存库文件名只维护一份:版本 bump 时这里跟着走,不会各自漂移。
 fn cache_db_path(temp_home: &Path) -> PathBuf {
-    temp_home.join(CACHE_DB_RELATIVE_PATH)
+    temp_home
+        .join(".reins")
+        .join(session::summary_cache::DB_FILE_NAME)
 }
 
 fn cache_row_count(temp_home: &Path) -> Result<i64> {
@@ -128,6 +129,7 @@ fn cached_summary() -> SessionSummary {
         created_at: Some(1),
         updated_at: Some(2),
         token_usage: None,
+        models: Vec::new(),
         archived: false,
         compressed: false,
     }

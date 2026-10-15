@@ -16,7 +16,7 @@ use super::reader_engine::{
 };
 use super::tool_blocks::{self, ToolShape};
 use super::{
-    ContentBlock, DeletePlanAction, SessionEvent, SessionMessage, SessionSummary,
+    ContentBlock, DeletePlanAction, SessionEvent, SessionMessage, SessionModel, SessionSummary,
     SessionTokenUsage, SourceApp,
     delete::{DeletePlanInput, run_official_cli},
     usage_stats::SqlUsageHours,
@@ -34,6 +34,8 @@ pub(crate) struct OpenCodeSessionRow {
     time_archived: Option<i64>,
     // 一次 GROUP BY 查询按 session_id 预聚合,避免列表逐会话全表扫。
     token_usage: Option<SessionTokenUsage>,
+    // 会话用过的模型,同样按 session_id 预聚合;主模型排在最前。
+    models: Vec<SessionModel>,
     // "db路径:id" 组合串:list_rows 时按实例 scan_root 的 db 生成,作为该
     // 记录的稳定展示 key(行来自 SQLite,没有真实转录文件)。
     path: PathBuf,
@@ -142,6 +144,7 @@ impl FamilySpec for OpenCodeSpec {
             created_at: Some(root.time_created),
             updated_at: Some(root.time_updated),
             token_usage: None,
+            models: root.models.clone(),
             archived: root.time_archived.is_some(),
             // OpenCode v2 的转录只存在 sqlite(session_message.data 为明文
             // JSON),没有压缩形态。
@@ -152,6 +155,10 @@ impl FamilySpec for OpenCodeSpec {
     // usage 已在索引扫描时按 session_id 预聚合,family 总量交给引擎默认求和。
     fn row_usage(&self, row: &OpenCodeSessionRow) -> Option<SessionTokenUsage> {
         row.token_usage
+    }
+
+    fn row_models(&self, row: &OpenCodeSessionRow) -> Vec<SessionModel> {
+        row.models.clone()
     }
 
     // 时间线失效:max(db mtime, family updated_at)。
@@ -187,6 +194,13 @@ impl FamilySpec for OpenCodeSpec {
                     ));
                 }
 
+                // assistant 消息的 data.model 是这次调用实际用的模型。
+                let model = super::json_string(&row.value["model"], &["id"]).map(|id| {
+                    SessionModel::new(
+                        super::json_string(&row.value["model"], &["providerID"]).as_deref(),
+                        &id,
+                    )
+                });
                 messages_by_session
                     .entry(row.session_id.clone())
                     .or_default()
@@ -195,6 +209,7 @@ impl FamilySpec for OpenCodeSpec {
                         role: row.kind.clone(),
                         timestamp: message_row_timestamp(&row),
                         blocks,
+                        model,
                         session_id: Some(row.session_id.clone()),
                     });
             } else {
@@ -380,6 +395,7 @@ fn list_session_rows(scan_root: &Path) -> Result<Vec<OpenCodeSessionRow>> {
     }
 
     let token_usages = session_token_usages(&connection)?;
+    let models_by_session = session_models(&connection)?;
     // time_archived 由 v1→v2 迁移期加入,老库可能没有该列;缺失时列表照常
     // 产出,归档位恒假。
     let archived_column = super::sqlite_column_exists(&connection, "session_v2", "time_archived")?;
@@ -388,8 +404,11 @@ fn list_session_rows(scan_root: &Path) -> Result<Vec<OpenCodeSessionRow>> {
     } else {
         "NULL"
     };
+    // model 同样是迁移期加入的列,老库探测后缺失时按无模型处理。
+    let model_column = super::sqlite_column_exists(&connection, "session_v2", "model")?;
+    let model_expr = if model_column { "model" } else { "NULL" };
     let mut statement = connection.prepare(&format!(
-        "SELECT id, parent_id, directory, title, time_created, time_updated, {archived_expr} FROM session_v2 ORDER BY time_updated DESC",
+        "SELECT id, parent_id, directory, title, time_created, time_updated, {archived_expr}, {model_expr} FROM session_v2 ORDER BY time_updated DESC",
     ))?;
     // session_v2.title 允许 NULL（v1 时代 NOT NULL），空标题回退到 id，
     // 避免 family 标题渲染成空白。
@@ -400,6 +419,26 @@ fn list_session_rows(scan_root: &Path) -> Result<Vec<OpenCodeSessionRow>> {
         // v2 会话只存在于 SQLite，没有 transcript 文件；用 "db路径:id" 组合串
         // 作为该记录的稳定 key。整体不是真实路径，path_key 会走原样字符串分支。
         let path = PathBuf::from(format!("{}:{}", db_path.display(), id));
+        let models = match models_by_session.get(&id) {
+            Some(models) => models.clone(),
+            // 还没有 assistant 消息的新会话:session_v2.model 是当前选中的模型,
+            // 是这时唯一能取到的模型信息。
+            None => row
+                .get::<_, Option<String>>(7)?
+                .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
+                .map(|model| {
+                    super::json_string(&model, &["id"])
+                        .map(|id| {
+                            SessionModel::new(
+                                super::json_string(&model, &["providerID"]).as_deref(),
+                                &id,
+                            )
+                        })
+                        .into_iter()
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default(),
+        };
         Ok(OpenCodeSessionRow {
             title: title
                 .filter(|title| !title.is_empty())
@@ -411,12 +450,55 @@ fn list_session_rows(scan_root: &Path) -> Result<Vec<OpenCodeSessionRow>> {
             time_updated: row.get(5)?,
             time_archived: row.get(6)?,
             token_usage,
+            models,
             path,
         })
     })?;
 
     rows.collect::<std::result::Result<Vec<_>, _>>()
         .context("Failed to read OpenCode sessions")
+}
+
+// 会话用过的模型按 session_id 预聚合:同模型可能换过 provider,一并计入。
+// 计数只用于排序(主模型排最前),调用次数相同则按模型名稳定排序。
+fn session_models(connection: &Connection) -> Result<HashMap<String, Vec<SessionModel>>> {
+    if !super::sqlite_table_exists(connection, "session_message")? {
+        return Ok(HashMap::new());
+    }
+
+    let mut statement = connection
+        .prepare(
+            "SELECT session_id,
+                    json_extract(data, '$.model.providerID'),
+                    json_extract(data, '$.model.id'),
+                    COUNT(*) AS calls
+             FROM session_message
+             WHERE type = 'assistant'
+               AND json_extract(data, '$.model.id') IS NOT NULL
+             GROUP BY session_id, 2, 3
+             ORDER BY session_id, calls DESC, 3",
+        )
+        .context("Failed to prepare OpenCode model query")?;
+
+    let rows = statement
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, Option<String>>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        })
+        .context("Failed to read OpenCode models")?;
+
+    let mut models = HashMap::<String, Vec<SessionModel>>::new();
+    for row in rows {
+        let (session_id, provider, model) = row?;
+        models
+            .entry(session_id)
+            .or_default()
+            .push(SessionModel::new(provider.as_deref(), &model));
+    }
+    Ok(models)
 }
 
 // assistant 消息的 data.tokens 是每次调用的增量,按会话求和;reasoning 与
@@ -719,7 +801,7 @@ fn v2_event_summary(kind: &str, value: &Value) -> String {
         if let Some(text) = super::json_string(value, &[key]) {
             let normalized = super::normalize_title(text);
             if !normalized.is_empty() {
-                return format!("{kind}: {normalized}");
+                return super::truncate_summary(format!("{kind}: {normalized}"));
             }
         }
     }

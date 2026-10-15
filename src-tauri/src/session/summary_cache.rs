@@ -22,7 +22,10 @@ use super::model::{SessionSummary, SourceApp};
 // 旧版本库文件整体失效，新版本从空库全量重建一次。
 // v3：summary 增加 archived/compressed 状态位，旧行反序列化后两个标志恒为
 // false，而缓存键只看 mtime，不重建就会一直漏掉角标。
-const DB_FILE_NAME: &str = "session-summary-cache_v3.db";
+// v4：summary 增加 models（会话用过的模型与供应商），同理旧行恒为空。
+// v5：标题不再截断（normalize_title 去掉了 72 字符上限），旧的截断标题
+// 同样会被 mtime 缓存一直沿用。
+pub(crate) const DB_FILE_NAME: &str = "session-summary-cache_v5.db";
 
 /// 实例级句柄:目录随读取器引擎实例注入(测试传临时目录),连接惰性打开。
 /// SQL 与全局层同源,两张脸共享同一份库文件格式。
@@ -204,6 +207,7 @@ mod tests {
             created_at: Some(1),
             updated_at: Some(2),
             token_usage: None,
+            models: Vec::new(),
             archived: false,
             compressed: false,
         }

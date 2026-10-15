@@ -15,8 +15,8 @@ use super::reader_engine::{
 };
 use super::transcript;
 use super::{
-    ContentBlock, SessionEvent, SessionMessage, SessionSummary, SessionTokenUsage, SourceApp,
-    UsageHourBuckets,
+    ContentBlock, ModelTally, SessionEvent, SessionMessage, SessionModel, SessionSummary,
+    SessionTokenUsage, SourceApp, UsageHourBuckets,
 };
 
 pub(crate) static BACKEND: FamilyReader<DshSpec> = FamilyReader::new(DshSpec, sessions_root);
@@ -52,6 +52,7 @@ struct DshTranscript {
     first_user_title: Option<String>,
     last_event_time: i64,
     usage_total: Option<SessionTokenUsage>,
+    models: Vec<SessionModel>,
     usage_buckets: UsageHourBuckets,
     catalog_children: Vec<CatalogChild>,
 }
@@ -130,9 +131,10 @@ fn build_timeline(header: DshHeader, events: &[Value]) -> DshTranscript {
     let mut usage_total = None;
     let mut usage_buckets = UsageHourBuckets::new();
     let mut catalog_children = Vec::new();
-    // model/selection 声明后续 assistant 消息使用的模型,selection 变更后
-    // 新消息归属新模型。
-    let mut current_model: Option<String> = None;
+    let mut models = ModelTally::default();
+    // 每次请求的 request/context 声明本次调用用的模型与供应商;更早的版本只写
+    // model/selection(切换时声明),两种都认,以后出现的为准。
+    let mut current_model: Option<SessionModel> = None;
 
     for (index, value) in events.iter().enumerate() {
         let kind = super::json_type(value).unwrap_or("unknown");
@@ -143,8 +145,10 @@ fn build_timeline(header: DshHeader, events: &[Value]) -> DshTranscript {
             .unwrap_or(last_event_time);
         last_event_time = last_event_time.max(time);
         let data = value.get("data").cloned().unwrap_or(Value::Null);
-        if kind == "model/selection" {
-            current_model = super::json_string(&data, &["model"]);
+        if kind == "model/selection" || kind == "request/context" {
+            current_model = super::json_string(&data, &["model"]).map(|model| {
+                SessionModel::new(super::json_string(&data, &["provider"]).as_deref(), &model)
+            });
         }
         let item_id = |prefix: &str| {
             format!(
@@ -173,6 +177,7 @@ fn build_timeline(header: DshHeader, events: &[Value]) -> DshTranscript {
                             role: "user".to_string(),
                             timestamp: Some(time),
                             blocks,
+                            model: None,
                             session_id: Some(session_id.clone()),
                         };
                         push_surface_item(&mut items, seq, surface_op, Some(message), None);
@@ -182,6 +187,7 @@ fn build_timeline(header: DshHeader, events: &[Value]) -> DshTranscript {
                     // 转事件展示,不进消息时间线。
                     let summary = first_content_text(&data)
                         .map(super::normalize_title)
+                        .map(super::truncate_summary)
                         .unwrap_or_else(|| source_kind.clone());
                     let event = surface_event(
                         &item_id("event"),
@@ -200,9 +206,12 @@ fn build_timeline(header: DshHeader, events: &[Value]) -> DshTranscript {
                     super::merge_usage_event(
                         &mut usage_buckets,
                         super::hour_key(time),
-                        current_model.as_deref(),
+                        current_model.as_ref().map(|model| model.model.as_str()),
                         usage,
                     );
+                }
+                if let Some(model) = current_model.as_ref() {
+                    models.record(model.provider.as_deref(), &model.model);
                 }
                 let blocks = assistant_blocks(&data);
                 if !blocks.is_empty() {
@@ -211,6 +220,7 @@ fn build_timeline(header: DshHeader, events: &[Value]) -> DshTranscript {
                         role: "assistant".to_string(),
                         timestamp: Some(time),
                         blocks,
+                        model: current_model.clone(),
                         session_id: Some(session_id.clone()),
                     };
                     push_surface_item(&mut items, seq, surface_op, Some(message), None);
@@ -246,6 +256,7 @@ fn build_timeline(header: DshHeader, events: &[Value]) -> DshTranscript {
                     role: "tool".to_string(),
                     timestamp: Some(time),
                     blocks: vec![block],
+                    model: None,
                     session_id: Some(session_id.clone()),
                 };
                 push_surface_item(&mut items, seq, surface_op, Some(result), None);
@@ -253,6 +264,7 @@ fn build_timeline(header: DshHeader, events: &[Value]) -> DshTranscript {
             "system/message" | "developer/message" => {
                 let summary = message_first_text(&data)
                     .map(super::normalize_title)
+                    .map(super::truncate_summary)
                     .unwrap_or_else(|| kind.to_string());
                 let event = surface_event(
                     &item_id("event"),
@@ -309,18 +321,23 @@ fn build_timeline(header: DshHeader, events: &[Value]) -> DshTranscript {
         }
     }
 
+    // 用户输入出现在该轮的 request/context 之前,按"由这一轮的回答服务"补归属。
+    let mut messages: Vec<SessionMessage> = items
+        .messages
+        .into_iter()
+        .map(|(_, message)| message)
+        .collect();
+    super::fill_user_message_models(&mut messages);
+
     DshTranscript {
         header,
-        messages: items
-            .messages
-            .into_iter()
-            .map(|(_, message)| message)
-            .collect(),
+        messages,
         events: items.events.into_iter().map(|(_, event)| event).collect(),
         title,
         first_user_title,
         last_event_time,
         usage_total,
+        models: models.into_models(),
         usage_buckets,
         catalog_children,
     }
@@ -659,6 +676,7 @@ struct DshSessionRow {
     created_at: i64,
     updated_at: i64,
     token_usage: Option<SessionTokenUsage>,
+    models: Vec<SessionModel>,
     catalog_children: Vec<CatalogChild>,
     archived: bool,
 }
@@ -793,6 +811,10 @@ impl FamilySpec for DshSpec {
         row.row.token_usage.clone()
     }
 
+    fn row_models(&self, row: &DshFamilyRow) -> Vec<SessionModel> {
+        row.row.models.clone()
+    }
+
     // 双半共用一次解码:转录是多帧 zstd,原先 messages/events 两个 loader
     // 对同一文件各完整解码一遍。
     fn load_members(
@@ -881,6 +903,7 @@ fn session_row(path: PathBuf, transcript: DshTranscript, archived: bool) -> DshS
         updated_at: transcript.header.created_at.max(transcript.last_event_time),
         path,
         token_usage: transcript.usage_total,
+        models: transcript.models,
         catalog_children: transcript.catalog_children,
         archived,
     }
@@ -979,6 +1002,7 @@ fn session_summary(row: &DshSessionRow) -> SessionSummary {
         created_at: Some(row.created_at),
         updated_at: Some(row.updated_at),
         token_usage: row.token_usage,
+        models: row.models.clone(),
         archived: row.archived,
         // dsh 的 zstd 是该来源的默认存储形态(每个转录都压缩),标注成角标
         // 没有区分度,所以压缩位恒假;只有归档是"偏离常态"的状态。

@@ -186,6 +186,7 @@ mod tests {
             created_at: None,
             updated_at: Some(1),
             token_usage: None,
+            models: Vec::new(),
             archived: false,
             compressed: false,
         }

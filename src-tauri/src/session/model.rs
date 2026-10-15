@@ -71,6 +71,73 @@ pub(crate) struct SourceStatus {
     pub(crate) note: Option<String>,
 }
 
+// 会话用过的模型。provider 是各工具自己配置里的 provider id,不是统一命名:
+// Codex/OpenCode/Pi/DSH/ZCode 有该字段,Claude Code 与 Grok Build 的转录里
+// 根本没有。一个会话先后换过模型时会有多项。
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../src/features/sessions/generated/")]
+pub(crate) struct SessionModel {
+    pub(crate) model: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub(crate) provider: Option<String>,
+}
+
+impl SessionModel {
+    pub(crate) fn new(provider: Option<&str>, model: &str) -> Self {
+        Self {
+            model: model.to_string(),
+            provider: provider
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string),
+        }
+    }
+}
+
+// 会话内模型计数:同一 (provider, model) 归一项,输出按使用次数降序、同次数
+// 按首次出现顺序,首项即用于列表展示的主模型。会话级与 family 级合并都走
+// 这里,避免两处各写一份排序口径。
+#[derive(Default)]
+pub(crate) struct ModelTally {
+    entries: Vec<(SessionModel, usize)>,
+}
+
+impl ModelTally {
+    pub(crate) fn record(&mut self, provider: Option<&str>, model: &str) {
+        let model = model.trim();
+        if model.is_empty() {
+            return;
+        }
+
+        let candidate = SessionModel::new(provider, model);
+        match self.entries.iter_mut().find(|(entry, _)| *entry == candidate) {
+            Some((_, count)) => *count += 1,
+            None => self.entries.push((candidate, 1)),
+        }
+    }
+
+    /// family 级合并:成员各自的列表已按用量排好序,这里只做保序去重——跨成员
+    /// 的调用次数不可比,若让"出现在更多成员里"的模型顶上去,列表角标会指到
+    /// 子代理偶尔一用的模型上。会话内计数仍走 record。
+    pub(crate) fn absorb(&mut self, models: &[SessionModel]) {
+        for entry in models {
+            if !self.entries.iter().any(|(existing, _)| existing == entry) {
+                self.entries.push((entry.clone(), 0));
+            }
+        }
+    }
+
+    /// 计数为 0 的是 absorb 保序并入的项,排在计数项之后;两种语义各自成对使用
+    /// (会话内 record、family 内 absorb),不混用。
+    pub(crate) fn into_models(mut self) -> Vec<SessionModel> {
+        // sort_by 稳定:同次数的项保持首次出现顺序。
+        self.entries.sort_by(|left, right| right.1.cmp(&left.1));
+        self.entries.into_iter().map(|(entry, _)| entry).collect()
+    }
+}
+
 // 各来源转录的 usage 字段口径不一(Codex 的 input 含缓存命中、OpenCode 把
 // reasoning 与 output 分开),读取器负责归一到这四项后再进入统计。
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize, TS)]
@@ -220,6 +287,10 @@ pub(crate) struct SessionSummary {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub(crate) token_usage: Option<SessionTokenUsage>,
+    // 会话用过的模型(family 含子代理线程),首项是主模型;取不到模型信息
+    // 的来源为空。Claude Code 与 Grok Build 的 provider 恒为 None。
+    #[serde(default)]
+    pub(crate) models: Vec<SessionModel>,
     // 会话在当前来源里的存储状态,由各读取器按自家契约填写:
     // archived = 来源已把会话移出默认集合(codex 移到 archived_sessions/、
     // dsh 写进 workspace.json 的归档集、zcode/opencode 的 time_archived);
@@ -259,9 +330,30 @@ pub(crate) struct SessionMessage {
     #[ts(type = "number | null")]
     pub(crate) timestamp: Option<i64>,
     pub(crate) blocks: Vec<ContentBlock>,
+    // 这条消息所属轮次用的模型;过程消息与取不到模型信息的来源(Grok Build)
+    // 为 None,由各读取器按自家契约填写。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub(crate) model: Option<SessionModel>,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub(crate) session_id: Option<String>,
+}
+
+// 用户输入自身不带模型:它的归属由这一轮的回答决定——同一次扫描里其后第一条
+// 带模型的消息。助手消息在读取器里已按来源直接标注(Codex/DSH 是整轮继承),
+// 这里只补 user 角色,已经标注过的不动。
+pub(crate) fn fill_user_message_models(messages: &mut [SessionMessage]) {
+    let mut following: Option<SessionModel> = None;
+    for message in messages.iter_mut().rev() {
+        if let Some(model) = message.model.as_ref() {
+            following = Some(model.clone());
+            continue;
+        }
+        if message.role == "user" {
+            message.model = following.clone();
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, TS)]
@@ -409,6 +501,107 @@ pub(crate) struct SummaryAccumulator {
     pub(crate) created_at: Option<i64>,
     pub(crate) updated_at: Option<i64>,
     pub(crate) token_usage: Option<SessionTokenUsage>,
+    pub(crate) models: ModelTally,
     pub(crate) archived: bool,
     pub(crate) compressed: bool,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn message(id: &str, role: &str, model: Option<(&str, &str)>) -> SessionMessage {
+        SessionMessage {
+            id: id.to_string(),
+            role: role.to_string(),
+            timestamp: None,
+            blocks: Vec::new(),
+            model: model.map(|(provider, model)| SessionModel::new(Some(provider), model)),
+            session_id: None,
+        }
+    }
+
+    #[test]
+    fn model_tally_orders_by_calls_then_first_seen() {
+        let mut tally = ModelTally::default();
+        tally.record(Some("custom"), "gpt-5.6-terra");
+        tally.record(Some("custom"), "deepseek-flash");
+        tally.record(Some("custom"), "gpt-5.6-terra");
+
+        let models = tally.into_models();
+        // 调用次数多的排前;并列时保持首次出现顺序。
+        assert_eq!(
+            models,
+            vec![
+                SessionModel::new(Some("custom"), "gpt-5.6-terra"),
+                SessionModel::new(Some("custom"), "deepseek-flash"),
+            ]
+        );
+    }
+
+    #[test]
+    fn model_tally_keeps_same_model_from_different_providers_apart() {
+        let mut tally = ModelTally::default();
+        tally.record(Some("first"), "deepseek-flash");
+        tally.record(Some("second"), "deepseek-flash");
+        tally.record(None, "deepseek-flash");
+        tally.record(Some("first"), "deepseek-flash");
+
+        let models = tally.into_models();
+        assert_eq!(models.len(), 3);
+        assert_eq!(models[0], SessionModel::new(Some("first"), "deepseek-flash"));
+    }
+
+    #[test]
+    fn model_tally_skips_blank_model_names() {
+        let mut tally = ModelTally::default();
+        tally.record(None, "   ");
+        assert!(tally.into_models().is_empty());
+    }
+
+    #[test]
+    fn absorb_keeps_root_primary_first() {
+        let mut tally = ModelTally::default();
+        tally.absorb(&[
+            SessionModel::new(Some("custom"), "gpt-5.6-terra"),
+            SessionModel::new(Some("custom"), "gpt-5.5"),
+        ]);
+        tally.absorb(&[SessionModel::new(Some("custom"), "gpt-5.5")]);
+
+        // 并列次数时保持并入顺序:root 的主模型仍排最前。
+        assert_eq!(
+            tally.into_models()[0],
+            SessionModel::new(Some("custom"), "gpt-5.6-terra")
+        );
+    }
+
+    #[test]
+    fn user_messages_take_the_model_of_the_following_answer() {
+        let mut messages = vec![
+            message("u1", "user", None),
+            message("a1", "assistant", Some(("custom", "deepseek-flash"))),
+            message("u2", "user", None),
+            message("t1", "tool", None),
+            message("a2", "assistant", Some(("custom", "gpt-6-luna"))),
+            message("u3", "user", None),
+        ];
+        fill_user_message_models(&mut messages);
+
+        let models: Vec<Option<&str>> = messages
+            .iter()
+            .map(|message| message.model.as_ref().map(|model| model.model.as_str()))
+            .collect();
+        assert_eq!(
+            models,
+            vec![
+                Some("deepseek-flash"),
+                Some("deepseek-flash"),
+                Some("gpt-6-luna"),
+                None,
+                Some("gpt-6-luna"),
+                // 末尾没有后续回答,保持未知而不是猜。
+                None,
+            ]
+        );
+    }
 }

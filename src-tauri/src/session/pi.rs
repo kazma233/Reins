@@ -12,8 +12,9 @@ use uuid::Uuid;
 use super::reader_engine::{self, MemberTimeline, event_page, message_page};
 use super::{
     ContentBlock, DeletePlanAction, SessionAgent, SessionEvent, SessionEventPage, SessionFileEntry,
-    SessionMessage, SessionMessagePage, SessionOverview, SessionReader, SessionSummary,
-    SessionTokenUsage, SourceApp, SummaryAccumulator, UsageHourBuckets, delete::DeletePlanInput,
+    SessionMessage, SessionMessagePage, SessionModel, SessionOverview, SessionReader,
+    SessionSummary, SessionTokenUsage, SourceApp, SummaryAccumulator, UsageHourBuckets,
+    delete::DeletePlanInput,
 };
 
 /// 按 sessions 根构造的读取器：持有该根下的全部缓存。
@@ -425,6 +426,7 @@ fn parse_full_summary(path: &Path) -> Result<SessionSummary> {
         created_at,
         updated_at: Some(updated_at),
         token_usage: None,
+        models: Default::default(),
         // pi 无归档也无压缩:会话列表就是 sessions 根下的全部 .jsonl,
         // 上下文压缩只追加 compaction 条目,不动文件。
         archived: false,
@@ -432,6 +434,16 @@ fn parse_full_summary(path: &Path) -> Result<SessionSummary> {
     };
     for entry in &document.entries {
         accumulate_pi_usage(&mut summary.token_usage, &entry.value);
+        if let Some(message) = entry.value.get("message") {
+            if super::json_string(message, &["role"]).as_deref() == Some("assistant") {
+                if let Some(model) = super::json_string(message, &["model"]) {
+                    summary.models.record(
+                        super::json_string(message, &["provider"]).as_deref(),
+                        &model,
+                    );
+                }
+            }
+        }
     }
 
     // header 决定创建时间，文件 mtime 只负责失效判断，避免旧 entry 时间变化导致列表漂移。
@@ -694,6 +706,9 @@ fn build_timeline(
         }
     }
 
+    // 用户输入自身不带模型,由这一轮的回答补归属。
+    super::fill_user_message_models(&mut messages);
+
     (messages, events)
 }
 
@@ -708,6 +723,7 @@ fn expand_compaction_messages(
         id: format!("{}-summary", entry.id),
         role: "compactionSummary".to_string(),
         timestamp: entry.timestamp,
+        model: None,
         blocks: vec![ContentBlock {
             kind: "compactionSummary".to_string(),
             text: super::json_string(&entry.value, &["summary"]),
@@ -779,6 +795,7 @@ fn parse_message_entry(entry: &PiEntry, session_id: &str) -> SessionMessage {
             role: "unknown".to_string(),
             timestamp: entry.timestamp,
             blocks: vec![super::unsupported_content_block("Pi", Some(&entry.value))],
+            model: None,
             session_id: Some(session_id.to_string()),
         };
     };
@@ -873,6 +890,10 @@ fn parse_message_entry(entry: &PiEntry, session_id: &str) -> SessionMessage {
             .and_then(Value::as_i64)
             .or(entry.timestamp),
         blocks,
+        // Pi 的 assistant 消息直接带这次调用的模型与 provider。
+        model: super::json_string(message, &["model"]).map(|model| {
+            SessionModel::new(super::json_string(message, &["provider"]).as_deref(), &model)
+        }),
         session_id: Some(session_id.to_string()),
     }
 }
@@ -960,6 +981,7 @@ fn parse_custom_message_entry(entry: &PiEntry, session_id: &str) -> SessionMessa
         role: "custom".to_string(),
         timestamp: entry.timestamp,
         blocks,
+        model: None,
         session_id: Some(session_id.to_string()),
     }
 }

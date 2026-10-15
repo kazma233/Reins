@@ -15,8 +15,8 @@ use super::reader_engine::{
 };
 use super::tool_blocks::{self, ToolShape};
 use super::{
-    ContentBlock, SessionEvent, SessionMessage, SessionSummary, SessionTokenUsage, SourceApp,
-    usage_stats::SqlUsageHours,
+    ContentBlock, SessionEvent, SessionMessage, SessionModel, SessionSummary, SessionTokenUsage,
+    SourceApp, usage_stats::SqlUsageHours,
 };
 
 #[derive(Clone, Debug)]
@@ -31,6 +31,8 @@ pub(crate) struct ZcodeSessionRow {
     time_archived: Option<i64>,
     // 一次 GROUP BY 查询按 session_id 预聚合,避免列表逐会话全表扫。
     token_usage: Option<SessionTokenUsage>,
+    // 会话用过的模型,同样按 session_id 预聚合;主模型排在最前。
+    models: Vec<SessionModel>,
     // "db路径:id" 组合串:list_rows 时按实例 db 生成,作为该记录的稳定
     // 展示 key(行来自 SQLite,没有真实转录文件)。
     path: PathBuf,
@@ -141,6 +143,7 @@ impl FamilySpec for ZcodeSpec {
             created_at: Some(root.time_created),
             updated_at: Some(root.time_updated),
             token_usage: None,
+            models: root.models.clone(),
             archived: root.time_archived.is_some(),
             // ZCode 的转录只存在 sqlite(part.data 为明文 JSON),没有压缩形态。
             compressed: false,
@@ -150,6 +153,10 @@ impl FamilySpec for ZcodeSpec {
     // usage 已在索引扫描时按 session_id 预聚合,family 总量交给引擎默认求和。
     fn row_usage(&self, row: &ZcodeSessionRow) -> Option<SessionTokenUsage> {
         row.token_usage
+    }
+
+    fn row_models(&self, row: &ZcodeSessionRow) -> Vec<SessionModel> {
+        row.models.clone()
     }
 
     // 时间线失效:max(db mtime, family updated_at)。
@@ -167,6 +174,9 @@ impl FamilySpec for ZcodeSpec {
         let member_ids = members.iter().map(|row| row.id.clone()).collect::<Vec<_>>();
         let message_rows = load_message_rows(&connection, &member_ids)?;
         let parts_by_message = load_parts_by_message(&connection, &member_ids)?;
+        // 消息级模型来自 model_usage 的调用明细,按 assistant_message_id 归到
+        // 产出该回答的那次调用;同一消息有多次尝试时取最早一次。
+        let models_by_message = load_models_by_message(&connection, &member_ids)?;
 
         let mut messages_by_session = HashMap::<String, Vec<SessionMessage>>::new();
         let mut events_by_session = HashMap::<String, Vec<SessionEvent>>::new();
@@ -187,6 +197,7 @@ impl FamilySpec for ZcodeSpec {
                     ));
                 }
 
+                let model = models_by_message.get(&row.id).cloned();
                 messages_by_session
                     .entry(row.session_id.clone())
                     .or_default()
@@ -195,6 +206,7 @@ impl FamilySpec for ZcodeSpec {
                         role: row.role.clone(),
                         timestamp: message_row_timestamp(&row),
                         blocks,
+                        model,
                         session_id: Some(row.session_id.clone()),
                     });
             } else {
@@ -322,6 +334,7 @@ fn list_session_rows(scan_root: &Path) -> Result<Vec<ZcodeSessionRow>> {
     }
 
     let token_usages = session_token_usages(&connection)?;
+    let models_by_session = session_models(&connection)?;
     // time_archived 是后加的列,老库没有它;缺失时列表照常产出,归档位恒假。
     let archived_column = super::sqlite_column_exists(&connection, "session", "time_archived")?;
     let archived_expr = if archived_column {
@@ -336,6 +349,7 @@ fn list_session_rows(scan_root: &Path) -> Result<Vec<ZcodeSessionRow>> {
         let id: String = row.get(0)?;
         let title: Option<String> = row.get(3)?;
         let token_usage = token_usages.get(&id).copied();
+        let models = models_by_session.get(&id).cloned().unwrap_or_default();
         // zcode 会话只存在于 SQLite,没有 transcript 文件;用 "db路径:id"
         // 组合串作为该记录的稳定 key。整体不是真实路径,path_key 会走
         // 原样字符串分支,写入与查询两侧同源,key 保持一致。
@@ -351,12 +365,50 @@ fn list_session_rows(scan_root: &Path) -> Result<Vec<ZcodeSessionRow>> {
             time_updated: row.get(5)?,
             time_archived: row.get(6)?,
             token_usage,
+            models,
             path,
         })
     })?;
 
     rows.collect::<std::result::Result<Vec<_>, _>>()
         .context("Failed to read ZCode sessions")
+}
+
+// 会话用过的模型按 session_id 预聚合:model_usage 是调用级明细,provider_id
+// 与 model_id 都在行上。计数只用于排序(主模型排最前),同次数按模型名稳定排序。
+fn session_models(connection: &Connection) -> Result<HashMap<String, Vec<SessionModel>>> {
+    if !super::sqlite_table_exists(connection, "model_usage")? {
+        return Ok(HashMap::new());
+    }
+
+    let mut statement = connection
+        .prepare(
+            "SELECT session_id, provider_id, model_id, COUNT(*) AS calls
+             FROM model_usage
+             GROUP BY session_id, provider_id, model_id
+             ORDER BY session_id, calls DESC, model_id",
+        )
+        .context("Failed to prepare ZCode model query")?;
+
+    let rows = statement
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        })
+        .context("Failed to read ZCode models")?;
+
+    let mut models = HashMap::<String, Vec<SessionModel>>::new();
+    for row in rows {
+        let (session_id, provider, model) = row?;
+        models
+            .entry(session_id)
+            .or_default()
+            .push(SessionModel::new(Some(&provider), &model));
+    }
+    Ok(models)
 }
 
 // turn_usage 表按 turn 预聚合了四类用量列,直接 SUM。其 input_tokens 是全口径
@@ -524,6 +576,42 @@ fn load_message_rows(
     Ok(message_rows)
 }
 
+// 消息级的模型归属:model_usage 记录每次调用的 assistant_message_id,按它把
+// (provider, model) 映射回具体回答。同一消息有多次尝试(重试)时取最早一次,
+// 与实际展示的那次回答对齐。
+fn load_models_by_message(
+    connection: &Connection,
+    member_ids: &[String],
+) -> Result<HashMap<String, SessionModel>> {
+    if !super::sqlite_table_exists(connection, "model_usage")? {
+        return Ok(HashMap::new());
+    }
+
+    let placeholders = vec!["?"; member_ids.len()].join(",");
+    let mut statement = connection.prepare(&format!(
+        "SELECT assistant_message_id, provider_id, model_id
+         FROM model_usage
+         WHERE session_id IN ({placeholders}) AND assistant_message_id IS NOT NULL
+         ORDER BY started_at ASC, attempt_index ASC"
+    ))?;
+    let rows = statement.query_map(params_from_iter(member_ids.iter()), |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, String>(2)?,
+        ))
+    })?;
+
+    let mut models = HashMap::new();
+    for row in rows {
+        let (message_id, provider, model) = row?;
+        models
+            .entry(message_id)
+            .or_insert_with(|| SessionModel::new(Some(&provider), &model));
+    }
+    Ok(models)
+}
+
 // parts 按 message_id 分组;sequence 是 zcode 写入时的自增序,决定同一条消息
 // 内内容块的展示顺序。
 fn load_parts_by_message(
@@ -679,7 +767,10 @@ fn event_from_message_row(row: ZcodeMessageRow, parts: &[Value]) -> SessionEvent
                 .join("\n");
 
             if !text.is_empty() {
-                summary = format!("todo reminder: {}", super::normalize_title(text));
+                summary = super::truncate_summary(format!(
+                    "todo reminder: {}",
+                    super::normalize_title(text)
+                ));
             }
         }
         "timeline_event" => {

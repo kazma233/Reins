@@ -3,21 +3,26 @@ use serde_json::Value;
 use super::ContentBlock;
 
 pub(crate) fn summarize_event(kind: &str, value: &Value) -> String {
-    if let Some(message) = json_string(value, &["message"]) {
-        return normalize_title(message);
-    }
-
-    if let Some(event_type) = json_string(value, &["type"]) {
+    let summary = if let Some(message) = json_string(value, &["message"]) {
+        normalize_title(message)
+    } else if let Some(event_type) = json_string(value, &["type"]) {
         if event_type != kind {
-            return format!("{kind}: {}", normalize_title(event_type));
+            format!("{kind}: {}", normalize_title(event_type))
+        } else {
+            fallback_event_summary(kind, value)
         }
-    }
+    } else {
+        fallback_event_summary(kind, value)
+    };
 
-    if let Some(name) = json_string(value, &["name"]) {
-        return format!("{kind}: {}", normalize_title(name));
-    }
+    truncate_summary(summary)
+}
 
-    kind.to_string()
+fn fallback_event_summary(kind: &str, value: &Value) -> String {
+    match json_string(value, &["name"]) {
+        Some(name) => format!("{kind}: {}", normalize_title(name)),
+        None => kind.to_string(),
+    }
 }
 
 pub(crate) fn tool_text(payload: &Value) -> Option<String> {
@@ -290,22 +295,30 @@ pub(crate) fn sanitize_user_blocks(blocks: Vec<ContentBlock>) -> Vec<ContentBloc
         .collect()
 }
 
+// 标题只做归一(剥链接语法、压平换行、去首尾空白),不截断:会话列表整屏铺开后
+// 标题按需换行完整展示,截断是窄侧栏时代的产物。
 pub(crate) fn normalize_title(text: String) -> String {
-    let normalized = strip_markdown_links(&text)
+    strip_markdown_links(&text)
         .replace('\n', " ")
         .trim()
-        .to_string();
-
-    if normalized.chars().count() <= 72 {
-        return normalized;
-    }
-
-    normalized.chars().take(72).collect::<String>() + "..."
+        .to_string()
 }
 
-// 标题里剥掉 markdown 链接语法：[label](url) 只留 label。不剥的话
-// 72 字符截断可能全落在链接语法上（如 [name](/very/long/path)），
-// 标题里看不到任何实际文本。
+// 单行摘要(事件行、工具提示)仍是一行渲染,过长会撑高行也会让载荷变大,统一在
+// 这里按 72 字符截断。
+pub(crate) fn truncate_summary(text: String) -> String {
+    const MAX_CHARS: usize = 72;
+
+    if text.chars().count() <= MAX_CHARS {
+        return text;
+    }
+
+    text.chars().take(MAX_CHARS).collect::<String>() + "..."
+}
+
+// 标题里剥掉 markdown 链接语法：[label](url) 只留 label。不剥的话长标题
+// (或截断后的摘要)可能全是链接语法（如 [name](/very/long/path)），
+// 看不到任何实际文本。
 fn strip_markdown_links(text: &str) -> String {
     let mut result = String::with_capacity(text.len());
     let mut rest = text;
@@ -330,3 +343,35 @@ fn strip_markdown_links(text: &str) -> String {
 }
 
 use super::json_string;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn long_text() -> String {
+        "很长的标题".repeat(30)
+    }
+
+    #[test]
+    fn normalize_title_keeps_long_titles_intact() {
+        let title = normalize_title(long_text());
+        // 标题不再截断:会话列表整宽铺开后按需换行展示全文。
+        assert!(!title.ends_with("..."));
+        assert_eq!(title.chars().count(), "很长的标题".chars().count() * 30);
+    }
+
+    #[test]
+    fn normalize_title_still_flattens_newlines_and_links() {
+        let title = normalize_title("第一行\n[名字](/very/long/path)".to_string());
+        assert_eq!(title, "第一行 名字");
+    }
+
+    #[test]
+    fn truncate_summary_caps_at_72_chars() {
+        assert_eq!(truncate_summary("短摘要".to_string()), "短摘要");
+
+        let capped = truncate_summary(long_text());
+        assert!(capped.ends_with("..."));
+        assert_eq!(capped.chars().count(), 75);
+    }
+}

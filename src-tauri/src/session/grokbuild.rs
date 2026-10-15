@@ -12,9 +12,9 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use super::{
-    ContentBlock, DeletePlanAction, SessionEvent, SessionEventPage, SessionFileEntry,
-    SessionMessage, SessionMessagePage, SessionOverview, SessionReader, SessionSummary,
-    SessionTokenUsage, SourceApp, UsageHourBuckets,
+    ContentBlock, DeletePlanAction, ModelTally, SessionEvent, SessionEventPage, SessionFileEntry,
+    SessionMessage, SessionMessagePage, SessionModel, SessionOverview, SessionReader,
+    SessionSummary, SessionTokenUsage, SourceApp, UsageHourBuckets,
     delete::{DeletePlanInput, run_official_cli},
 };
 
@@ -217,6 +217,7 @@ impl GrokIndex {
                         updated_at,
                         // 子会话文件缺失,无法读 usage.json。
                         token_usage: None,
+                        models: Vec::new(),
                         archived: false,
                         compressed: false,
                     },
@@ -269,6 +270,8 @@ struct Summary {
     updated_at: String,
     attempt_id: Option<String>,
     session_kind: Option<String>,
+    // 会话当前选中的模型;旧版本会话可能没有该字段。
+    current_model_id: Option<String>,
 }
 
 // Grok CLI 落盘的会话目录 usage.json:session 是全轮 turn_completed 的累计
@@ -506,6 +509,12 @@ fn family_summary(family: &Family<Row>) -> SessionSummary {
     family.apply_summary_aggregates(&mut summary);
     // 子代理子会话是完整会话目录、各有自己的 usage.json,按成员求和。
     summary.token_usage = family.sum_token_usage(|row| row.summary.token_usage);
+    // 模型同样按成员合并:子代理可能换过模型,与 token 求和同口径。
+    let mut tally = ModelTally::default();
+    for row in &family.members {
+        tally.absorb(&row.summary.models);
+    }
+    summary.models = tally.into_models();
     summary
 }
 
@@ -533,6 +542,7 @@ fn marker(row: &Row) -> SessionMessage {
         role: "assistant".to_string(),
         timestamp: row.summary.created_at,
         blocks: vec![content],
+        model: None,
         session_id: Some(row.member_id().to_string()),
     }
 }
@@ -621,6 +631,7 @@ fn summary(path: &Path) -> Result<SessionSummary> {
                 .context("Invalid Grok Build updated_at")?,
         ),
         token_usage: session_usage(&path)?,
+        models: session_models(&path, value.current_model_id.as_deref())?,
         // Grok Build 既无归档也无压缩:上游 Summary 没有 archived 字段,
         // 转录一律明文(session/persistence.rs)。
         archived: false,
@@ -637,6 +648,29 @@ fn session_usage(path: &Path) -> Result<Option<SessionTokenUsage>> {
 
     // inputTokens 含缓存命中部分,扣除口径见 grok_slice_usage。
     Ok(file.session.as_ref().map(grok_slice_usage))
+}
+
+// 会话用过的模型:usage.json 的 turns[].modelUsage 按模型切片,能看出换过模型;
+// 该文件缺失(或旧版本没有 turns)时退回 summary.json 的 current_model_id,
+// 只是"当前选中的模型",不代表整段会话。Grok Build 没有 provider 字段。
+fn session_models(path: &Path, current_model_id: Option<&str>) -> Result<Vec<SessionModel>> {
+    let mut tally = ModelTally::default();
+
+    if let Some(usage_path) = sibling(path, "usage.json")? {
+        let file: UsageFile = serde_json::from_reader(File::open(&usage_path)?)
+            .with_context(|| format!("Invalid Grok Build usage file {}", usage_path.display()))?;
+        for turn in &file.turns {
+            for model in turn.model_usage.keys() {
+                tally.record(None, model);
+            }
+        }
+    }
+
+    if let Some(model) = current_model_id {
+        tally.record(None, model);
+    }
+
+    Ok(tally.into_models())
 }
 
 // 用量曲线的小时桶:turns[] 每轮自带增量用量与 endedAt,按轮归到本地时区的
@@ -893,6 +927,7 @@ fn messages(path: &Path) -> Result<Vec<SessionMessage>> {
                 role: role.into(),
                 timestamp: None,
                 blocks,
+                model: None,
                 session_id: Some(session_id.clone()),
             });
         }

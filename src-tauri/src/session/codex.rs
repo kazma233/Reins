@@ -20,9 +20,9 @@ use super::reader_engine::{
 };
 use super::transcript;
 use super::{
-    ContentBlock, DeletePlanAction, SessionEvent, SessionMessage, SessionSummary,
-    SessionTokenUsage, SourceApp, SummaryAccumulator, TimelineRecord, UsageHourBuckets,
-    delete::{DeletePlanInput, run_official_cli},
+    ContentBlock, DeletePlanAction, ModelTally, SessionEvent, SessionMessage, SessionModel,
+    SessionSummary, SessionTokenUsage, SourceApp, SummaryAccumulator, TimelineRecord,
+    UsageHourBuckets, delete::{DeletePlanInput, run_official_cli},
 };
 
 // 归档会话的存放目录,与活跃会话的 sessions/ 并列在 CODEX_HOME 下;上游
@@ -172,6 +172,21 @@ impl FamilySpec for CodexSpec {
         Ok(total)
     }
 
+    // 与 family_usage 同因:索引行只读首行,拿不到 turn_context 里的模型,
+    // 只能逐成员走 path_summary(命中摘要缓存)。子代理线程常换模型,合并
+    // 口径与 token 求和一致。
+    fn family_models(
+        &self,
+        engine: &ReaderEngine<Self>,
+        family: &CodexSessionFamily,
+    ) -> Result<Vec<SessionModel>> {
+        let mut tally = ModelTally::default();
+        for row in &family.members {
+            tally.absorb(&engine.path_summary(&row.path)?.models);
+        }
+        Ok(tally.into_models())
+    }
+
     // 单次扫描产出双半,替代原先 messages/events 各扫一遍文件。
     fn load_members(
         &self,
@@ -183,11 +198,28 @@ impl FamilySpec for CodexSpec {
             .map(|row| {
                 let mut messages = Vec::new();
                 let mut events = Vec::new();
+                // provider 由 session_meta 声明(文件首行),模型由 turn_context
+                // 按轮声明:该轮之后的用户输入与助手输出都归它,直到下一次声明。
+                let mut provider: Option<String> = None;
+                let mut current_model: Option<SessionModel> = None;
 
                 for (index, line) in transcript::open_lines(&row.path)?.lines().enumerate() {
                     let value = super::parse_json_line(&line?)?;
+                    match super::json_type(&value) {
+                        Some("session_meta") => {
+                            provider = super::json_string(&value["payload"], &["model_provider"]);
+                        }
+                        Some("turn_context") => {
+                            current_model = super::json_string(&value["payload"], &["model"])
+                                .map(|model| SessionModel::new(provider.as_deref(), &model));
+                        }
+                        _ => {}
+                    }
                     match parse_timeline_record(index, &value) {
-                        Some(TimelineRecord::Message(message)) => messages.push(message),
+                        Some(TimelineRecord::Message(mut message)) => {
+                            message.model = current_model.clone();
+                            messages.push(message);
+                        }
                         Some(TimelineRecord::Event(event)) => events.push(event),
                         None => {}
                     }
@@ -470,6 +502,7 @@ fn parse_full_session_summary(path: &Path) -> Result<SessionSummary> {
         compressed: transcript::is_compressed(path),
         ..Default::default()
     };
+    let mut provider: Option<String> = None;
 
     for line in transcript::open_lines(path)?.lines() {
         let value = super::parse_json_line(&line?)?;
@@ -478,6 +511,7 @@ fn parse_full_session_summary(path: &Path) -> Result<SessionSummary> {
         match super::json_type(&value) {
             Some("session_meta") => {
                 let payload = &value["payload"];
+                provider = super::json_string(payload, &["model_provider"]);
                 summary.session_id = summary
                     .session_id
                     .or_else(|| super::json_string(payload, &["id"]));
@@ -510,6 +544,10 @@ fn parse_full_session_summary(path: &Path) -> Result<SessionSummary> {
                 summary.cwd = summary
                     .cwd
                     .or_else(|| super::json_string(payload, &["cwd"]));
+                // 每轮一次声明,按出现次数计;同一次会话里换模型能同时体现。
+                if let Some(model) = super::json_string(payload, &["model"]) {
+                    summary.models.record(provider.as_deref(), &model);
+                }
             }
             Some("event_msg") => {
                 let payload = &value["payload"];
@@ -815,6 +853,7 @@ fn parse_timeline_record(index: usize, value: &Value) -> Option<TimelineRecord> 
                     role,
                     timestamp,
                     blocks,
+                    model: None,
                     session_id: super::json_string(value, &["session_id"]),
                 }));
             } else if payload_type == "function_call" || payload_type == "function_call_output" {
@@ -822,6 +861,7 @@ fn parse_timeline_record(index: usize, value: &Value) -> Option<TimelineRecord> 
                     id: format!("codex-tool-{index}"),
                     role: "tool".to_string(),
                     timestamp,
+                    model: None,
                     blocks: vec![ContentBlock {
                         kind: payload_type,
                         text: super::tool_text(payload),

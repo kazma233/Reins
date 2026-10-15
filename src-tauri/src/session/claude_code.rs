@@ -15,7 +15,7 @@ use super::reader_engine::{
     FamilyReader, FamilySpec, Freshness, MarkerShape, MemberTimeline, RowErrorPolicy, scan_files,
 };
 use super::{
-    ContentBlock, DeletePlanAction, SessionEvent, SessionMessage, SessionSummary,
+    ContentBlock, DeletePlanAction, SessionEvent, SessionMessage, SessionModel, SessionSummary,
     SessionTokenUsage, SourceApp, SummaryAccumulator, TimelineRecord, UsageHourBuckets,
     delete::DeletePlanInput,
 };
@@ -132,6 +132,11 @@ impl FamilySpec for ClaudeSpec {
     // 路径级缓存只含 root 文件;子代理文件的消耗在各自索引行里,行级直取。
     fn row_usage(&self, row: &ClaudeSessionRow) -> Option<SessionTokenUsage> {
         row.summary.token_usage
+    }
+
+    // 模型同样在索引行解析时收集:索引行是整文件扫出来的,行里已有结果。
+    fn row_models(&self, row: &ClaudeSessionRow) -> Vec<SessionModel> {
+        row.summary.models.clone()
     }
 
     // 单次扫描产出双半;记录解析自带 agent_session_id,引擎兜底不生效。
@@ -318,6 +323,9 @@ fn parse_session_index_row(path: &Path) -> Result<ClaudeSessionRow> {
 
         if super::json_type(&value) == Some("assistant") {
             accumulate_claude_usage(&mut summary.token_usage, &value["message"]);
+            if let Some(model) = super::json_string(&value["message"], &["model"]) {
+                summary.models.record(None, &model);
+            }
         }
 
         if summary.session_id.is_none() {
@@ -355,6 +363,9 @@ fn parse_full_session_summary(path: &Path) -> Result<SessionSummary> {
 
         if super::json_type(&value) == Some("assistant") {
             accumulate_claude_usage(&mut summary.token_usage, &value["message"]);
+            if let Some(model) = super::json_string(&value["message"], &["model"]) {
+                summary.models.record(None, &model);
+            }
         }
 
         if summary.session_id.is_none() {
@@ -552,6 +563,9 @@ fn parse_timeline_record(index: usize, value: &Value, session_id: &str) -> Optio
                 role,
                 timestamp,
                 blocks,
+                // Claude 的转录只有模型名,没有 provider 字段。
+                model: super::json_string(message, &["model"])
+                    .map(|model| SessionModel::new(None, &model)),
                 session_id: Some(session_id.to_string()),
             }));
         }

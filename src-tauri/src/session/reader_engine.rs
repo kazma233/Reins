@@ -17,9 +17,9 @@ use super::family_index::{Family, FamilyIndex, FamilyRow};
 use super::family_timeline::{FamilyAgentLabel, agent_messages, family_agents};
 use super::summary_cache::SummaryDb;
 use super::{
-    ContentBlock, SessionEvent, SessionEventPage, SessionFileEntry, SessionMessage,
-    SessionMessagePage, SessionOverview, SessionReader, SessionSummary, SessionTokenUsage,
-    SourceApp,
+    ContentBlock, ModelTally, SessionEvent, SessionEventPage, SessionFileEntry, SessionMessage,
+    SessionMessagePage, SessionModel, SessionOverview, SessionReader, SessionSummary,
+    SessionTokenUsage, SourceApp,
 };
 
 /// 单成员双半时间线:读取器一次扫描产出,engine 负责缓存、marker 注入与终排。
@@ -140,6 +140,10 @@ pub(crate) trait FamilySpec: Clone + Send + Sync + 'static {
     fn row_usage(&self, _row: &Self::Row) -> Option<SessionTokenUsage> {
         None
     }
+    /// 索引行自带的模型(已在行解析时收集);无则返回空。
+    fn row_models(&self, _row: &Self::Row) -> Vec<SessionModel> {
+        Vec::new()
+    }
     /// family 总 usage;默认成员 row_usage 求和。codex 覆写为逐成员经
     /// path_summary 整文件解析(索引行只读首行拿不到 usage)。
     fn family_usage(
@@ -149,6 +153,20 @@ pub(crate) trait FamilySpec: Clone + Send + Sync + 'static {
     ) -> Result<Option<SessionTokenUsage>> {
         let _ = engine;
         Ok(family.sum_token_usage(|row| self.row_usage(row)))
+    }
+    /// family 用过的模型:子代理线程可能换过模型,与 token 求和同口径按成员
+    /// 合并,root 的主模型排在最前。codex 与 family_usage 同因覆写。
+    fn family_models(
+        &self,
+        engine: &ReaderEngine<Self>,
+        family: &Family<Self::Row>,
+    ) -> Result<Vec<SessionModel>> {
+        let _ = engine;
+        let mut tally = ModelTally::default();
+        for row in &family.members {
+            tally.absorb(&self.row_models(row));
+        }
+        Ok(tally.into_models())
     }
 
     /// timeline 失效(毫秒口径)。默认:成员文件 mtime 最大值;SQL 来源
@@ -452,6 +470,7 @@ impl<R: FamilySpec> ReaderEngine<R> {
 
         family.apply_summary_aggregates(&mut summary);
         summary.token_usage = self.spec.family_usage(self, family)?;
+        summary.models = self.spec.family_models(self, family)?;
 
         Ok(summary)
     }
@@ -480,7 +499,11 @@ impl<R: FamilySpec> ReaderEngine<R> {
             }
 
             let member_id = row.member_id().to_string();
-            for mut message in timeline.messages.iter().cloned() {
+            // 用户输入的模型归属按成员内部推导:子代理线程有自己的轮次，
+            // 跨成员的相邻关系没有意义。
+            let mut member_messages = timeline.messages.as_ref().clone();
+            super::fill_user_message_models(&mut member_messages);
+            for mut message in member_messages {
                 message.session_id.get_or_insert(member_id.clone());
                 messages.push(message);
             }
@@ -520,6 +543,7 @@ impl<R: FamilySpec> ReaderEngine<R> {
             id: shape.message_id,
             role: "assistant".to_string(),
             timestamp: row.member_created_at(),
+            model: None,
             blocks: vec![ContentBlock {
                 kind: "output_text".to_string(),
                 text: Some(format!("Sub-agent session: {title}\n{member_id}")),
@@ -1009,6 +1033,7 @@ mod tests {
                 created_at: Some(1),
                 updated_at: Some(2),
                 token_usage: None,
+                models: Vec::new(),
                 archived: false,
                 compressed: false,
             })
@@ -1025,6 +1050,7 @@ mod tests {
                 created_at: Some(1),
                 updated_at: Some(2),
                 token_usage: None,
+                models: Vec::new(),
                 archived: false,
                 compressed: false,
             }
@@ -1043,6 +1069,7 @@ mod tests {
                         role: "user".to_string(),
                         timestamp: Some(10),
                         blocks: Vec::new(),
+                        model: None,
                         session_id: None,
                     }]),
                     events: Arc::new(vec![SessionEvent {

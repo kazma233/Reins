@@ -10,6 +10,7 @@ export * from "./SessionEvent";
 export * from "./SessionEventPage";
 export * from "./SessionMessage";
 export * from "./SessionMessagePage";
+export * from "./SessionModel";
 export * from "./SessionOverview";
 export * from "./SessionPage";
 export * from "./SessionRefreshResult";
