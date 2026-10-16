@@ -2,4 +2,4 @@
 import type { SkillLinkState } from "./SkillLinkState";
 import type { SkillSourceRelative } from "./SkillSourceRelative";
 
-export type SkillLinkAssociation = { skillName: string, destinationPath: string, sourcePath: string, matchedSourceIds: Array<string>, sourceRelatives: Array<SkillSourceRelative>, state: SkillLinkState, };
+export type SkillLinkAssociation = { skillName: string, destinationPath: string, sourcePath: string, description?: string | null, matchedSourceIds: Array<string>, sourceRelatives: Array<SkillSourceRelative>, state: SkillLinkState, };

@@ -67,8 +67,10 @@ const normalizedSkillNameFilter = computed(() =>
 
 const visibleSources = computed(() => {
   if (!normalizedSkillNameFilter.value) return configSkillSources.value;
-  return configSkillSources.value.filter((source) =>
-    source.label.toLocaleLowerCase().includes(normalizedSkillNameFilter.value),
+  return configSkillSources.value.filter(
+    (source) =>
+      source.label.toLocaleLowerCase().includes(normalizedSkillNameFilter.value) ||
+      (source.description ?? "").toLocaleLowerCase().includes(normalizedSkillNameFilter.value),
   );
 });
 

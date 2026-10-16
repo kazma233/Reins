@@ -103,6 +103,10 @@ pub(crate) struct SkillSourceMutationInput {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[ts(optional = nullable)]
     pub(crate) r#ref: Option<String>,
+    // 来源描述是编辑弹窗的回写契约：总是携带当前值，None 表示清空。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional = nullable)]
+    pub(crate) description: Option<String>,
     #[serde(default)]
     pub(crate) include_name_patterns: Vec<String>,
     #[serde(default)]
@@ -196,6 +200,10 @@ pub(crate) enum SkillSourceConfigView {
     Local {
         id: String,
         root_path: String,
+        // 用户手打的来源描述，作为列表标题；未填为 None。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional = nullable)]
+        description: Option<String>,
         #[serde(default)]
         include_name_patterns: Vec<String>,
         #[serde(default)]
@@ -212,6 +220,10 @@ pub(crate) enum SkillSourceConfigView {
         #[serde(skip_serializing_if = "Option::is_none")]
         #[ts(type = "number | null", optional = nullable)]
         last_fetched_at: Option<i64>,
+        // 用户手打的来源描述，作为列表标题；未填为 None。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional = nullable)]
+        description: Option<String>,
         #[serde(default)]
         include_name_patterns: Vec<String>,
         #[serde(default)]
@@ -405,6 +417,11 @@ pub(crate) struct DiscoveredSkill {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[ts(optional = nullable)]
     pub(crate) source_path: Option<String>,
+    // SKILL.md frontmatter 的 description，帮用户在列表里认出 skill；
+    // 解析失败或字段缺失为 None，前端按无备注隐藏。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional = nullable)]
+    pub(crate) description: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, TS)]
@@ -529,6 +546,8 @@ pub(super) enum RawSkillSourceDefinition {
     Local {
         root_path: String,
         #[serde(default)]
+        description: Option<String>,
+        #[serde(default)]
         include_name_patterns: Vec<String>,
         #[serde(default)]
         include_path_patterns: Vec<String>,
@@ -537,6 +556,8 @@ pub(super) enum RawSkillSourceDefinition {
         repo: String,
         #[serde(default)]
         r#ref: Option<String>,
+        #[serde(default)]
+        description: Option<String>,
         #[serde(default)]
         include_name_patterns: Vec<String>,
         #[serde(default)]
@@ -611,12 +632,14 @@ pub(super) struct ResolvedTargetConfig {
 pub(super) enum ResolvedSkillSourceDefinition {
     Local {
         root_path: PathBuf,
+        description: Option<String>,
         include_name_patterns: Vec<String>,
         include_path_patterns: Vec<String>,
     },
     Git {
         repo: String,
         r#ref: Option<String>,
+        description: Option<String>,
         include_name_patterns: Vec<String>,
         include_path_patterns: Vec<String>,
     },
@@ -724,6 +747,10 @@ pub(crate) struct SkillLinkAssociation {
     pub(crate) skill_name: String,
     pub(crate) destination_path: String,
     pub(crate) source_path: String,
+    // 链接另一端 SKILL.md 的 description；来源缺失或不可读为 None。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional = nullable)]
+    pub(crate) description: Option<String>,
     // source 根目录可能重叠，文件系统无法证明唯一归属。
     pub(crate) matched_source_ids: Vec<String>,
     // 各归属来源根下的相对路径:Windows 前缀/大小写口径只在 Rust 侧算一次
@@ -761,6 +788,10 @@ pub(crate) struct SyncSkillOption {
     // don't match are still listed but shown collapsed below the matched ones.
     #[ts(optional = nullable)]
     pub(crate) matched: bool,
+    // SKILL.md frontmatter 的 description，供同步弹窗勾选时识别 skill。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional = nullable)]
+    pub(crate) description: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, TS)]

@@ -21,6 +21,9 @@ const isGit = computed(() => props.source.type === "git");
 const label = computed(() =>
   props.source.type === "git" ? props.source.repo : props.source.rootPath,
 );
+// 用户手打的描述接管标题，原路径/仓库地址降为正文首行；没填时维持原样。
+const description = computed(() => props.source.description?.trim() || null);
+const title = computed(() => description.value ?? label.value);
 const namePatterns = computed(() => props.source.includeNamePatterns);
 const pathPatterns = computed(() => props.source.includePathPatterns);
 const hasPatterns = computed(
@@ -35,7 +38,12 @@ const lastFetchedAtLabel = computed(() => {
 <template>
   <AppCard>
     <template #header>
-      <span class="manager-skill-source-row__label">{{ label }}</span>
+      <span class="manager-skill-source-row__label">{{ title }}</span>
+    </template>
+    <!-- v-if 必须挂在 template 上：AppCard 按 $slots.headerMeta 判定是否渲染
+         第二行容器，插槽永远存在会留下一个空 div，凭空多出一次 gap。 -->
+    <template v-if="description" #headerMeta>
+      <span class="manager-skill-source-row__subtitle">{{ label }}</span>
     </template>
     <template #ext>
       <div class="manager-skill-source-row__actions">

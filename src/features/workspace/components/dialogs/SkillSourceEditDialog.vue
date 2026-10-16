@@ -35,6 +35,10 @@ function handleRefInput(event: Event) {
   props.state.ref = (event.target as HTMLInputElement).value;
 }
 
+function handleDescriptionInput(event: Event) {
+  props.state.description = (event.target as HTMLInputElement).value;
+}
+
 function handleNamePatternsInput(value: string) {
   const preview = props.state.preview;
   preview.previewLoading = Boolean(preview.discovery);
@@ -90,6 +94,16 @@ function handlePathPatternsInput(value: string) {
           <input readonly :value="state.rootPath" type="text" />
         </label>
       </template>
+
+      <label class="manager-field">
+        <span>描述</span>
+        <input
+          placeholder="一句话说明这个来源的用途，会显示在列表标题"
+          :value="state.description"
+          type="text"
+          @input="handleDescriptionInput"
+        />
+      </label>
 
       <div class="manager-import-row manager-import-row--include-patterns">
         <label class="manager-field manager-import-row__field">

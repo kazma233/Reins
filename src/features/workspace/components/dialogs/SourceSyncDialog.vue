@@ -166,26 +166,15 @@ function handleSetTargets(targetIds: string[], selected: boolean) {
 }
 
 const query = computed(() => skillSearch.value.trim().toLowerCase());
+const matchesQuery = (skill: SyncSkillOption) =>
+  !query.value ||
+  skill.name.toLowerCase().includes(query.value) ||
+  skill.relativePath.toLowerCase().includes(query.value) ||
+  (skill.description ?? "").toLowerCase().includes(query.value);
 const matchedSkills = computed(() => skills.value.filter((s) => s.matched !== false));
 const unmatchedSkills = computed(() => skills.value.filter((s) => s.matched === false));
-const visibleMatched = computed(() =>
-  matchedSkills.value.filter((s) => {
-    if (!query.value) return true;
-    return (
-      s.name.toLowerCase().includes(query.value) ||
-      s.relativePath.toLowerCase().includes(query.value)
-    );
-  }),
-);
-const visibleUnmatched = computed(() =>
-  unmatchedSkills.value.filter((s) => {
-    if (!query.value) return true;
-    return (
-      s.name.toLowerCase().includes(query.value) ||
-      s.relativePath.toLowerCase().includes(query.value)
-    );
-  }),
-);
+const visibleMatched = computed(() => matchedSkills.value.filter(matchesQuery));
+const visibleUnmatched = computed(() => unmatchedSkills.value.filter(matchesQuery));
 const visibleSkills = computed(() => [...visibleMatched.value, ...visibleUnmatched.value]);
 
 const selectableTargetIds = computed(() => getSelectableTargetIds(targets.value));
@@ -417,7 +406,7 @@ async function handleRefreshSource() {
           <input
             v-model="skillSearch"
             class="manager-search-input"
-            placeholder="搜索 skills 名字或路径"
+            placeholder="搜索名字、路径或描述"
             type="text"
           />
           <template v-if="skills.length">
@@ -440,6 +429,9 @@ async function handleRefreshSource() {
                     />
                     <span class="manager-skill-name">{{ skill.name }}</span>
                   </label>
+                  <AppTooltip v-if="skill.description" :tip="skill.description">
+                    <span class="manager-skill-note">{{ skill.description }}</span>
+                  </AppTooltip>
                 </div>
                 <details
                   v-if="visibleUnmatched.length > 0"
@@ -463,6 +455,9 @@ async function handleRefreshSource() {
                         />
                         <span class="manager-skill-name">{{ skill.name }}</span>
                       </label>
+                      <AppTooltip v-if="skill.description" :tip="skill.description">
+                        <span class="manager-skill-note">{{ skill.description }}</span>
+                      </AppTooltip>
                     </div>
                   </div>
                 </details>

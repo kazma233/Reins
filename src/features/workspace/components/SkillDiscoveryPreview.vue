@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import AppTooltip from "@shared/ui/AppTooltip.vue";
 import type { SkillDiscoveryResult } from "../types";
 
 type SkillDiscoveryPreviewProps = {
@@ -27,6 +28,9 @@ const props = withDefaults(defineProps<SkillDiscoveryPreviewProps>(), {
         >
           <span class="manager-skill-name">{{ skill.name }}</span>
           <span class="manager-skill-path-label">{{ skill.relativePath }}</span>
+          <AppTooltip v-if="skill.description" :tip="skill.description">
+            <span class="manager-skill-note">{{ skill.description }}</span>
+          </AppTooltip>
         </div>
       </template>
       <div v-else class="empty-state">没有匹配 include 条件的 skills。</div>
@@ -50,6 +54,9 @@ const props = withDefaults(defineProps<SkillDiscoveryPreviewProps>(), {
           >
             <span class="manager-skill-name">{{ skill.name }}</span>
             <span class="manager-skill-path-label">{{ skill.relativePath }}</span>
+            <AppTooltip v-if="skill.description" :tip="skill.description">
+              <span class="manager-skill-note">{{ skill.description }}</span>
+            </AppTooltip>
           </div>
         </div>
       </template>

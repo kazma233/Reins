@@ -40,6 +40,7 @@ type WorkspaceMcpPayload = {
 type SkillSourceMutationInput = {
   sourceId: string;
   ref?: string | null;
+  description?: string | null;
   includeNamePatterns: string[];
   includePathPatterns: string[];
 };

@@ -138,6 +138,8 @@ export type SkillSourceEditDialogState = {
   loading: boolean;
   sourceId: string | null;
   title: string;
+  // 用户手打的来源描述，保存时 trim，空串按清空提交。
+  description: string;
   preview: SkillDiscoveryPreviewState;
 } & SkillSourcePreviewDraft;
 
@@ -206,6 +208,7 @@ export function createSkillSourceEditDialogState(): SkillSourceEditDialogState {
     sourceId: null,
     sourceType: "git",
     title: "",
+    description: "",
     repo: "",
     rootPath: "",
     ref: "main",

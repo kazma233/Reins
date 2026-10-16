@@ -48,6 +48,7 @@ export function useSkillSourceEdit() {
     skillSourceEditDialog.loading = false;
     skillSourceEditDialog.sourceId = source.id;
     skillSourceEditDialog.title = `编辑导入来源: ${source.label}`;
+    skillSourceEditDialog.description = source.description ?? "";
     skillSourceEditDialog.sourceType = baseDraft.sourceType;
     skillSourceEditDialog.repo = baseDraft.repo;
     skillSourceEditDialog.rootPath = baseDraft.rootPath;
@@ -96,6 +97,7 @@ export function useSkillSourceEdit() {
         updateSkillSource({
           sourceId,
           ref: skillSourceEditDialog.sourceType === "git" ? skillSourceEditDialog.ref.trim() || null : null,
+          description: skillSourceEditDialog.description.trim() || null,
           includeNamePatterns: parseCommaSeparatedList(skillSourceEditDialog.preview.includeNamePatternsText),
           includePathPatterns: parseCommaSeparatedList(skillSourceEditDialog.preview.includePathPatternsText),
         }),

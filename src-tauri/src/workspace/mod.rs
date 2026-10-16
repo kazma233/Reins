@@ -65,7 +65,7 @@ use self::skills::remove_source_symlinks_with_root as remove_source_symlinks_fro
 use self::skills::{
     SkillLinkSource, apply_include_patterns, build_sync_target_options_with_sources,
     discover_skills_in_directory, git_cache_refresh_is_due, parse_batch_git_skill_import_sources,
-    partition_excluded,
+    partition_excluded, skill_description_from_contents,
 };
 #[cfg(test)]
 use self::targets::read_skill_dir_link;
@@ -382,11 +382,13 @@ fn config_to_view(
             .map(|(id, source)| match source {
                 ResolvedSkillSourceDefinition::Local {
                     root_path,
+                    description,
                     include_name_patterns,
                     include_path_patterns,
                 } => SkillSourceConfigView::Local {
                     id: id.clone(),
                     root_path: display_path(root_path),
+                    description: description.clone(),
                     include_name_patterns: include_name_patterns.clone(),
                     include_path_patterns: include_path_patterns.clone(),
                     label: format_local_skill_source_label(root_path),
@@ -394,6 +396,7 @@ fn config_to_view(
                 ResolvedSkillSourceDefinition::Git {
                     repo,
                     r#ref,
+                    description,
                     include_name_patterns,
                     include_path_patterns,
                 } => SkillSourceConfigView::Git {
@@ -401,6 +404,7 @@ fn config_to_view(
                     repo: repo.clone(),
                     r#ref: r#ref.clone(),
                     last_fetched_at: git_cache_last_fetched_at_ms(store, repo),
+                    description: description.clone(),
                     include_name_patterns: include_name_patterns.clone(),
                     include_path_patterns: include_path_patterns.clone(),
                     label: format_git_skill_source_label(repo, r#ref.as_deref()),
@@ -525,21 +529,25 @@ fn parse_manager_config(
         let resolved = match source.source {
             RawSkillSourceDefinition::Local {
                 root_path,
+                description,
                 include_name_patterns,
                 include_path_patterns,
             } => ResolvedSkillSourceDefinition::Local {
                 root_path: expand_path(&root_path, config_path.parent())?,
+                description: normalize_source_description(description),
                 include_name_patterns: normalize_patterns(&include_name_patterns),
                 include_path_patterns: normalize_patterns(&include_path_patterns),
             },
             RawSkillSourceDefinition::Git {
                 repo,
                 r#ref,
+                description,
                 include_name_patterns,
                 include_path_patterns,
             } => ResolvedSkillSourceDefinition::Git {
                 repo,
                 r#ref,
+                description: normalize_source_description(description),
                 include_name_patterns: normalize_patterns(&include_name_patterns),
                 include_path_patterns: normalize_patterns(&include_path_patterns),
             },
@@ -822,6 +830,13 @@ fn normalize_patterns(patterns: &[String]) -> Vec<String> {
         .map(|pattern| pattern.trim().to_string())
         .filter(|pattern| !pattern.is_empty())
         .collect()
+}
+
+// 来源描述与 patterns 同一口径：解析与写入两侧都归一，空白串视同未填。
+fn normalize_source_description(description: Option<String>) -> Option<String> {
+    description
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
 }
 
 // project id 是用户可见标识，也是复合地址 `project:agent` 的前半段：含 `:`

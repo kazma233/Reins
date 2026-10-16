@@ -5,6 +5,7 @@ fn skill_source_views_serialize_with_camel_case_fields() -> Result<()> {
     let local = crate::workspace::types::SkillSourceConfigView::Local {
         id: "local-source".to_string(),
         root_path: "/tmp/skills".to_string(),
+        description: Some("个人笔记技能库".to_string()),
         include_name_patterns: vec!["foo*".to_string()],
         include_path_patterns: vec![],
         label: "Local".to_string(),
@@ -21,9 +22,13 @@ fn skill_source_views_serialize_with_camel_case_fields() -> Result<()> {
         Some("/tmp/skills")
     );
     assert_eq!(
+        local_value.get("description").and_then(Value::as_str),
+        Some("个人笔记技能库")
+    );
+    assert_eq!(
         local_value
             .get("includeNamePatterns")
-            .and_then(Value::as_array)
+            .and_then(|items| items.as_array())
             .and_then(|items| items.first())
             .and_then(Value::as_str),
         Some("foo*")
@@ -41,6 +46,7 @@ fn git_skill_source_view_serializes_last_fetched_at() -> Result<()> {
         repo: "https://github.com/acme/skills.git".to_string(),
         r#ref: Some("main".to_string()),
         last_fetched_at: Some(1_744_366_400_000),
+        description: None,
         include_name_patterns: Vec::new(),
         include_path_patterns: Vec::new(),
         label: "Git".to_string(),
@@ -53,6 +59,8 @@ fn git_skill_source_view_serializes_last_fetched_at() -> Result<()> {
         Some(1_744_366_400_000)
     );
     assert!(git_value.get("last_fetched_at").is_none());
+    // 未填描述时字段整体省略，前端按无标题处理。
+    assert!(git_value.get("description").is_none());
 
     Ok(())
 }

@@ -622,6 +622,79 @@ fn include_patterns_match_name_and_path() -> Result<()> {
 }
 
 #[test]
+fn discovered_skills_carry_frontmatter_description() -> Result<()> {
+    let root = TestDir::new("manager-skill-description")?;
+    write_skill(
+        root.path(),
+        "skills/tdd",
+        "---\nname: tdd\ndescription: Test-driven development for bugs.\n---\n\n# TDD\n",
+    )?;
+    write_skill(root.path(), "skills/legacy", "正文没有 frontmatter")?;
+
+    let skills = discover_skills_in_directory(root.path())?;
+
+    let tdd = skills
+        .iter()
+        .find(|skill| skill.name == "tdd")
+        .expect("tdd skill discovered");
+    assert_eq!(
+        tdd.description.as_deref(),
+        Some("Test-driven development for bugs.")
+    );
+    let legacy = skills
+        .iter()
+        .find(|skill| skill.name == "legacy")
+        .expect("legacy skill discovered");
+    assert_eq!(legacy.description, None);
+    Ok(())
+}
+
+#[test]
+fn skill_description_folds_whitespace_and_caps_length() {
+    let long = "词".repeat(600);
+    let contents = format!("---\ndescription: >-\n  第一行\n  第二行\n  {long}\n---\n\n正文\n");
+
+    let description = skill_description_from_contents(&contents).expect("description parsed");
+
+    assert!(description.starts_with("第一行 第二行 "));
+    assert_eq!(description.chars().count(), 500);
+}
+
+#[test]
+fn skill_source_description_normalizes_on_parse() -> Result<()> {
+    let env = Environment::from_env();
+    let config_path = PathBuf::from("/tmp/reins-source-description-test.yaml");
+    let raw = "\
+skill_sources:
+  - id: notes
+    type: local
+    root_path: /tmp/notes
+    description: \"  个人笔记技能库  \"
+  - id: blank
+    type: local
+    root_path: /tmp/blank
+    description: \"   \"
+  - id: missing
+    type: local
+    root_path: /tmp/missing
+";
+
+    let config = parse_manager_config(raw, &config_path, &env)?;
+
+    let description_of = |id: &str| {
+        config.skill_sources.get(id).and_then(|source| match source {
+            ResolvedSkillSourceDefinition::Local { description, .. } => description.clone(),
+            _ => None,
+        })
+    };
+    assert_eq!(description_of("notes").as_deref(), Some("个人笔记技能库"));
+    // 纯空白与缺字段都按未填处理。
+    assert_eq!(description_of("blank"), None);
+    assert_eq!(description_of("missing"), None);
+    Ok(())
+}
+
+#[test]
 fn partition_excluded_returns_skills_not_kept() {
     let all = vec![
         DiscoveredSkill {
@@ -629,12 +702,14 @@ fn partition_excluded_returns_skills_not_kept() {
             relative_path: "skills/beeper".to_string(),
             skill_file_path: "/tmp/source/skills/beeper/SKILL.md".to_string(),
             source_path: Some("/tmp/source/skills/beeper".to_string()),
+            description: None,
         },
         DiscoveredSkill {
             name: "agent-helper".to_string(),
             relative_path: "skills/agent-helper".to_string(),
             skill_file_path: "/tmp/source/skills/agent-helper/SKILL.md".to_string(),
             source_path: Some("/tmp/source/skills/agent-helper".to_string()),
+            description: None,
         },
     ];
     let kept = vec![all[1].clone()];

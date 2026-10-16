@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed } from "vue";
+import AppTooltip from "@shared/ui/AppTooltip.vue";
 import type { SkillLinkAssociation, SyncTargetOption } from "../types";
 import {
   canRemoveSkillLink,
@@ -134,6 +135,13 @@ const groups = computed(() => groupSyncTargets(props.targets));
                 <span class="manager-sync-target-link__path" :title="link.sourcePath">
                   {{ skillLinkSourcePath(link, currentSourceId) }}
                 </span>
+                <AppTooltip
+                  v-if="link.description"
+                  class="manager-sync-target-link__note"
+                  :tip="link.description"
+                >
+                  <span class="manager-skill-note">{{ link.description }}</span>
+                </AppTooltip>
               </span>
               <span :class="`manager-sync-target-link__state manager-sync-target-link__state--${skillLinkStateInfo(link.state).tone}`">
                 {{ skillLinkStateInfo(link.state).label }}

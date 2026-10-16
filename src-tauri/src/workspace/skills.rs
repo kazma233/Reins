@@ -26,8 +26,9 @@ pub(super) use super::skill_install::{normalize_link_path, relative_to_source_ro
 use super::targets::read_skill_dir_link;
 use super::types::*;
 use super::{
-    display_path, expand_path, normalize_patterns, parse_manager_config, remove_empty_parent_dirs,
-    remove_existing_path, run_command, workspace_state_inner,
+    display_path, expand_path, normalize_patterns, normalize_source_description,
+    parse_manager_config, remove_empty_parent_dirs, remove_existing_path, run_command,
+    workspace_state_inner,
 };
 
 // Discover all skills in a source root, without applying include filters.
@@ -210,10 +211,14 @@ fn classify_skill_link(
         SkillLinkState::Excluded
     };
 
+    // 链接另一端有 SKILL.md 就带出描述，非受管控的链接也能靠它认出内容。
+    let description = skill_description_of(&source_path.join("SKILL.md"));
+
     SkillLinkAssociation {
         skill_name,
         destination_path: display_path(destination),
         source_path: display_path(&source_path),
+        description,
         matched_source_ids,
         source_relatives: matches
             .iter()
@@ -248,6 +253,7 @@ pub(crate) fn build_sync_skill_options(
                     name: s.name,
                     relative_path: s.relative_path,
                     matched,
+                    description: s.description,
                 }
             })
             .collect(),
@@ -455,6 +461,7 @@ fn sync_skill_option_to_discovered(
         relative_path: skill.relative_path.clone(),
         skill_file_path: display_path(&source_dir.join("SKILL.md")),
         source_path: Some(display_path(&source_dir)),
+        description: skill.description.clone(),
     })
 }
 
@@ -481,7 +488,41 @@ pub(crate) fn remove_source_sync_inner(
 // Skill discovery (WalkDir + include patterns)
 // ---------------------------------------------------------------------------
 
-pub(super) fn discover_skills_in_directory(root: &Path) -> Result<Vec<DiscoveredSkill>> {
+// 备注只帮用户在列表里认出 skill；超长描述在 tooltip 里也不可读，硬截断。
+const SKILL_DESCRIPTION_MAX_CHARS: usize = 500;
+
+// SKILL.md frontmatter 的 description。只解析 --- 围栏内的 YAML，不引
+// markdown 解析器；任何一步失败都按无描述处理——备注缺失不该挡住 discovery。
+pub(crate) fn skill_description_from_contents(contents: &str) -> Option<String> {
+    let body = contents.trim_start().strip_prefix("---")?;
+    let end = body.lines().position(|line| {
+        let trimmed = line.trim_end();
+        trimmed == "---" || trimmed == "..."
+    })?;
+    let front_matter = body.lines().take(end).collect::<Vec<_>>().join("\n");
+    let front_matter = serde_yaml::from_str::<serde_yaml::Value>(&front_matter).ok()?;
+    let description = front_matter.get("description")?.as_str()?;
+    // 折叠 YAML 多行标量的换行与连续空白，备注按单行展示。
+    let single_line = description
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    if single_line.is_empty() {
+        return None;
+    }
+    Some(
+        single_line
+            .chars()
+            .take(SKILL_DESCRIPTION_MAX_CHARS)
+            .collect(),
+    )
+}
+
+fn skill_description_of(skill_file: &Path) -> Option<String> {
+    skill_description_from_contents(&fs::read_to_string(skill_file).ok()?)
+}
+
+pub(crate) fn discover_skills_in_directory(root: &Path) -> Result<Vec<DiscoveredSkill>> {
     let mut skills = Vec::new();
 
     for entry in WalkDir::new(root).into_iter().filter_map(Result::ok) {
@@ -508,6 +549,7 @@ pub(super) fn discover_skills_in_directory(root: &Path) -> Result<Vec<Discovered
             relative_path: relative_path.clone(),
             skill_file_path: display_path(entry.path()),
             source_path: Some(display_path(parent)),
+            description: skill_description_of(entry.path()),
         });
     }
 
@@ -792,6 +834,7 @@ fn import_git_source(
             source: RawSkillSourceDefinition::Git {
                 repo: source.repo.clone(),
                 r#ref: Some(source.r#ref.clone()),
+                description: None,
                 include_name_patterns: name_patterns.clone(),
                 include_path_patterns: path_patterns.clone(),
             },
@@ -910,6 +953,7 @@ pub(crate) fn update_skill_source_inner(
         match &mut source.source {
             RawSkillSourceDefinition::Git {
                 r#ref,
+                description,
                 include_name_patterns,
                 include_path_patterns,
                 ..
@@ -917,14 +961,18 @@ pub(crate) fn update_skill_source_inner(
                 if let Some(new_ref) = input.r#ref {
                     *r#ref = Some(new_ref);
                 }
+                // 描述是编辑弹窗的全量回写：None 就是用户清空。
+                *description = normalize_source_description(input.description);
                 *include_name_patterns = name_patterns;
                 *include_path_patterns = path_patterns;
             }
             RawSkillSourceDefinition::Local {
+                description,
                 include_name_patterns,
                 include_path_patterns,
                 ..
             } => {
+                *description = normalize_source_description(input.description);
                 *include_name_patterns = name_patterns;
                 *include_path_patterns = path_patterns;
             }
@@ -1092,12 +1140,14 @@ fn discovery_source_to_raw_definition(
     match source {
         DiscoverySourceDefinition::Local { root_path } => RawSkillSourceDefinition::Local {
             root_path: display_path(root_path),
+            description: None,
             include_name_patterns,
             include_path_patterns,
         },
         DiscoverySourceDefinition::Git { repo, r#ref, .. } => RawSkillSourceDefinition::Git {
             repo: repo.clone(),
             r#ref: r#ref.clone(),
+            description: None,
             include_name_patterns,
             include_path_patterns,
         },

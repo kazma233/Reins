@@ -19,6 +19,7 @@ fn store_with_local_sources(root: &TestDir, source_ids: &[&str]) -> Result<Works
                 id: id.to_string(),
                 source: RawSkillSourceDefinition::Local {
                     root_path: root.path().join("sources").join(id).display().to_string(),
+                    description: None,
                     include_name_patterns: Vec::new(),
                     include_path_patterns: Vec::new(),
                 },
@@ -410,6 +411,7 @@ fn concurrent_mutations_do_not_lose_updates() -> Result<()> {
                     id: "left".to_string(),
                     source: RawSkillSourceDefinition::Local {
                         root_path: "/tmp/left".to_string(),
+                        description: None,
                         include_name_patterns: Vec::new(),
                         include_path_patterns: Vec::new(),
                     },
@@ -427,6 +429,7 @@ fn concurrent_mutations_do_not_lose_updates() -> Result<()> {
                     id: "right".to_string(),
                     source: RawSkillSourceDefinition::Local {
                         root_path: "/tmp/right".to_string(),
+                        description: None,
                         include_name_patterns: Vec::new(),
                         include_path_patterns: Vec::new(),
                     },
