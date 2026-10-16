@@ -16,7 +16,13 @@ use super::types::{
 use crate::logger;
 use crate::support::fs::write_atomic;
 
-const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
+// 聚合平台模型列表请求超时：KB 级响应，10s 覆盖跨州链路。
+const PROVIDER_MODELS_TIMEOUT: Duration = Duration::from_secs(10);
+// models.dev 目录请求超时：响应在 5MB 量级，实测完整下载 ~30s；
+// 之前的 10s 把 `response.json()` 截在 body 中段，导致所有失败
+// 被错误地报为「不是 JSON」。
+const MODELSDEV_TIMEOUT: Duration = Duration::from_secs(45);
+const MODELSDEV_URL: &str = "https://models.dev/api.json";
 const CACHE_FILE_NAME: &str = "modelsdev-cache.json";
 const CACHE_TTL_MS: i64 = 24 * 60 * 60 * 1000;
 
@@ -50,7 +56,7 @@ pub(crate) fn fetch_provider_models_inner(
         candidates.push((format!("{root}/models"), true));
     }
 
-    let client = build_client()?;
+    let client = build_client(PROVIDER_MODELS_TIMEOUT)?;
     for (index, (url, bearer)) in candidates.iter().enumerate() {
         let mut request = client.get(url);
         if *bearer {
@@ -131,9 +137,9 @@ fn describe_non_json_body(raw: &[u8]) -> String {
     head
 }
 
-fn build_client() -> Result<reqwest::blocking::Client> {
+fn build_client(timeout: Duration) -> Result<reqwest::blocking::Client> {
     reqwest::blocking::Client::builder()
-        .timeout(REQUEST_TIMEOUT)
+        .timeout(timeout)
         .build()
         .context("无法创建 HTTP 客户端")
 }
@@ -277,15 +283,8 @@ fn load_modelsdev_data(app_dir: &Path, force_refresh: bool) -> Result<JsonValue>
         }
     }
 
-    let client = build_client()?;
-    let response = client
-        .get("https://models.dev/api.json")
-        .send()
-        .context("拉取 models.dev 目录失败")?;
-    if !response.status().is_success() {
-        bail!("models.dev 请求失败：HTTP {}", response.status());
-    }
-    let data: JsonValue = response.json().context("models.dev 返回的不是 JSON")?;
+    let client = build_client(MODELSDEV_TIMEOUT)?;
+    let data = fetch_modelsdev(&client, MODELSDEV_URL)?;
 
     let cache = ModelsDevCache {
         fetched_at_ms: now_ms(),
@@ -295,6 +294,45 @@ fn load_modelsdev_data(app_dir: &Path, force_refresh: bool) -> Result<JsonValue>
     // 缓存写失败只影响下次复用，不阻断本次补全；write_atomic 自带建目录。
     let _ = write_atomic(&path, &serialized);
     Ok(data)
+}
+
+// 网络层单独抽出来，给回归测试用 fake server 注入可控响应。
+// 错误文案按 `reqwest::Error::is_timeout / is_connect` 分支：
+// - 超时给「请求超时（>45s）」，能区分之前的「不是 JSON」误报；
+// - 真非 JSON 时把响应体开头带出来，便于判断上游返回了什么。
+pub(crate) fn fetch_modelsdev(
+    client: &reqwest::blocking::Client,
+    url: &str,
+) -> Result<JsonValue> {
+    let response = client
+        .get(url)
+        .send()
+        .map_err(|err| describe_modelsdev_http_error("拉取 models.dev 目录失败", &err))?;
+    let status = response.status();
+    if !status.is_success() {
+        bail!("models.dev 请求失败：HTTP {status}");
+    }
+    let raw = response
+        .bytes()
+        .map_err(|err| describe_modelsdev_http_error("读取 models.dev 响应失败", &err))?;
+    match serde_json::from_slice(&raw) {
+        Ok(value) => Ok(value),
+        Err(_) => bail!("models.dev 返回的不是 JSON：{}", describe_non_json_body(&raw)),
+    }
+}
+
+fn describe_modelsdev_http_error(prefix: &str, err: &reqwest::Error) -> anyhow::Error {
+    if err.is_timeout() {
+        anyhow::anyhow!(
+            "{prefix}：请求超时（>{timeout}s），可稍后重试或点「从 models.dev 补全」刷新。",
+            prefix = prefix,
+            timeout = MODELSDEV_TIMEOUT.as_secs()
+        )
+    } else if err.is_connect() {
+        anyhow::anyhow!("{prefix}：无法连接到上游（{err}）")
+    } else {
+        anyhow::anyhow!("{prefix}：{err}")
+    }
 }
 
 pub(crate) fn match_modelsdev(

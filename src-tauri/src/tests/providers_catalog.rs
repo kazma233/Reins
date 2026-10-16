@@ -424,3 +424,134 @@ fn fetch_direct_reports_non_json_body_head() -> Result<()> {
     assert!(err.ends_with('…'), "超长响应体应截断：{err}");
     Ok(())
 }
+
+// models.dev 拉取：2xx 但 body 是 HTML 错误页时，错误串要带出响应体开头，
+// 并明确是「不是 JSON」而不是超时。
+#[test]
+fn fetch_modelsdev_reports_non_json_body_head() -> Result<()> {
+    use std::io::{BufRead, BufReader, Write};
+    use std::net::TcpListener;
+
+    fn serve(body: String) -> (u16, std::thread::JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let port = listener.local_addr().expect("addr").port();
+        let handle = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().expect("accept");
+            let mut reader = BufReader::new(stream.try_clone().expect("clone"));
+            let mut request_line = String::new();
+            reader.read_line(&mut request_line).expect("read request");
+            loop {
+                let mut line = String::new();
+                let n = reader.read_line(&mut line).expect("read header");
+                if n == 0 || line.trim().is_empty() {
+                    break;
+                }
+            }
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            let mut stream = stream;
+            stream.write_all(response.as_bytes()).expect("write");
+        });
+        (port, handle)
+    }
+
+    let body = "<html>\n  <body>502 Bad Gateway</body>\n</html>".to_string();
+    let (port, server) = serve(body);
+    let client = reqwest::blocking::Client::builder()
+        .build()
+        .expect("client");
+    let err = crate::providers::catalog::fetch_modelsdev(
+        &client,
+        &format!("http://127.0.0.1:{port}/api.json"),
+    )
+    .unwrap_err()
+    .to_string();
+    server.join().unwrap();
+
+    assert!(err.contains("返回的不是 JSON"), "{err}");
+    assert!(err.contains("502 Bad Gateway"), "{err}");
+    assert!(!err.contains('\n'), "错误串应压成单行：{err}");
+    Ok(())
+}
+
+// models.dev 拉取：客户端超时小于服务端响应延迟时，应报「请求超时」而不是
+// 把网络层错误错挂成「不是 JSON」。
+#[test]
+fn fetch_modelsdev_reports_timeout_when_exceeds_client_timeout() -> Result<()> {
+    use std::net::TcpListener;
+    use std::time::Duration;
+
+    let listener = TcpListener::bind("127.0.0.1:0")?;
+    let port = listener.local_addr()?.port();
+    // 只 accept 不写响应；服务端必须保持长于 client 超时的时间，否则后续
+    // 测试可能偶发命中 FIN 而不是超时分支。
+    let server = std::thread::spawn(move || {
+        let (stream, _) = listener.accept().expect("accept");
+        std::thread::sleep(Duration::from_secs(2));
+        drop(stream);
+    });
+
+    let client = reqwest::blocking::Client::builder()
+        .timeout(Duration::from_millis(100))
+        .build()
+        .expect("client");
+    let err = crate::providers::catalog::fetch_modelsdev(
+        &client,
+        &format!("http://127.0.0.1:{port}/api.json"),
+    )
+    .unwrap_err()
+    .to_string();
+    server.join().unwrap();
+
+    assert!(err.contains("请求超时"), "{err}");
+    assert!(
+        !err.contains("不是 JSON"),
+        "超时分支不应被包装为「不是 JSON」：{err}"
+    );
+    Ok(())
+}
+
+// models.dev 拉取：合法 JSON 直接吐出解析后的 Value。
+#[test]
+fn fetch_modelsdev_returns_parsed_value_for_valid_json() -> Result<()> {
+    use std::io::{BufRead, BufReader, Write};
+    use std::net::TcpListener;
+
+    let listener = TcpListener::bind("127.0.0.1:0")?;
+    let port = listener.local_addr()?.port();
+    let body = r#"{"openrouter":{"models":{"claude-x":{"limit":{"context":200000}}}}}"#;
+    let server = std::thread::spawn(move || {
+        let (stream, _) = listener.accept().expect("accept");
+        let mut reader = BufReader::new(stream.try_clone().expect("clone"));
+        let mut request_line = String::new();
+        reader.read_line(&mut request_line).expect("read");
+        loop {
+            let mut line = String::new();
+            let n = reader.read_line(&mut line).expect("read");
+            if n == 0 || line.trim().is_empty() {
+                break;
+            }
+        }
+        let response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        );
+        let mut stream = stream;
+        stream.write_all(response.as_bytes()).expect("write");
+    });
+
+    let client = reqwest::blocking::Client::builder().build().expect("client");
+    let parsed = crate::providers::catalog::fetch_modelsdev(
+        &client,
+        &format!("http://127.0.0.1:{port}/api.json"),
+    )?;
+    server.join().unwrap();
+
+    assert_eq!(
+        parsed["openrouter"]["models"]["claude-x"]["limit"]["context"],
+        json!(200000)
+    );
+    Ok(())
+}
