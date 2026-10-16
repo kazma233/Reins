@@ -738,11 +738,12 @@
   background: rgba(124, 130, 138, 0.08);
 }
 
-/* 消息级模型标签:挂在输入与输出上,过程行不挂;同一消息只在首段文本出现一次。
-   对齐跟随所在消息——助手文本靠左,用户气泡靠右,否则标签会飘到对面像挂在别人身上。 */
+/* 消息级模型标签:挂在输入与输出首段文本的顶部,过程行不挂;同一消息被过程行
+   切成多段时只出现一次。用户标签收在气泡内右上,不飘到对面像挂在别人身上。 */
 .flow-model {
   align-self: flex-start;
   color: var(--color-muted);
+  font-family: var(--font-mono);
   font-size: var(--font-size-xs);
   font-variant-numeric: tabular-nums;
 }

@@ -160,7 +160,7 @@ useInfiniteScroll({
             <span
               v-if="modelsBadge(session)"
               :title="modelsHint(session)"
-              class="session-state-chip session-state-chip--model"
+              class="session-meta-model"
               >{{ modelsBadge(session) }}</span
             >
             <span

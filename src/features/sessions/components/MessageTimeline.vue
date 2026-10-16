@@ -59,22 +59,22 @@ function modelLabel(item: TimelineItem): string | null {
     <template v-for="item in items" :key="item.key">
       <template v-if="item.kind === 'text'">
         <div v-if="item.role === 'user'" class="flow-user">
+          <span v-if="modelLabel(item)" class="flow-model">{{ modelLabel(item) }}</span>
           <MessageBlockContent
             v-for="(block, index) in item.blocks"
             :key="`${item.key}-${index}`"
             :content-text="block.text ?? ''"
             :kind="block.kind"
           />
-          <span v-if="modelLabel(item)" class="flow-model">{{ modelLabel(item) }}</span>
         </div>
         <div v-else class="flow-text">
+          <span v-if="modelLabel(item)" class="flow-model">{{ modelLabel(item) }}</span>
           <MessageBlockContent
             v-for="(block, index) in item.blocks"
             :key="`${item.key}-${index}`"
             :content-text="block.text ?? ''"
             :kind="block.kind"
           />
-          <span v-if="modelLabel(item)" class="flow-model">{{ modelLabel(item) }}</span>
         </div>
       </template>
       <ToolRow

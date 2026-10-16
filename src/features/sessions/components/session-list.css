@@ -116,17 +116,14 @@
   color: #b45309;
 }
 
-/* 模型角标比状态角标长：过长时省略号截断，不挤掉右侧 token 指标。
-   改回 inline-block 才能让 text-overflow 生效（inline-flex 的文本是匿名
-   flex 项，容器上的 text-overflow 不参与它的渲染）。 */
-.session-state-chip--model {
-  display: inline-block;
-  max-width: 20ch;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  background: rgba(0, 82, 255, 0.1);
-  color: var(--color-primary);
+/* 模型是元数据不是状态,不做角标:与详情页会话 id 同一套等宽弱化文本。
+   模型名完整展示不截断,过长沿 meta 行自然换行。 */
+.session-meta-model {
+  color: var(--color-body);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xs);
+  line-height: 18px;
+  font-variant-numeric: tabular-nums;
 }
 
 .session-list-footer {
