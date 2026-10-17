@@ -18,7 +18,7 @@
 
 .about-header__title {
   margin: 0;
-  font-size: var(--font-size-xl);
+  font-size: var(--font-size-2xl);
   font-weight: 600;
   color: var(--color-ink);
 }

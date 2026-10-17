@@ -1,5 +1,5 @@
 /* 用量统计页:布局自上而下(顶部筛选与窗口切换 → 指标行 → 曲线卡)。
-   页面全部内容跟随 app 宽度,左右 padding 即边距;
+   页面留白与会话列表/模型配置页同口径(顶部 14、两侧 16);
    高度跟随 app,内容超出时页面内滚动,子项禁止 flex 收缩(否则曲线卡
    被压瘪后,卡片 overflow hidden 会把 x 轴标签裁掉)。
    图表高度固定,不随宽度变化(见 UsageTrendChart)。 */
@@ -8,7 +8,7 @@
   display: flex;
   flex-direction: column;
   gap: 16px;
-  padding: 24px 28px 48px;
+  padding: 14px 16px 48px;
   flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
@@ -40,14 +40,15 @@
 
 .usage-header__title {
   margin: 0;
-  font-size: var(--font-size-xl, 16px);
+  font-size: var(--font-size-2xl);
+  font-weight: 600;
   color: var(--color-ink);
 }
 
 .usage-header__meta {
   margin: 4px 0 0;
-  font-size: var(--font-size-xs, 11px);
-  color: var(--color-ink-muted, var(--color-body));
+  font-size: var(--font-size-xs);
+  color: var(--color-body);
 }
 
 .usage-header__actions {
@@ -85,13 +86,21 @@
   font-weight: var(--button-font-weight);
 }
 
+@media (hover: hover) {
+  .usage-window-switcher__button:hover {
+    background: var(--color-surface-soft);
+    color: var(--color-ink);
+  }
+}
+
 .usage-window-switcher__button + .usage-window-switcher__button {
   border-left: 1px solid var(--color-hairline);
 }
 
 .usage-window-switcher__button.is-active {
-  background: var(--color-primary);
-  color: #ffffff;
+  background: var(--color-primary-tint);
+  color: var(--color-primary);
+  font-weight: 600;
 }
 
 .usage-refresh-button {
@@ -122,8 +131,8 @@
 .usage-loading {
   padding: 32px 0;
   text-align: center;
-  font-size: var(--font-size-sm, 13px);
-  color: var(--color-ink-muted, var(--color-body));
+  font-size: var(--font-size-sm);
+  color: var(--color-body);
 }
 
 /* 首扫大转录时的滚动进度条。 */
@@ -159,7 +168,7 @@
 .usage-empty {
   padding: 32px 0;
   text-align: center;
-  font-size: var(--font-size-sm, 13px);
-  color: var(--color-ink-muted, var(--color-body));
+  font-size: var(--font-size-sm);
+  color: var(--color-body);
 }
 

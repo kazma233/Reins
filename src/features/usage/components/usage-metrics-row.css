@@ -24,18 +24,18 @@
 }
 
 .usage-metric__label {
-  font-size: var(--font-size-xs, 11px);
-  color: var(--color-ink-muted, var(--color-body));
+  font-size: var(--font-size-xs);
+  color: var(--color-body);
 }
 
 .usage-metric__value {
-  font-size: 20px;
-  font-weight: 650;
+  font-size: var(--font-size-2xl);
+  font-weight: 600;
   color: var(--color-ink);
   font-variant-numeric: tabular-nums;
 }
 
 .usage-metric__meta {
-  font-size: var(--font-size-xs, 11px);
-  color: var(--color-ink-muted, var(--color-body));
+  font-size: var(--font-size-xs);
+  color: var(--color-body);
 }

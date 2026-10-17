@@ -7,7 +7,7 @@
 .manager-content,
 .manager-panel {
   border: 1px solid var(--color-hairline);
-  background: rgba(255, 255, 255, 0.8);
+  background: var(--color-canvas);
 }
 
 .manager-field {
@@ -56,7 +56,7 @@
   padding: 7px 10px;
   border: 1px solid var(--color-hairline);
   border-radius: 0;
-  background: rgba(255, 255, 255, 0.88);
+  background: var(--color-canvas);
   color: var(--color-ink);
   font-size: var(--font-size-lg);
   line-height: 1.4;
@@ -144,7 +144,7 @@
   max-width: 220px;
   padding: 7px 10px;
   border: 1px solid var(--color-hairline);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-control);
   background: var(--color-canvas);
   color: var(--color-ink);
   font-size: var(--font-size-lg);
@@ -154,7 +154,7 @@
 }
 
 .manager-skills-toolbar__search-input:focus {
-  outline: 2px solid rgba(0, 82, 255, 0.22);
+  outline: 2px solid var(--color-focus-ring);
   outline-offset: 1px;
   border-color: var(--color-primary);
 }
@@ -477,11 +477,13 @@
   font-weight: var(--button-font-weight);
 }
 
-/* 悬停只加浮起阴影：底色由 is-installed / is-warning / is-partial 等状态类
+/* 悬停只加深底色：底色由 is-installed / is-warning / is-partial 等状态类
    决定，这里覆盖会在 hover 时抹掉状态色 */
 @media (hover: hover) {
   .manager-target-button:hover:not(:disabled) {
-    box-shadow: 0 1px 4px rgba(10, 11, 13, 0.12);
+    border-color: var(--color-muted-soft);
+    background: var(--color-surface-strong);
+    color: var(--color-ink);
   }
 }
 
@@ -501,9 +503,9 @@
 }
 
 .manager-target-button.is-warning {
-  border-color: rgba(245, 158, 11, 0.45);
-  background: rgba(255, 251, 235, 1);
-  color: #92400e;
+  border-color: var(--color-warning-line);
+  background: var(--color-warning-tint);
+  color: var(--color-warning-ink);
 }
 
 .manager-target-button.is-linked {
@@ -587,6 +589,8 @@
   gap: 12px;
 }
 
+/* 分组标题不转大写:标题混排中文与英文小写(全局 targets),大写转换
+   会让英文在中文旁边显得突兀 */
 .manager-sync-target-group__header {
   display: flex;
   align-items: center;
@@ -595,8 +599,6 @@
   font-size: var(--font-size-sm);
   font-weight: 600;
   color: var(--color-muted);
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
 }
 
 .manager-sync-target-group__count {
@@ -623,7 +625,7 @@
   align-items: center;
   gap: 10px;
   padding: 10px 14px;
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   cursor: pointer;
   transition: background-color 0.12s ease;
 }
@@ -646,7 +648,7 @@
   flex-shrink: 0;
   width: 16px;
   height: 16px;
-  accent-color: var(--color-accent);
+  accent-color: var(--color-primary);
   cursor: pointer;
 }
 
@@ -680,7 +682,7 @@
 
 .manager-sync-target-row__tag {
   padding: 1px 5px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   font-size: var(--font-size-xs);
   font-weight: 500;
   line-height: 1.4;
@@ -693,7 +695,7 @@
 }
 
 .manager-sync-target-row__tag--linked {
-  background: rgba(0, 82, 255, 0.08);
+  background: var(--color-primary-tint);
   color: var(--color-primary);
 }
 
@@ -789,7 +791,7 @@
 }
 
 .manager-sync-target-link--current-source {
-  background: rgba(0, 82, 255, 0.06);
+  background: var(--color-primary-tint);
 }
 
 .manager-sync-target-link__main {
@@ -840,12 +842,12 @@
 }
 
 .manager-sync-target-link__state--linked {
-  background: rgba(5, 177, 105, 0.06);
+  background: var(--color-success-tint);
   color: var(--color-success);
 }
 
 .manager-sync-target-link__state--cleanup {
-  background: rgba(207, 32, 47, 0.06);
+  background: var(--color-danger-tint);
   color: var(--color-danger);
 }
 
@@ -888,25 +890,25 @@
 }
 
 .pill--on {
-  background: #ecfdf5;
-  color: #059669;
+  background: var(--color-success-tint);
+  color: var(--color-success);
 }
 
 .pill--off {
-  background: #fef3c7;
-  color: #b45309;
+  background: var(--color-warning-tint);
+  color: var(--color-warning-ink);
 }
 
 /* 落点是软链接：中性提示，不是错误也不是状态开关。 */
 .pill--info {
-  background: rgba(0, 82, 255, 0.08);
+  background: var(--color-primary-tint);
   color: var(--color-primary);
 }
 
 /* 目录不存在：中性偏提醒——可能是待安装，也可能是路径写错。 */
 .pill--note {
-  background: #fef3c7;
-  color: #b45309;
+  background: var(--color-warning-tint);
+  color: var(--color-warning-ink);
 }
 
 /* --- sync columns --- */
@@ -1042,7 +1044,7 @@
   min-height: 0;
   overflow-y: auto;
   border: 1px solid var(--color-hairline-soft);
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   padding: 4px;
 }
 
@@ -1054,9 +1056,27 @@
 
 .manager-sync-dialog .manager-import-skill-row {
   border: 1px solid var(--color-hairline-soft);
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   gap: 0;
   padding: 7px 9px;
+}
+
+/* label 默认 inline,原生 checkbox 按文字基线对齐,框的中心会高于文字中线;
+   flex 居中让勾选框与名字共用一条中线。 */
+.manager-sync-skill-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* 与右列 targets 的勾选框同尺寸同主色 */
+.manager-sync-skill-row input[type="checkbox"] {
+  flex: 0 0 auto;
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: var(--color-primary);
+  cursor: pointer;
 }
 
 .manager-sync-dialog .manager-import-skill-row .manager-skill-name {
@@ -1071,7 +1091,7 @@
   min-height: var(--control-height);
   padding: 0 10px;
   border: 1px solid var(--color-hairline);
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   font-size: var(--font-size-md);
   background: var(--color-canvas);
   color: var(--color-ink);
@@ -1082,7 +1102,7 @@
 /* Collapsed section showing skills excluded by the include patterns. */
 .manager-sync-unmatched {
   border: 1px dashed var(--color-hairline);
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   padding: 6px 10px;
   font-size: var(--font-size-sm);
   color: var(--color-muted);
@@ -1128,16 +1148,12 @@
   font-size: var(--font-size-sm);
   font-weight: 600;
   color: var(--color-muted);
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
 }
 
 .manager-target-group__header .secondary-button {
   min-height: var(--button-height-compact);
   padding: 0 10px;
   font-size: var(--font-size-sm);
-  text-transform: none;
-  letter-spacing: 0;
 }
 
 .manager-target-row__name-text {
@@ -1352,8 +1368,6 @@
   color: var(--color-muted);
   font-size: var(--font-size-xs);
   font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
 }
 
 /* 匹配规则保留等宽便于读准 glob，但去掉胶囊底与描边，降低视觉噪音 */
@@ -1472,14 +1486,14 @@
 .manager-field input,
 .manager-editor {
   border-color: var(--color-hairline);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-control);
   background: var(--color-canvas);
   color: var(--color-ink);
 }
 
 .manager-field input:focus,
 .manager-editor:focus {
-  outline: 2px solid rgba(0, 82, 255, 0.22);
+  outline: 2px solid var(--color-focus-ring);
   outline-offset: 1px;
   border-color: var(--color-primary);
 }
@@ -1494,27 +1508,29 @@
   color: var(--color-body);
 }
 
+/* 页签/分段/落点按钮的选中态与全站口径一致:淡蓝 tint,不再实心蓝 */
 .manager-segmented__button.is-active,
 .manager-nav__button.is-active,
 .manager-target-button.is-active {
-  border-color: var(--color-primary);
-  background: var(--color-primary);
-  color: var(--color-on-primary);
+  border-color: var(--color-primary-line);
+  background: var(--color-primary-tint);
+  color: var(--color-primary);
+  font-weight: 600;
 }
 
-/* 选中态悬停时保持主色底：secondary-button 的 hover 变灰规则优先级更高，
-   不补这条会抹掉底色、只留白字在浅底上 */
+/* 选中态悬停时保持 tint 底：secondary-button 的 hover 变灰规则优先级更高，
+   不补这条会抹掉底色 */
 @media (hover: hover) {
   .manager-target-button.is-active:hover:not(:disabled) {
-    border-color: var(--color-primary);
-    background: var(--color-primary);
-    color: var(--color-on-primary);
+    border-color: var(--color-primary-line);
+    background: var(--color-primary-tint);
+    color: var(--color-primary);
   }
 }
 
 .manager-segmented__button:focus-visible,
 .manager-nav__button:focus-visible {
-  outline: 2px solid rgba(0, 82, 255, 0.22);
+  outline: 2px solid var(--color-focus-ring);
   outline-offset: 1px;
 }
 
@@ -1557,18 +1573,18 @@
 
 .success-pill,
 .manager-target-button.is-installed {
-  border-color: rgba(5, 177, 105, 0.28);
-  background: rgba(5, 177, 105, 0.06);
+  border-color: var(--color-success-line);
+  background: var(--color-success-tint);
   color: var(--color-success);
 }
 
 .danger-pill {
-  background: rgba(207, 32, 47, 0.06);
+  background: var(--color-danger-tint);
   color: var(--color-danger);
 }
 
 .manager-target-button.is-partial {
-  background: rgba(0, 82, 255, 0.08);
+  background: var(--color-primary-tint);
   color: var(--color-primary);
 }
 

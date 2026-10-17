@@ -6,7 +6,8 @@
   align-items: center;
   justify-content: center;
   padding: 16px;
-  background: rgba(10, 11, 13, 0.42);
+  background: rgba(15, 18, 26, 0.44);
+  backdrop-filter: blur(2px);
 }
 
 .dialog-card {
@@ -16,7 +17,7 @@
   border-radius: var(--radius-xl);
   overflow: hidden;
   background: var(--color-canvas);
-  box-shadow: 0 28px 80px rgba(10, 11, 13, 0.18);
+  box-shadow: var(--shadow-overlay);
 }
 
 .dialog-panel {
@@ -48,6 +49,8 @@
 .dialog-scroll {
   max-height: min(68vh, 640px);
   overflow: auto;
+  /* 滚到弹窗内容尽头不再把背后的页面一起滚动 */
+  overscroll-behavior: contain;
   padding: 12px 4px 14px 0;
   /* stable（单侧）：滚动条出现时不产生布局跳动，也不在左侧留出永久空槽 */
   scrollbar-gutter: stable;
@@ -171,40 +174,35 @@
     border-color 0.16s ease,
     background 0.16s ease,
     color 0.16s ease,
-    box-shadow 0.16s ease;
+    box-shadow 0.16s ease,
+    transform 0.15s ease-out;
 }
 
 .primary-button {
   color: var(--color-on-primary);
   background: var(--color-primary);
   border-color: var(--color-primary);
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.18),
-    0 1px 2px rgba(10, 11, 13, 0.08);
 }
 
 .secondary-button {
   color: var(--color-ink);
   background: var(--color-canvas);
   border-color: var(--color-hairline);
-  box-shadow: 0 1px 2px rgba(10, 11, 13, 0.04);
 }
 
 /* 破坏性操作统一描边红：降噪，同时保留红色警示语义 */
 .danger-button {
   color: var(--color-danger);
   background: var(--color-canvas);
-  border-color: color-mix(in srgb, var(--color-danger) 35%, transparent);
-  box-shadow: 0 1px 2px rgba(10, 11, 13, 0.04);
+  border-color: var(--color-danger-line);
 }
 
+/* 警告与危险同构:描边琥珀而不是实底——实底琥珀上的白字对比度不足,
+   且警告通常是破坏性的前一级,视觉权重不应高于危险按钮 */
 .warning-button {
-  color: var(--color-on-warning);
-  background: var(--color-warning);
-  border-color: var(--color-warning);
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.16),
-    0 1px 2px rgba(10, 11, 13, 0.08);
+  color: var(--color-warning-ink);
+  background: var(--color-canvas);
+  border-color: var(--color-warning-line);
 }
 
 @media (hover: hover) {
@@ -223,26 +221,37 @@
 
 @media (hover: hover) {
   .danger-button:hover:not(:disabled) {
-    background: color-mix(in srgb, var(--color-danger) 6%, transparent);
+    background: var(--color-danger-tint);
     border-color: var(--color-danger);
   }
 }
 
 @media (hover: hover) {
   .warning-button:hover:not(:disabled) {
-    background: #c5771a;
-    border-color: #c5771a;
+    background: var(--color-warning-tint);
+    border-color: var(--color-warning);
   }
 }
 
-.primary-button:active {
+/* 按压回缩:只在允许动效时生效;禁用态不缩 */
+@media (prefers-reduced-motion: no-preference) {
+  .primary-button:not(:disabled):active,
+  .secondary-button:not(:disabled):active,
+  .danger-button:not(:disabled):active,
+  .warning-button:not(:disabled):active {
+    transform: scale(0.96);
+  }
+}
+
+.primary-button:active:not(:disabled) {
   background: var(--color-primary-active);
   border-color: var(--color-primary-active);
 }
 
 .primary-button:disabled,
 .secondary-button:disabled,
-.danger-button:disabled {
+.danger-button:disabled,
+.warning-button:disabled {
   opacity: 0.55;
   cursor: not-allowed;
 }

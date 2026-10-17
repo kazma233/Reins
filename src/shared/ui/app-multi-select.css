@@ -29,7 +29,7 @@
 }
 
 .app-multi-select__trigger:focus-visible {
-  outline: 2px solid rgba(0, 82, 255, 0.22);
+  outline: 2px solid var(--color-focus-ring);
   outline-offset: 1px;
   border-color: var(--color-primary);
 }
@@ -66,7 +66,7 @@
   border: 1px solid var(--color-hairline);
   border-radius: var(--radius-md);
   background: var(--color-canvas);
-  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.12);
+  box-shadow: var(--shadow-pop);
 }
 
 .app-multi-select__option {

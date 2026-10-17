@@ -39,6 +39,14 @@
   border-radius: 0;
   border-bottom: 1px solid var(--color-hairline-soft);
   background: transparent;
+  /* 行悬停是高频操作:只做瞬时底色反馈 */
+  transition: background 0.12s ease;
+}
+
+@media (hover: hover) {
+  .session-card:hover {
+    background: var(--color-surface-soft);
+  }
 }
 
 .session-card-title,
@@ -65,7 +73,11 @@
 
 .session-card.active {
   border-left-color: var(--color-primary);
-  background: var(--color-canvas);
+  background: var(--color-primary-tint);
+}
+
+.session-card.active:hover {
+  background: var(--color-primary-tint);
 }
 
 /* 附加信息一行 flex:时间 / 模型 / 状态角标 / 使用量,放不下整项换行,
@@ -104,16 +116,16 @@
   align-items: center;
   padding: 0 8px;
   border-radius: var(--radius-pill);
-  background: rgba(124, 130, 138, 0.15);
+  background: var(--color-surface-strong);
   color: var(--color-muted);
   font-size: var(--font-size-xs);
-  font-weight: 700;
+  font-weight: 600;
   line-height: 18px;
 }
 
 .session-state-chip--archived {
-  background: rgba(234, 138, 31, 0.14);
-  color: #b45309;
+  background: var(--color-warning-tint);
+  color: var(--color-warning-ink);
 }
 
 /* 模型是元数据不是状态,不做角标:与详情页会话 id 同一套等宽弱化文本。

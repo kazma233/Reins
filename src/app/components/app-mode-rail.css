@@ -49,13 +49,15 @@
   }
 }
 
+/* 选中态用淡蓝 tint 而非实心蓝:左栏是常驻结构,实心蓝会让它永远比内容抢眼 */
 .app-mode-rail__button.is-active {
-  background: var(--color-primary);
-  color: var(--color-on-primary);
+  background: var(--color-primary-tint);
+  color: var(--color-primary);
+  font-weight: 600;
 }
 
 .app-mode-rail__button:focus-visible {
-  outline: 2px solid rgba(0, 82, 255, 0.24);
+  outline: 2px solid var(--color-focus-ring);
   outline-offset: 2px;
 }
 

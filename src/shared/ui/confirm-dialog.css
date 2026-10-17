@@ -3,7 +3,7 @@
 }
 
 .confirm-dialog__description {
-  color: #475569;
+  color: var(--color-body);
   line-height: 1.6;
 }
 

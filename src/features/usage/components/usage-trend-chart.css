@@ -16,9 +16,9 @@
 }
 
 .usage-chart__axis-label {
-  fill: var(--color-ink-muted, var(--color-body));
+  fill: var(--color-body);
   /* SVG 按真实像素绘制,字号即渲染字号 */
-  font-size: var(--font-size-xs, 11px);
+  font-size: var(--font-size-xs);
 }
 
 .usage-chart__line {
@@ -29,7 +29,7 @@
 }
 
 .usage-chart__cursor {
-  stroke: var(--color-ink-muted, var(--color-body));
+  stroke: var(--color-body);
   stroke-width: 1;
   stroke-dasharray: 3 3;
 }
@@ -48,7 +48,7 @@
   border: 1px solid var(--color-hairline);
   border-radius: var(--radius-sm);
   background: var(--color-canvas);
-  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.12);
+  box-shadow: var(--shadow-pop);
   pointer-events: none;
   /* 两端贴近边缘时的位移由 clampCenteredOffset 处理（left 已夹取到容器内）。 */
   white-space: nowrap;
@@ -56,15 +56,15 @@
 
 .usage-chart__tooltip-day {
   margin-bottom: 4px;
-  font-size: var(--font-size-xs, 11px);
-  color: var(--color-ink-muted, var(--color-body));
+  font-size: var(--font-size-xs);
+  color: var(--color-body);
 }
 
 .usage-chart__tooltip-row {
   display: flex;
   align-items: center;
   gap: 6px;
-  font-size: var(--font-size-xs, 11px);
+  font-size: var(--font-size-xs);
 }
 
 .usage-chart__tooltip-dot {
