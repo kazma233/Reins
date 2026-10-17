@@ -129,7 +129,7 @@ const groups = computed(() => groupSyncTargets(props.targets));
               <span class="manager-sync-target-link__main">
                 <span class="manager-sync-target-link__name">{{ link.skillName }}</span>
                 <span
-                  v-if="link.matchedSourceIds.length > 0"
+                  v-if="skillLinkSourceLabel(link, currentSourceId, sourceLabels)"
                   class="manager-sync-target-link__source"
                 >{{ skillLinkSourceLabel(link, currentSourceId, sourceLabels) }}</span>
                 <span class="manager-sync-target-link__path" :title="link.sourcePath">

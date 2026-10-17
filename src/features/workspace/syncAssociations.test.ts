@@ -60,6 +60,8 @@ describe("skill link association presentation", () => {
     expect(skillLinkSourceLabel(makeLink("linked", ["shared", "nested"]), "shared")).toBe(
       "当前来源 · nested",
     );
+    // 纯当前来源的链接不重复「当前来源」文字,行底色已承载归属
+    expect(skillLinkSourceLabel(makeLink("linked", ["shared"]), "shared")).toBe("");
     expect(skillLinkSourceLabel(makeLink("unmanaged"))).toBe("");
   });
 

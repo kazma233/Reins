@@ -28,9 +28,12 @@ export function skillLinkSourceLabel(
 
   if (currentSourceId && link.matchedSourceIds.includes(currentSourceId)) {
     const otherSourceIds = link.matchedSourceIds.filter((sourceId) => sourceId !== currentSourceId);
-    return otherSourceIds.length > 0
-      ? `当前来源 · ${otherSourceIds.map(getSourceLabel).join("、")}`
-      : "当前来源";
+    if (otherSourceIds.length === 0) {
+      // 纯当前来源的链接:行底色已标出归属,不再重复一行「当前来源」。
+      // 混合归属时仍要报出其它来源的名字,那是别处看不到的信息。
+      return "";
+    }
+    return `当前来源 · ${otherSourceIds.map(getSourceLabel).join("、")}`;
   }
 
   return link.matchedSourceIds.map(getSourceLabel).join("、");
