@@ -57,8 +57,9 @@ const emit = defineEmits<{
 
 const listRef = ref<HTMLDivElement | null>(null);
 
-// 模式切换(如去用量统计)会缓存这个视图,列表滚动位置跟着一起留。
-useKeepAliveScroll("sessions-list", () => listRef.value);
+// 模式切换(如去用量统计)会缓存这个视图,列表滚动位置跟着一起留;
+// 进详情会整体销毁重建这个 v-if 子树,所以挂载时也要回放最近一次抓拍。
+useKeepAliveScroll("sessions-list", () => listRef.value, { restoreOnMount: true });
 
 const hasSessions = computed(() => props.sessions.length > 0);
 const showSkeletonRows = computed(() => props.loading && !hasSessions.value);

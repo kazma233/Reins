@@ -47,7 +47,7 @@ type SessionDetailProps = {
 const props = defineProps<SessionDetailProps>();
 
 const emit = defineEmits<{
-  deleted: [];
+  deleted: [sessionKey: string | null];
 }>();
 
 // 详情页 token 数用缩写+千分位精确值并列,与列表缩写口径一致。
@@ -110,7 +110,8 @@ const {
   closeDeleteDialog,
   handleDelete
 } = useSessionDetailActions(overviewRef, detailKey, deletePlanRef, () =>
-  emit("deleted")
+  // 此时 overview 还没被清掉,detailKey 就是刚删掉的这条会话的复合键
+  emit("deleted", detailKey.value)
 );
 
 // Reset UI toggles when the overview changes (dialog state resets inside

@@ -80,6 +80,15 @@ export const useSessionStore = defineStore("session", {
 
       this.sessions = Array.from(sessionsById.values());
     },
+    removeSession(sessionKey: string) {
+      // 删除会话是磁盘上的既成事实,列表内存里同步摘掉即可;整页刷新
+      // 交给用户主动的「刷新」或下次来源加载。
+      this.sessions = this.sessions.filter(
+        (session) =>
+          sessionIdentityKey(session.sourceApp, session.sourceSessionId) !==
+          sessionKey
+      );
+    },
     setSelectedSessionKey(sessionKey: string | null) {
       this.selectedSessionKey = sessionKey;
     },

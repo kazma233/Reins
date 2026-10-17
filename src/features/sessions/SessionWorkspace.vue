@@ -14,6 +14,7 @@ import SessionDetail from "./components/SessionDetail.vue";
 import SessionList from "./components/SessionList.vue";
 import SourceSwitcher from "./components/SourceSwitcher.vue";
 import { createPagedList, type PagedResult } from "./composables/createPagedList";
+import { captureKeepAliveScroll } from "./composables/useKeepAliveScroll";
 import { sessionIdentityKey, useSessionStore } from "./stores/session";
 import { useAppStore } from "../../app/stores/app";
 import { joinClasses } from "@shared/lib/join-classes";
@@ -381,6 +382,9 @@ function handleReverseClick() {
 }
 
 function openSession(sessionKey: string) {
+  // 列表→详情是组件内 v-if 切换,列表 DOM 会被销毁;趁它还在文档里抓拍滚动
+  // 位置,返回列表时由 useKeepAliveScroll 的挂载回放恢复。
+  captureKeepAliveScroll();
   sessionStore.setSelectedSessionKey(sessionKey);
   view.value = "detail";
 }
@@ -394,11 +398,15 @@ function openUsageStats() {
   appStore.setAppMode("usage");
 }
 
-async function handleSessionDeleted() {
+function handleSessionDeleted(sessionKey: string | null) {
   clearSelectedSession({ invalidateDetailRequest: true });
-  // 详情页对应的会话已不存在,回到列表再看刷新结果。
+  // 删除是磁盘上的既成事实:列表内存里直接摘掉这一条,滚动位置与筛选态
+  // 原地保留,不再整页刷新。key 对不上的极端情况由下一次来源刷新兜底。
+  if (sessionKey) {
+    sessionStore.removeSession(sessionKey);
+    sessionTotalCount.value = Math.max(0, sessionTotalCount.value - 1);
+  }
   view.value = "list";
-  await handleRefresh();
 }
 </script>
 

@@ -7,6 +7,13 @@ import { onActivated, onBeforeUnmount, onMounted } from "vue";
 // 视图激活时再写回。
 type ContainerGetter = () => HTMLElement | null;
 
+type KeepAliveScrollOptions = {
+  /* v-if 重建的容器(会话列表从详情返回时整体重建)不走 onActivated,挂载时
+     就要回放最近一次抓拍的偏移。内容随选择变化的容器(会话详情)不能开,
+     否则会把上一个会话的滚动位置套到下一个会话上。 */
+  restoreOnMount?: boolean;
+};
+
 const containers = new Map<string, ContainerGetter>();
 const offsets = new Map<string, number>();
 
@@ -20,9 +27,24 @@ export function captureKeepAliveScroll() {
   }
 }
 
-export function useKeepAliveScroll(key: string, getContainer: ContainerGetter) {
+function restoreOffset(key: string, getContainer: ContainerGetter) {
+  const element = getContainer();
+  const offset = offsets.get(key) ?? 0;
+  if (element && offset > 0) {
+    element.scrollTop = offset;
+  }
+}
+
+export function useKeepAliveScroll(
+  key: string,
+  getContainer: ContainerGetter,
+  options: KeepAliveScrollOptions = {},
+) {
   onMounted(() => {
     containers.set(key, getContainer);
+    if (options.restoreOnMount) {
+      restoreOffset(key, getContainer);
+    }
   });
 
   onBeforeUnmount(() => {
@@ -30,10 +52,6 @@ export function useKeepAliveScroll(key: string, getContainer: ContainerGetter) {
   });
 
   onActivated(() => {
-    const element = getContainer();
-    const offset = offsets.get(key) ?? 0;
-    if (element && offset > 0) {
-      element.scrollTop = offset;
-    }
+    restoreOffset(key, getContainer);
   });
 }
