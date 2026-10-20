@@ -1,10 +1,10 @@
 //! 读取器引擎:family 形态会话读取器共享的机械底座。
 //!
 //! 分组与 root 选取按 family_index 的既定边界留在读取器;本模块拥有其余
-//! 全部机械部分——目录索引与双半时间线的 load-through 缓存、三级摘要缓存、
-//! marker 外壳与 (timestamp, id) 终排、分页五元组、clear 编排。读取器实现
-//! `FamilySpec` 声明真差异,典型来源大部分方法吃默认值。锁与错误文案是
-//! 前端可见契约,一律由 label 数据逐字还原。
+//! 全部机械部分——目录索引与双半时间线的 load-through 缓存、目录行持久
+//! 缓存(rows_cache)、三级摘要缓存、marker 外壳与 (timestamp, id) 终排、
+//! 分页五元组、clear 编排。读取器实现 `FamilySpec` 声明真差异,典型来源
+//! 大部分方法吃默认值。锁与错误文案是前端可见契约,一律由 label 数据逐字还原。
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -15,6 +15,7 @@ use serde_json::{Value, json};
 
 use super::family_index::{Family, FamilyIndex, FamilyRow};
 use super::family_timeline::{FamilyAgentLabel, agent_messages, family_agents};
+use super::rows_cache::RowsDb;
 use super::summary_cache::SummaryDb;
 use super::{
     ContentBlock, ModelTally, SessionEvent, SessionEventPage, SessionFileEntry, SessionMessage,
@@ -35,6 +36,16 @@ pub(crate) struct MemberTimeline {
 pub(crate) enum Freshness {
     Stamp(i64),
     Fingerprint(String),
+}
+
+impl Freshness {
+    /// 持久行缓存的失效戳:同一口径的字符串化,两种语义靠前缀区分。
+    pub(crate) fn cache_stamp(&self) -> String {
+        match self {
+            Self::Stamp(value) => format!("stamp:{value}"),
+            Self::Fingerprint(value) => format!("fingerprint:{value}"),
+        }
+    }
 }
 
 /// overview 计数三派。
@@ -99,8 +110,9 @@ impl MarkerShape {
 
 /// 读取器真差异的声明面。必填项覆盖身份、行发现、分组、双半 loader、
 /// agent 名册;其余带默认值,每个覆写点对应一个真实存在的来源差异。
+/// Row 需可序列化:引擎的目录行持久缓存(见 rows_cache)存取行集合。
 pub(crate) trait FamilySpec: Clone + Send + Sync + 'static {
-    type Row: FamilyRow + Clone + Send + Sync;
+    type Row: FamilyRow + Clone + Send + Sync + serde::Serialize + serde::de::DeserializeOwned;
 
     fn app(&self) -> SourceApp;
     /// 锁文案与默认 marker id 前缀(如 "Codex")。
@@ -386,6 +398,7 @@ pub(crate) struct ReaderEngine<R: FamilySpec> {
     index: Mutex<Option<CachedIndex<R::Row>>>,
     timeline: DualHalfCache,
     summaries: Option<SummaryMemCache>,
+    rows_cache: RowsDb,
 }
 
 impl<R: FamilySpec> ReaderEngine<R> {
@@ -397,7 +410,7 @@ impl<R: FamilySpec> ReaderEngine<R> {
             SummaryKind::RootTranscript => Some(SummaryMemCache::new(
                 spec.app(),
                 format!("{label} summary"),
-                SummaryDb::at(store_dir),
+                SummaryDb::at(store_dir.clone()),
             )),
             SummaryKind::Rows => None,
         };
@@ -408,6 +421,7 @@ impl<R: FamilySpec> ReaderEngine<R> {
             index: Mutex::new(None),
             timeline,
             summaries,
+            rows_cache: RowsDb::at(store_dir),
         }
     }
 
@@ -428,7 +442,26 @@ impl<R: FamilySpec> ReaderEngine<R> {
             return Ok(entry.index.clone());
         }
 
+        // 持久行缓存:进程重启后 freshness 未变时跳过物理行扫描(OpenCode 的
+        // 全表聚合、dsh 的整份解压、codex 的逐文件首行)。失效口径与内存
+        // 索引同一份 freshness,信任窗口只是延伸到进程之外。
+        let root_key = crate::support::fs::path_key(&self.scan_root);
+        let stamp = freshness.cache_stamp();
+        if let Some(rows) = self.rows_cache.load::<R::Row>(self.spec.app(), &root_key, &stamp) {
+            return self.rebuild_index(freshness, rows);
+        }
+
         let rows = self.spec.list_rows(&self.scan_root)?;
+        self.rows_cache
+            .store(self.spec.app(), &root_key, &stamp, &rows);
+        self.rebuild_index(freshness, rows)
+    }
+
+    fn rebuild_index(
+        &self,
+        freshness: Freshness,
+        rows: Vec<R::Row>,
+    ) -> Result<FamilyIndex<R::Row>> {
         let families = self.spec.group_families(rows)?;
         let index = FamilyIndex::build(families);
 
@@ -885,13 +918,14 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use anyhow::{Result, bail};
+    use serde::{Deserialize, Serialize};
     use serde_json::json;
 
     use super::*;
 
     // —— 夹具:一个最小 family 来源,行为经 Config 切换各派系 ——
 
-    #[derive(Clone, Debug)]
+    #[derive(Clone, Debug, Deserialize, Serialize)]
     struct TestRow {
         id: String,
         path: PathBuf,
@@ -1310,18 +1344,56 @@ mod tests {
         Ok(())
     }
 
+    // clear_cache 是 rescan 语义:只丢内存层。freshness 未变时行集合经持久层
+    // 恢复,不做物理扫描;物理重扫只由 freshness 变化驱动。
     #[test]
-    fn clear_forces_full_rescan() -> Result<()> {
+    fn clear_cache_keeps_persistent_rows_until_freshness_changes() -> Result<()> {
         let dir = fixture(&["root.jsonl"]);
+        let store = store_dir();
         let spec = TestSpec::default_spec();
-        let reader = engine(spec.clone(), dir.clone());
-
+        let reader = ReaderEngine::new(spec.clone(), dir.clone(), store.clone());
         reader.list_entries()?;
+
         reader.clear_cache()?;
         reader.list_entries()?;
+        // freshness 未变:持久行命中,跳过物理扫描。
+        assert_eq!(spec.scan_calls.load(Ordering::SeqCst), 1);
 
+        // freshness 变化后必须重新物理扫描(计数器共享才能观察两次调用)。
+        let changed_spec = TestSpec {
+            freshness: Freshness::Stamp(999),
+            scan_calls: spec.scan_calls.clone(),
+            parse_calls: spec.parse_calls.clone(),
+            ..TestSpec::default_spec()
+        };
+        let rescanned = ReaderEngine::new(changed_spec, dir.clone(), store.clone());
+        rescanned.list_entries()?;
         assert_eq!(spec.scan_calls.load(Ordering::SeqCst), 2);
+
         fs::remove_dir_all(&dir).ok();
+        fs::remove_dir_all(&store).ok();
+        Ok(())
+    }
+
+    // 行集合跨引擎实例持久化:新实例(同根同库目录)不重新扫描。
+    #[test]
+    fn rows_persist_across_engine_instances() -> Result<()> {
+        let dir = fixture(&["root.jsonl", "child.jsonl"]);
+        let store = store_dir();
+        let spec = TestSpec::default_spec();
+
+        let first = ReaderEngine::new(spec.clone(), dir.clone(), store.clone());
+        assert_eq!(first.list_entries()?.len(), 1);
+        assert_eq!(spec.scan_calls.load(Ordering::SeqCst), 1);
+
+        let second = ReaderEngine::new(spec.clone(), dir.clone(), store.clone());
+        let entries = second.list_entries()?;
+        assert_eq!(entries.len(), 1);
+        // 持久行命中:第二个实例没有物理扫描。
+        assert_eq!(spec.scan_calls.load(Ordering::SeqCst), 1);
+
+        fs::remove_dir_all(&dir).ok();
+        fs::remove_dir_all(&store).ok();
         Ok(())
     }
 

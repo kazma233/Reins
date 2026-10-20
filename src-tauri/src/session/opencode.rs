@@ -5,6 +5,7 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use rusqlite::{Connection, params_from_iter};
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use super::family_index::{
@@ -22,7 +23,7 @@ use super::{
     usage_stats::SqlUsageHours,
 };
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub(crate) struct OpenCodeSessionRow {
     id: String,
     parent_id: Option<String>,

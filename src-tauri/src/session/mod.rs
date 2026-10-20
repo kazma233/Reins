@@ -19,6 +19,7 @@ pub(crate) mod grokbuild;
 pub(crate) mod opencode;
 pub(crate) mod pi;
 pub(crate) mod reader_engine;
+pub(crate) mod rows_cache;
 pub(crate) mod sources;
 pub(crate) mod summary_cache;
 pub(crate) mod tool_blocks;
@@ -158,8 +159,9 @@ pub(crate) fn rescan_all_caches() -> Result<()> {
 /// 版本号 bump(summary_cache::DB_FILE_NAME),不靠这条路径。
 pub(crate) fn clear_all_caches() -> Result<()> {
     rescan_all_caches()?;
-    // 持久摘要跨来源共用同一份库文件，所以清一次即覆盖所有用到它的来源。
+    // 持久摘要与行缓存跨来源共用同一份库文件，所以清一次即覆盖所有用到它的来源。
     summary_cache::SummaryDb::at_store_dir()?.clear_all();
+    rows_cache::RowsDb::at_store_dir()?.clear_all();
     usage_day_cache::clear_all();
     Ok(())
 }

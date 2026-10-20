@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use super::family_index::{Family, FamilyRow};
@@ -20,7 +20,7 @@ use super::{
     delete::DeletePlanInput,
 };
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub(crate) struct ClaudeSessionRow {
     path: PathBuf,
     summary: SessionSummary,

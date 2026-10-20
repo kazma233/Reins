@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::{Context, Result, anyhow, bail};
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use super::family_index::{Family, FamilyRow};
@@ -37,7 +38,7 @@ struct DshHeader {
     delegation_depth: u32,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Deserialize, Serialize)]
 struct CatalogChild {
     child_id: String,
     label: Option<String>,
@@ -666,7 +667,7 @@ fn archive_registry_stamp(sessions_root: &Path) -> i64 {
 
 // --- family 索引 ---
 
-#[derive(Clone)]
+#[derive(Clone, Deserialize, Serialize)]
 struct DshSessionRow {
     session_id: String,
     delegation_depth: u32,
@@ -681,7 +682,7 @@ struct DshSessionRow {
     archived: bool,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Deserialize, Serialize)]
 pub(crate) struct DshFamilyRow {
     row: DshSessionRow,
     family_root_id: String,

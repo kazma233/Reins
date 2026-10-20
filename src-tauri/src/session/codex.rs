@@ -7,6 +7,7 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use rusqlite::Connection;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use walkdir::WalkDir;
 
@@ -30,7 +31,7 @@ use super::{
 // 所以文件所在目录就是归档状态的权威。
 const ARCHIVED_SESSIONS_SUBDIR: &str = "archived_sessions";
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub(crate) struct CodexSessionRow {
     path: PathBuf,
     summary: SessionSummary,
