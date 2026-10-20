@@ -13,6 +13,13 @@
   font-size: var(--font-size-sm);
 }
 
+/* 耗时数字用等宽字型,跳动时不带动整行文案抖动。 */
+.session-list-refresh-elapsed {
+  margin-left: 6px;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
 .session-list {
   display: flex;
   flex: 1;

@@ -138,8 +138,10 @@
 .sessions-loading {
   display: flex;
   flex: 1 1 auto;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
+  gap: 14px;
   min-height: 0;
 }
 
@@ -150,6 +152,19 @@
   overflow: hidden;
   border-radius: 2px;
   background: var(--color-hairline-soft);
+}
+
+/* 进度条下方的耗时提示;数字用等宽字型,跳动时不带动整行文案抖动。 */
+.sessions-loading__label {
+  margin: 0;
+  color: var(--color-muted);
+  font-size: var(--font-size-sm);
+}
+
+.sessions-loading__elapsed {
+  margin-left: 6px;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
 }
 
 .sessions-loading__bar::after {

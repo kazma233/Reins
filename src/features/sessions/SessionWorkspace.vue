@@ -18,6 +18,7 @@ import { captureKeepAliveScroll } from "./composables/useKeepAliveScroll";
 import { sessionIdentityKey, useSessionStore } from "./stores/session";
 import { useAppStore } from "../../app/stores/app";
 import { joinClasses } from "@shared/lib/join-classes";
+import { useLoadElapsed } from "@shared/lib/use-load-elapsed";
 import { ALL_SOURCES, isSourceApp, type SourceSelection } from "./source-app";
 import type { SessionPage, SessionSummary, SourceStatus } from "./types";
 import { extractErrorMessage } from "@shared/lib/errors";
@@ -170,6 +171,10 @@ watch(
 );
 
 // --- bootstrap: detect sources on mount ---
+
+// 来源检测是「点开历史会话」后的第一个加载阶段(扫描各来源目录),大库或
+// 缓存失效时会等一段时间,这个居中加载页要给出实时耗时。
+const sourceLoadElapsed = useLoadElapsed(loadingSources);
 
 async function retryDetectSources() {
   sessionStore.setLoadingSources(true);
@@ -507,6 +512,10 @@ function handleSessionDeleted(sessionKey: string | null) {
           role="status"
         >
           <span class="sessions-loading__bar" />
+          <p class="sessions-loading__label">
+            正在扫描历史会话
+            <span class="sessions-loading__elapsed">已用时 {{ sourceLoadElapsed.text }}</span>
+          </p>
         </div>
         <SessionList
           v-else

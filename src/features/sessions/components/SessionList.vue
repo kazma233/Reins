@@ -3,6 +3,7 @@ import { computed, nextTick, ref, watch } from "vue";
 import { joinClasses } from "@shared/lib/join-classes";
 import { formatTimestamp } from "@shared/lib/format";
 import { useInfiniteScroll } from "@shared/lib/infinite-scroll";
+import { useLoadElapsed } from "@shared/lib/use-load-elapsed";
 import { useKeepAliveScroll } from "../composables/useKeepAliveScroll";
 import { sessionIdentityKey } from "../stores/session";
 import { formatSessionUsage } from "../token-usage";
@@ -57,6 +58,9 @@ const emit = defineEmits<{
 
 const listRef = ref<HTMLDivElement | null>(null);
 
+// 加载中状态条的实时耗时(首扫大库时让用户看到等了多久)。
+const loadElapsed = useLoadElapsed(computed(() => props.loading));
+
 // 模式切换(如去用量统计)会缓存这个视图,列表滚动位置跟着一起留;
 // 进详情会整体销毁重建这个 v-if 子树,所以挂载时也要回放最近一次抓拍。
 useKeepAliveScroll("sessions-list", () => listRef.value, { restoreOnMount: true });
@@ -109,6 +113,7 @@ useInfiniteScroll({
   <div class="panel-shell session-list-shell">
     <div v-if="loading" class="session-list-refresh-status">
       {{ loadingLabel }}
+      <span class="session-list-refresh-elapsed">已用时 {{ loadElapsed.text }}</span>
     </div>
     <div
       ref="listRef"

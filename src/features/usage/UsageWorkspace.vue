@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, watch } from "vue";
 import { useAppStore } from "../../app/stores/app";
+import { useLoadElapsed } from "@shared/lib/use-load-elapsed";
 import AppCard from "@shared/ui/AppCard.vue";
 import AppSelect, { type AppSelectOption } from "@shared/ui/AppSelect.vue";
 import BackLink from "@shared/ui/BackLink.vue";
@@ -49,6 +50,9 @@ const {
 } = useUsageState();
 
 onMounted(loadUsageStats);
+
+// 载入中状态的实时耗时:首扫大体积转录时让用户看到等了多久。
+const loadElapsed = useLoadElapsed(loading);
 
 // days=1 是今日窗口:轴与序列切换为小时粒度,今日序列以后端统计时刻的
 // "今天"为准,跨午夜后点刷新即可拿到新一天。
@@ -209,6 +213,7 @@ const chartSeries = computed(() =>
 
     <div v-if="loading && !stats" class="usage-loading">
       正在扫描各 agent 的会话用量,首次扫描大体积转录需要一点时间…
+      <span class="usage-loading__elapsed">已用时 {{ loadElapsed.text }}</span>
       <div class="usage-loading__bar" />
     </div>
 

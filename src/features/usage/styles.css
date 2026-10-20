@@ -135,6 +135,13 @@
   color: var(--color-body);
 }
 
+/* 耗时数字用等宽字型,跳动时不带动整行文案抖动。 */
+.usage-loading__elapsed {
+  margin-left: 6px;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
 /* 首扫大转录时的滚动进度条。 */
 .usage-loading__bar {
   margin: 16px auto 0;
