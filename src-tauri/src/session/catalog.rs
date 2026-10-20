@@ -1,5 +1,6 @@
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
+use std::time::Instant;
 
 use anyhow::{Context, Result, anyhow};
 
@@ -11,6 +12,7 @@ use super::{
 };
 
 pub(crate) fn detect_sources_inner(state: &SessionIndexState) -> Result<Vec<SourceStatus>> {
+    let started = Instant::now();
     let inspections = super::sources::parallel_collect("Source inspection", |spec| {
         inspect_source(
             state,
@@ -38,10 +40,15 @@ pub(crate) fn detect_sources_inner(state: &SessionIndexState) -> Result<Vec<Sour
         });
     }
 
+    crate::logger::log_info(format!(
+        "session_scan_total seconds={:.2}",
+        started.elapsed().as_secs_f64()
+    ));
+
     Ok(sources)
 }
 
-/// 刷新:重新扫盘。持久摘要与用量缓存按 (路径, mtime) 自失效,不参与清理,
+/// 刷新:重新扫盘。持久摘要、行与用量缓存按各自的缓存键自失效,不参与清理,
 /// 否则每次刷新都要把全部转录重新解析一遍(见 clear_all_caches 的注释)。
 pub(crate) fn rescan_session_caches_inner(state: &SessionIndexState) -> Result<()> {
     state.clear()?;
@@ -347,8 +354,19 @@ fn session_catalog_entries(
 }
 
 fn build_session_catalog(source_app: SourceApp) -> Result<SessionFileCatalog> {
+    // 全部扫描入口(detect、刷新、refresh 分页)都经这里重建目录,计时日志
+    // 落在这才能覆盖每一条扫描路径;缓存命中路径不进本函数,不会刷日志。
+    let started = Instant::now();
+    let entries = super::reader(source_app).list_entries()?;
+
+    crate::logger::log_info(format!(
+        "session_scan source={source_app:?} seconds={:.2} sessions={}",
+        started.elapsed().as_secs_f64(),
+        entries.len()
+    ));
+
     Ok(SessionFileCatalog {
-        entries: super::reader(source_app).list_entries()?.into(),
+        entries: entries.into(),
     })
 }
 
