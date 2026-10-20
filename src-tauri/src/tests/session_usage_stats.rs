@@ -887,3 +887,93 @@ fn split_reasoning_usage_keeps_input_as_is() {
     assert_eq!(usage.output_tokens, 150);
     assert_eq!(usage.cache_read_tokens, 500);
 }
+
+// SQL 来源的持久桶缓存:db mtime 未变时复用缓存(篡改缓存行能读到篡改值),
+// 采集日期过期(跨午夜)后强制重查 db。
+#[test]
+fn days_from_sql_reuses_cache_until_day_changes() -> Result<()> {
+    let home = TempHome::new()?;
+    let _guard = TestEnvGuard::set_home(&home.path);
+
+    let db_path = session::opencode::db_path()?;
+    fs::create_dir_all(db_path.parent().unwrap())?;
+    let connection = Connection::open(&db_path)?;
+    connection.execute_batch(
+        "
+        CREATE TABLE session_v2 (
+            id TEXT PRIMARY KEY,
+            project_id TEXT NOT NULL,
+            parent_id TEXT,
+            slug TEXT NOT NULL,
+            directory TEXT NOT NULL,
+            title TEXT,
+            version TEXT NOT NULL,
+            time_created INTEGER NOT NULL,
+            time_updated INTEGER NOT NULL
+        );
+        CREATE TABLE session_message (
+            id TEXT PRIMARY KEY,
+            session_id TEXT NOT NULL,
+            type TEXT NOT NULL,
+            seq INTEGER NOT NULL,
+            time_created INTEGER NOT NULL,
+            time_updated INTEGER NOT NULL,
+            data TEXT NOT NULL
+        );
+        ",
+    )?;
+    connection.execute(
+        "INSERT INTO session_v2 (id, project_id, parent_id, slug, directory, title, version, time_created, time_updated) VALUES (?1, ?2, NULL, ?3, ?4, ?5, ?6, ?7, ?8)",
+        params!["ses-cache", "project-1", "ses-cache", "/tmp/root", "Cache", "1", 0, 0],
+    )?;
+    connection.execute(
+        "INSERT INTO session_message (id, session_id, type, seq, time_created, time_updated, data) VALUES (?1, ?2, 'assistant', 1, ?3, ?3, ?4)",
+        params![
+            "msg-1",
+            "ses-cache",
+            local_day_millis(2026, 4, 21),
+            json!({ "tokens": { "input": 1000, "output": 100 } }).to_string()
+        ],
+    )?;
+    drop(connection);
+
+    let collect = || {
+        session::usage_stats::days_from_sql(
+            SourceApp::OpenCode,
+            session::opencode::db_path,
+            session::opencode::usage_hours,
+        )
+    };
+
+    let first = collect()?.expect("available");
+    assert_eq!(first.session_count, 1);
+    assert_eq!(first.days[0].usage.input_tokens, 1000);
+
+    // 篡改持久缓存里的 input 总量:再采集读到篡改值,证明没有重查 db。
+    // 缓存 JSON 走 camelCase(与前端契约同形)。
+    let cache_db = home.path.join(".reins/usage-day-cache_v3.db");
+    let cache = Connection::open(&cache_db)?;
+    let updated = cache.execute(
+        "UPDATE usage_day_cache SET days = replace(days, '\"inputTokens\":1000', '\"inputTokens\":9999')",
+        [],
+    )?;
+    anyhow::ensure!(updated > 0, "no cache row matched");
+    drop(cache);
+
+    let second = collect()?.expect("available");
+    assert_eq!(second.days[0].usage.input_tokens, 9999);
+
+    // 采集日期改成过去:今日口径过期,必须重查 db,篡改值失效。
+    let today = chrono::Local::now().format("%Y-%m-%d").to_string();
+    let cache = Connection::open(&cache_db)?;
+    cache.execute(
+        "UPDATE usage_day_cache SET days = replace(days, ?1, '\"day\":\"2000-01-01\"')",
+        params![format!("\"day\":\"{today}\"")],
+    )?;
+    drop(cache);
+
+    let third = collect()?.expect("available");
+    assert_eq!(third.days[0].usage.input_tokens, 1000);
+
+    Ok(())
+}

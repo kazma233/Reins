@@ -72,7 +72,7 @@ impl SourceSpec {
             UsageKind::RawFiles { paths, extract } => {
                 usage_stats::days_from_paths(self.app, &root, *paths, *extract)
             }
-            UsageKind::Sql { collect } => usage_stats::days_from_sql(self.app, *collect),
+            UsageKind::Sql { db, collect } => usage_stats::days_from_sql(self.app, *db, *collect),
         }
     }
 }
@@ -146,6 +146,7 @@ static OPENCODE: SourceSpec = SourceSpec {
         },
     },
     usage: UsageKind::Sql {
+        db: opencode::db_path,
         collect: opencode::usage_hours,
     },
 };
@@ -211,6 +212,7 @@ static ZCODE: SourceSpec = SourceSpec {
         notice: "暂不支持删除 ZCode 会话。",
     },
     usage: UsageKind::Sql {
+        db: zcode::db_path,
         collect: zcode::usage_hours,
     },
 };
@@ -226,8 +228,11 @@ static DSH: SourceSpec = SourceSpec {
         reason: "DSH session deletion is unsupported",
         notice: "暂不支持删除 DeepSeek Harness 会话。",
     },
-    usage: UsageKind::RawFiles {
-        paths: dsh::session_transcript_paths,
+    // dsh 的 usage 与列表同源(逐转录归桶),转录文件 mtime 未变即可复用
+    // 持久桶缓存,免去每次整份解压;归档账本不影响 usage,不参与失效。
+    usage: UsageKind::CachedJsonl {
+        subdir: None,
+        files: dsh::session_transcript_paths_at,
         extract: dsh::usage_hours,
     },
 };

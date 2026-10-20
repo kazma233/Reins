@@ -3,7 +3,8 @@
 //! 用量曲线按消耗事件的时间戳归桶,每个转录文件都要整文件解析一次才能拿到
 //! 逐条 usage;这层缓存按 (来源, 路径, mtime) 存归桶结果,进程重启后 mtime
 //! 未变的文件直接命中,只有新增或变更过的文件才重新解析。失效语义与
-//! summary_cache 一致(信任文件 mtime)。
+//! summary_cache 一致(信任文件 mtime)。SQL 来源以 db 文件作路径键,值是
+//! 带采集日期的整份统计。
 //!
 //! 错误契约:缓存是加速层,转录文件才是权威数据源;读写失败记日志并按 miss
 //! 处理(load 返回 None、store 放弃写入),不得阻断统计。
@@ -15,7 +16,7 @@ use std::sync::{LazyLock, Mutex};
 use anyhow::{Context, Result};
 use rusqlite::Connection;
 
-use super::model::{SourceApp, UsageHourBuckets};
+use super::model::SourceApp;
 
 // 归桶逻辑变更时(如 day→hour 粒度调整)必须 bump 文件名里的版本号:
 // 旧版本库文件整体失效,新版本从空库全量重建一次。v3:小时桶增加按模型的
@@ -25,7 +26,10 @@ const DB_FILE_NAME: &str = "usage-day-cache_v3.db";
 static CONNECTION: LazyLock<Mutex<Option<(PathBuf, Connection)>>> =
     LazyLock::new(|| Mutex::new(None));
 
-pub(crate) fn load(source_app: SourceApp, path: &Path, mtime: i64) -> Option<UsageHourBuckets> {
+pub(crate) fn load<T>(source_app: SourceApp, path: &Path, mtime: i64) -> Option<T>
+where
+    T: serde::de::DeserializeOwned,
+{
     with_connection(|connection| {
         let days_json = connection
             .query_row(
@@ -41,9 +45,12 @@ pub(crate) fn load(source_app: SourceApp, path: &Path, mtime: i64) -> Option<Usa
     .ok()
 }
 
-pub(crate) fn store(source_app: SourceApp, path: &Path, mtime: i64, hours: &UsageHourBuckets) {
+pub(crate) fn store<T>(source_app: SourceApp, path: &Path, mtime: i64, value: &T)
+where
+    T: serde::Serialize,
+{
     let result = with_connection(|connection| {
-        let hours_json = serde_json::to_string(hours)?;
+        let hours_json = serde_json::to_string(value)?;
         connection.execute(
             "INSERT INTO usage_day_cache (source_app, path, mtime, days) VALUES (?1, ?2, ?3, ?4)
              ON CONFLICT(source_app, path) DO UPDATE SET mtime = excluded.mtime, days = excluded.days",

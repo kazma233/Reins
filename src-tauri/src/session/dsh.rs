@@ -566,7 +566,8 @@ fn transcript_generation(file_name: &str) -> Option<(u32, bool)> {
     Some((version, compressed))
 }
 
-fn session_transcript_paths_at(root: &Path) -> Result<Vec<PathBuf>> {
+// usage 统计的 CachedJsonl 采集按实例 scan_root 发现转录,与列表同一规则。
+pub(crate) fn session_transcript_paths_at(root: &Path) -> Result<Vec<PathBuf>> {
     if !root.exists() {
         return Ok(Vec::new());
     }
@@ -603,11 +604,6 @@ fn session_transcript_paths_at(root: &Path) -> Result<Vec<PathBuf>> {
     let mut paths: Vec<PathBuf> = latest.into_values().map(|(_, _, path)| path).collect();
     paths.sort();
     Ok(paths)
-}
-
-// usage 统计与列表扫描共用同一发现规则。
-pub(crate) fn session_transcript_paths() -> Result<Vec<PathBuf>> {
-    session_transcript_paths_at(&sessions_root()?)
 }
 
 // --- 归档集 ---

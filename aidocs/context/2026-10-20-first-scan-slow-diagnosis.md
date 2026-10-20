@@ -36,6 +36,16 @@
 
 遗留:OpenCode 的 freshness 是整个 db 文件的 mtime,opencode 活跃写入时该来源仍要全表聚合一次(~6s);真正的增量聚合(按消息水位)未做,属于后续优化。
 
+## 同因优化:用量统计(同日实施)
+
+用量统计(`get_usage_stats`)有同样的结构性问题:三种采集方式里只有 CachedJsonl(codex/claude/pi)走 `usage_day_cache` 持久层,实测热缓存状态下 DSH 3.8s(RawFiles 每次整份解压转录)、OpenCode 3.0s(SQL 每次全表 json_extract)、Zcode 0.7s。修复:
+
+- `UsageKind::Sql` 增加 db 路径声明,`days_from_sql` 以 db 文件 mtime 为键把整份统计(桶 + 两级会话数)存进 `usage_day_cache`;缓存值带采集日期,跨午夜后「今日会话数」口径过期,按 miss 重查。
+- DSH 从 RawFiles 挪到 CachedJsonl:usage 只依赖转录文件本身,`(路径, mtime)` 完全决定输出;归档账本不影响 usage,不参与失效。
+- grok 保持 RawFiles 直采(0.13s):其 extract 读 summary.json 旁边的 usage.json,路径键看不到兄弟文件变化,mtime 缓存有盲区,不值得为 0.13s 冒险。
+
+实测:OpenCode 2.98s→0.004s、Zcode 0.71s→0.001s、DSH 3.75s→0.002s,会话数一致。显式清缓存已连 usage_day_cache 一起清(既有编排)。
+
 ## 观测手段
 
 扫描计时已加日志(本次一并交付):所有扫描入口都经 `build_session_catalog`,每来源一条 `session_scan source=X seconds=N.NN sessions=N`;`detect_sources_inner` 收尾一条 `session_scan_total seconds=N.NN`。见 `~/Library/Application Support/reins/logs/app.log`。

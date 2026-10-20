@@ -10,6 +10,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
+use serde::{Deserialize, Serialize};
 
 use super::model::{
     SessionTokenUsage, SourceApp, UsageDayPoint, UsageHourBuckets, UsageHourPoint,
@@ -35,8 +36,9 @@ pub(crate) enum UsageKind {
         paths: fn() -> Result<Vec<PathBuf>>,
         extract: fn(&Path) -> Result<UsageHourBuckets>,
     },
-    /// 从 sqlite 直查(opencode/zcode)。
+    /// 从 sqlite 直查(opencode/zcode)。db 是唯一数据源,其 mtime 作缓存键。
     Sql {
+        db: fn() -> Result<PathBuf>,
         collect: fn() -> Result<Option<SqlUsageHours>>,
     },
 }
@@ -167,10 +169,19 @@ pub(crate) fn days_from_paths(
 }
 
 // SQL 来源(opencode/zcode)的小时桶与两级会话数;db 缺失表示来源不可用。
+#[derive(Deserialize, Serialize)]
 pub(crate) struct SqlUsageHours {
     pub(crate) buckets: UsageHourBuckets,
     pub(crate) session_count: usize,
     pub(crate) today_session_count: usize,
+}
+
+// SQL 来源的持久缓存值:整份统计加采集日期。「今日会话数」是采集时刻的
+// 口径,跨午夜后必须重算,日期不符即按 miss 处理。
+#[derive(Deserialize, Serialize)]
+struct CachedSqlUsage {
+    day: String,
+    hours: SqlUsageHours,
 }
 
 // SQL 来源行级用量的原始列:各来源 SQL 只产原始列,口径统一在这里,
@@ -238,18 +249,51 @@ pub(crate) fn hours_from_usage_rows(
 
 pub(crate) fn days_from_sql(
     source_app: SourceApp,
+    db: fn() -> Result<PathBuf>,
     collect: fn() -> Result<Option<SqlUsageHours>>,
 ) -> Result<Option<UsageSourceStats>> {
+    // db 是 SQL 来源唯一的数据源,mtime 作缓存键;db 缺失时没有键,交给
+    // collect 判定来源不可用,不写缓存。
+    let cache_key = db()
+        .ok()
+        .and_then(|db| {
+            crate::support::time::file_modified_timestamp_millis(&db)
+                .ok()
+                .map(|mtime| (db, mtime))
+        });
+
+    if let Some((db, mtime)) = &cache_key {
+        let cached = super::usage_day_cache::load::<CachedSqlUsage>(source_app, db, *mtime)
+            .filter(|cached| cached.day == today_prefix());
+        if let Some(cached) = cached {
+            return Ok(Some(cached.into_stats(source_app)));
+        }
+    }
+
     let Some(hours) = collect()? else {
         return Ok(None);
     };
+    let cached = CachedSqlUsage {
+        day: today_prefix(),
+        hours,
+    };
 
-    Ok(Some(source_stats(
-        source_app,
-        hours.buckets,
-        hours.session_count,
-        hours.today_session_count,
-    )))
+    if let Some((db, mtime)) = &cache_key {
+        super::usage_day_cache::store(source_app, db, *mtime, &cached);
+    }
+
+    Ok(Some(cached.into_stats(source_app)))
+}
+
+impl CachedSqlUsage {
+    fn into_stats(self, source_app: SourceApp) -> UsageSourceStats {
+        source_stats(
+            source_app,
+            self.hours.buckets,
+            self.hours.session_count,
+            self.hours.today_session_count,
+        )
+    }
 }
 
 fn source_stats(
