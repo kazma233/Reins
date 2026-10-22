@@ -7,8 +7,8 @@ use anyhow::{Context, Result, bail};
 use dirs::config_dir;
 
 use super::types::{
-    ProviderModelInput, ProviderModelRecord, ProviderUpsertInput, ProviderWriteMode, RawProvider,
-    RawProvidersDocument, ResolvedProvider,
+    ProviderAppId, ProviderAppSetting, ProviderModelInput, ProviderModelRecord, ProviderUpsertInput,
+    ProviderWriteMode, RawProvider, RawProvidersDocument, ReasoningLevel, ResolvedProvider,
 };
 use crate::support::fs::write_atomic;
 
@@ -73,6 +73,52 @@ fn normalize_model_label(label: &str, id: &str) -> String {
     }
 }
 
+fn empty_document() -> RawProvidersDocument {
+    RawProvidersDocument {
+        version: DOCUMENT_VERSION,
+        providers: BTreeMap::new(),
+        app_settings: BTreeMap::new(),
+    }
+}
+
+fn resolved_providers(document: &RawProvidersDocument) -> BTreeMap<String, ResolvedProvider> {
+    document
+        .providers
+        .iter()
+        .map(|(id, raw)| {
+            (
+                id.clone(),
+                ResolvedProvider {
+                    id: id.clone(),
+                    label: raw.label.clone(),
+                    protocol: raw.protocol,
+                    base_url: raw.base_url.clone(),
+                    api_key: raw.api_key.clone(),
+                    models: raw.models.clone(),
+                },
+            )
+        })
+        .collect()
+}
+
+fn raw_providers(providers: &BTreeMap<String, ResolvedProvider>) -> BTreeMap<String, RawProvider> {
+    providers
+        .iter()
+        .map(|(id, provider)| {
+            (
+                id.clone(),
+                RawProvider {
+                    label: provider.label.clone(),
+                    protocol: provider.protocol,
+                    base_url: provider.base_url.clone(),
+                    api_key: provider.stored_api_key(),
+                    models: provider.models.clone(),
+                },
+            )
+        })
+        .collect()
+}
+
 // providers.yaml 的唯一读写入口：与 WorkspaceConfigStore 相同的模式——
 // 单实例由 Tauri 管理，进程内锁串行化 read-modify-write，原子写落盘。
 #[derive(Clone)]
@@ -114,64 +160,51 @@ impl ProviderConfigStore {
     // 文件不存在视为空目录，而不是错误；首次写入时才创建文件。
     pub(crate) fn load(&self) -> Result<BTreeMap<String, ResolvedProvider>> {
         let guard = self.lock();
-        self.load_locked(&guard)
+        let document = self.load_document_locked(&guard)?;
+        Ok(resolved_providers(&document))
     }
 
-    fn load_locked(&self, _guard: &()) -> Result<BTreeMap<String, ResolvedProvider>> {
+    fn load_document_locked(&self, _guard: &()) -> Result<RawProvidersDocument> {
         let config_path = &self.0.config_path;
         if !config_path.exists() {
-            return Ok(BTreeMap::new());
+            return Ok(empty_document());
         }
         let raw_content = fs::read_to_string(config_path)
             .with_context(|| format!("Failed to read {}", config_path.display()))?;
-        self.parse_content(&raw_content)
-    }
-
-    fn parse_content(&self, raw_content: &str) -> Result<BTreeMap<String, ResolvedProvider>> {
         if raw_content.trim().is_empty() {
-            return Ok(BTreeMap::new());
+            return Ok(empty_document());
         }
-        let document: RawProvidersDocument =
-            serde_yaml::from_str(raw_content).with_context(|| {
-                format!("providers.yaml 解析失败：{}", self.0.config_path.display())
-            })?;
-        let mut providers = BTreeMap::new();
-        for (id, raw) in document.providers {
-            let resolved = ResolvedProvider {
-                id: id.clone(),
-                label: raw.label,
-                protocol: raw.protocol,
-                base_url: raw.base_url,
-                api_key: raw.api_key,
-                models: raw.models,
-            };
-            providers.insert(id, resolved);
-        }
-        Ok(providers)
+        serde_yaml::from_str(&raw_content).with_context(|| {
+            format!("providers.yaml 解析失败：{}", self.0.config_path.display())
+        })
     }
 
-    fn save_locked(&self, providers: &BTreeMap<String, ResolvedProvider>) -> Result<()> {
-        let document = RawProvidersDocument {
-            version: DOCUMENT_VERSION,
-            providers: providers
-                .iter()
-                .map(|(id, provider)| {
-                    (
-                        id.clone(),
-                        RawProvider {
-                            label: provider.label.clone(),
-                            protocol: provider.protocol,
-                            base_url: provider.base_url.clone(),
-                            api_key: provider.stored_api_key(),
-                            models: provider.models.clone(),
-                        },
-                    )
-                })
-                .collect(),
-        };
-        let serialized = serde_yaml::to_string(&document)?;
+    fn save_document_locked(&self, document: &RawProvidersDocument) -> Result<()> {
+        let serialized = serde_yaml::to_string(document)?;
         write_atomic(&self.0.config_path, &serialized)
             .with_context(|| format!("Failed to write {}", self.0.config_path.display()))
+    }
+
+    pub(crate) fn app_settings(&self) -> Result<BTreeMap<ProviderAppId, ProviderAppSetting>> {
+        let guard = self.lock();
+        Ok(self.load_document_locked(&guard)?.app_settings)
+    }
+
+    // 工具级设置的唯一写入口；供应商增删改与此共用同一份文档，互不覆盖。
+    pub(crate) fn set_app_reasoning_level(
+        &self,
+        app: ProviderAppId,
+        level: Option<ReasoningLevel>,
+    ) -> Result<()> {
+        let guard = self.lock();
+        let mut document = self.load_document_locked(&guard)?;
+        let setting = document.app_settings.entry(app).or_default();
+        setting.default_reasoning_level = level;
+        if setting.default_reasoning_level.is_none() {
+            // 全空条目不落盘，避免文件里积累空壳。
+            document.app_settings.remove(&app);
+        }
+        self.save_document_locked(&document)
     }
 
     pub(crate) fn upsert(&self, input: ProviderUpsertInput) -> Result<String> {
@@ -194,7 +227,8 @@ impl ProviderConfigStore {
         }
 
         let guard = self.lock();
-        let mut providers = self.load_locked(&guard)?;
+        let mut document = self.load_document_locked(&guard)?;
+        let mut providers = resolved_providers(&document);
         // 冲突判定与写入在同一把锁内：新增不能把已存在的平台静默替换成新表单的
         // 元数据（连同它的模型目录一起丢）。
         match mode {
@@ -220,17 +254,20 @@ impl ProviderConfigStore {
                 models,
             },
         );
-        self.save_locked(&providers)?;
+        document.providers = raw_providers(&providers);
+        self.save_document_locked(&document)?;
         Ok(provider_id)
     }
 
     pub(crate) fn delete(&self, provider_id: &str) -> Result<()> {
         let guard = self.lock();
-        let mut providers = self.load_locked(&guard)?;
+        let mut document = self.load_document_locked(&guard)?;
+        let mut providers = resolved_providers(&document);
         if providers.remove(provider_id).is_none() {
             bail!("平台不存在：{provider_id}");
         }
-        self.save_locked(&providers)
+        document.providers = raw_providers(&providers);
+        self.save_document_locked(&document)
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, ()> {

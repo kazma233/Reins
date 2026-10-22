@@ -13,8 +13,9 @@ use super::catalog::{fetch_provider_models_inner, match_modelsdev};
 use super::config::ProviderConfigStore;
 use super::types::{
     ApplyProviderInput, FetchedModelsResult, ModelsDevMatchResult, ProviderAppId, ProviderAppState,
-    ProviderApplyPreview, ProviderFilePreview, ProviderModelView, ProviderMutationResult,
-    ProviderProtocol, ProviderUpsertInput, ProviderView, ProvidersState, ResolvedProvider,
+    ProviderAppSetting, ProviderApplyPreview, ProviderFilePreview, ProviderModelView,
+    ProviderMutationResult, ProviderProtocol, ProviderUpsertInput, ProviderView, ProvidersState,
+    ReasoningLevel, ResolvedProvider,
 };
 use crate::support::fs::display_path;
 
@@ -55,6 +56,19 @@ pub(crate) async fn upsert_provider(
         store.upsert(input)
     })
     .await
+}
+
+#[tauri::command]
+pub(crate) async fn set_provider_app_reasoning_level(
+    store: tauri::State<'_, ProviderConfigStore>,
+    app: ProviderAppId,
+    default_reasoning_level: Option<ReasoningLevel>,
+) -> std::result::Result<(), String> {
+    let store = store.inner().clone();
+    logger::log_info(format!(
+        "set_provider_app_reasoning_level app={app:?} level={default_reasoning_level:?}"
+    ));
+    run_blocking(move || store.set_app_reasoning_level(app, default_reasoning_level)).await
 }
 
 #[tauri::command]
@@ -177,9 +191,10 @@ pub(crate) fn providers_state_inner(
     env: &Environment,
 ) -> Result<ProvidersState> {
     let providers = store.load()?;
+    let app_settings = store.app_settings()?;
     let apps = super::types::PROVIDER_APPS
         .iter()
-        .map(|app| inspect_app(&providers, env, *app))
+        .map(|app| inspect_app(&providers, env, *app, &app_settings))
         .collect();
 
     Ok(ProvidersState {
@@ -199,16 +214,19 @@ pub(crate) fn app_state_inner(
     env: &Environment,
     app: ProviderAppId,
 ) -> Result<ProviderAppState> {
-    Ok(inspect_app(&store.load()?, env, app))
+    let providers = store.load()?;
+    let app_settings = store.app_settings()?;
+    Ok(inspect_app(&providers, env, app, &app_settings))
 }
 
 fn inspect_app(
     providers: &BTreeMap<String, ResolvedProvider>,
     env: &Environment,
     app: ProviderAppId,
+    app_settings: &BTreeMap<ProviderAppId, ProviderAppSetting>,
 ) -> ProviderAppState {
     let adapter = adapter_for(app);
-    match adapter.inspect(env, providers) {
+    let mut state = match adapter.inspect(env, providers) {
         Ok(state) => state,
         Err(error) => {
             // 单个工具配置损坏不拖垮整页；错误挂到对应卡片上。
@@ -216,7 +234,11 @@ fn inspect_app(
             state.load_error = Some(error.to_string());
             state
         }
-    }
+    };
+    state.app_reasoning_level = app_settings
+        .get(&app)
+        .and_then(|setting| setting.default_reasoning_level);
+    state
 }
 
 pub(crate) fn app_config_paths(env: &Environment, app: ProviderAppId) -> Vec<PathBuf> {

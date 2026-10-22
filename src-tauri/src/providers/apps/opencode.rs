@@ -280,6 +280,11 @@ impl AppAdapter for OpencodeAdapter {
             // settings 的思考等级。
             unwritten_model_fields: &[],
             supported_reasoning_levels: SUPPORTED_LEVELS,
+            behavior_notes: &[
+                "OpenCode 里手动选过的思考档位（变体）会覆盖这里写入的默认档并长期生效；要让默认档生效，请在 OpenCode 的 Select variant 里选回 Default。",
+                "档位变体列表由 OpenCode 按内置枚举生成（none 至 xhigh），不含 max：max 作为模型默认档写入后照常生效，只是选择器里看不到。",
+                "OpenCode 同时加载 opencode.json 与 opencode.jsonc（后者整键优先）；Reins 写入两者中已存在的最高优先级文件。",
+            ],
         }
     }
 

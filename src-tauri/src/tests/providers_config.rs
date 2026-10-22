@@ -6,7 +6,8 @@ use anyhow::Result;
 
 use crate::providers::config::ProviderConfigStore;
 use crate::providers::types::{
-    ProviderModelInput, ProviderProtocol, ProviderUpsertInput, ProviderWriteMode, ReasoningLevel,
+    ProviderAppId, ProviderModelInput, ProviderProtocol, ProviderUpsertInput, ProviderWriteMode,
+    ReasoningLevel,
 };
 use crate::test_support::TestDir;
 
@@ -192,5 +193,40 @@ fn default_upsert_mode_still_replaces_in_place() -> Result<()> {
     store.upsert(next)?;
 
     assert_eq!(store.load()?["p1"].label, "改名后的平台");
+    Ok(())
+}
+
+#[test]
+fn app_reasoning_level_round_trips_and_survives_provider_writes() -> Result<()> {
+    let dir = TestDir::new("providers-app-settings")?;
+    let store = ProviderConfigStore::at(dir.path().to_path_buf());
+    store.upsert(input("p1"))?;
+
+    // 未设置时读取为空。
+    assert!(store.app_settings()?.is_empty());
+
+    // 设置 + 覆盖 + 清除。
+    store.set_app_reasoning_level(ProviderAppId::Opencode, Some(ReasoningLevel::Max))?;
+    assert_eq!(
+        store.app_settings()?[&ProviderAppId::Opencode].default_reasoning_level,
+        Some(ReasoningLevel::Max)
+    );
+    store.set_app_reasoning_level(ProviderAppId::Opencode, Some(ReasoningLevel::Low))?;
+    assert_eq!(
+        store.app_settings()?[&ProviderAppId::Opencode].default_reasoning_level,
+        Some(ReasoningLevel::Low)
+    );
+    store.set_app_reasoning_level(ProviderAppId::Opencode, None)?;
+    assert!(store.app_settings()?.is_empty());
+
+    // 供应商增删改不丢工具级设置（同一份文档读写）。
+    store.set_app_reasoning_level(ProviderAppId::Opencode, Some(ReasoningLevel::High))?;
+    store.upsert(input("p2"))?;
+    store.delete("p1")?;
+    assert_eq!(
+        store.app_settings()?[&ProviderAppId::Opencode].default_reasoning_level,
+        Some(ReasoningLevel::High)
+    );
+    assert!(!store.load()?.contains_key("p1"));
     Ok(())
 }

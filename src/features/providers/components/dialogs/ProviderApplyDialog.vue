@@ -20,8 +20,10 @@ import {
   findAppState,
   initialApplySelection,
   reasoningEffortWrite,
+  reasoningIntersectionNote,
   reasoningLevelChoices,
   REASONING_LEVEL_LABELS,
+  toolLevelText,
   unwrittenModelFieldsText,
 } from "../../model";
 
@@ -110,6 +112,34 @@ const levelOptions = computed<ReasoningLevel[]>(() => {
   );
 });
 
+// additive 工具的档位与供应商无关：跟随 Agent 页的工具级默认设置，
+// 弹窗内不提供档位控件，也不做模型交集。
+const isAdditive = computed(() => appState.value?.additive ?? false);
+const toolLevelLine = computed(() =>
+  appState.value ? toolLevelText(appState.value) : null
+);
+
+// 候选被交集收窄时的具体解释；未收窄或空态时为 null 不展示。
+const intersectionNote = computed(() => {
+  if (!appState.value || isAdditive.value) {
+    return null;
+  }
+  return reasoningIntersectionNote(
+    appState.value,
+    props.provider,
+    selectedModelIds.value,
+    defaultReasoningLevel.value
+  );
+});
+
+// 候选规则随工具类型不同：additive 取全集，其余取交集，提示语对应。
+const levelHint = computed(() => {
+  if (levelOptions.value.length === 0) {
+    return "当前选中的模型在该工具下没有可用的思考等级，将不写入。";
+  }
+  return "取模型等级与工具支持集的交集；标注「写入」的档位按该工具的实际取值落盘。";
+});
+
 // Codex 桌面应用的模型控件只展示其设置里「可用推理强度」勾选过的档位
 // （enabled-reasoning-efforts）；未勾选的档位在 Codex 界面里看不到，
 // CLI 与其余工具无此过滤，只在用户确实要写档位时提示。
@@ -157,9 +187,13 @@ function buildInput(): ApplyProviderInput {
     app: props.app,
     modelIds: selectedModelIds.value,
     defaultModelId: defaultModelId.value,
-    defaultReasoningLevel: levelOptions.value.includes(defaultReasoningLevel.value as ReasoningLevel)
-      ? defaultReasoningLevel.value
-      : null,
+    // additive：档位来自工具级设置（Agent 页），弹窗不参与选择。
+    // 非 additive：弹窗所选档位须在交集候选内，否则视为不写。
+    defaultReasoningLevel: isAdditive.value
+      ? (appState.value?.appReasoningLevel ?? null)
+      : levelOptions.value.includes(defaultReasoningLevel.value as ReasoningLevel)
+        ? defaultReasoningLevel.value
+        : null,
   };
 }
 
@@ -284,7 +318,7 @@ function renderDiff(lines: DiffLine[]): string {
           />
         </div>
 
-        <div class="providers-field">
+        <div v-if="!isAdditive" class="providers-field">
           <AppSelect
             v-model="defaultReasoningLevelValue"
             variant="stacked"
@@ -301,14 +335,22 @@ function renderDiff(lines: DiffLine[]): string {
         </div>
       </div>
 
-      <!-- 档位相关说明集中在下方的提示块，不依附选择器字段。 -->
+      <!-- 档位说明统一放表单下方通栏：additive 显示工具级默认档，其余显示交集规则 -->
       <div class="providers-apply-note">
-        <p class="providers-section-hint">
-          {{ levelOptions.length === 0 ? "当前选中的模型在该工具下没有可用的思考等级，将不写入。" : "取模型等级与工具支持集的交集；标注「写入」的档位按该工具的实际取值落盘。" }}
-        </p>
-        <p v-if="codexEffortFilterHint" class="providers-section-hint">
-          {{ codexEffortFilterHint }}
-        </p>
+        <template v-if="isAdditive">
+          <p class="providers-section-hint">{{ toolLevelLine }}</p>
+        </template>
+        <template v-else>
+          <p class="providers-section-hint">
+            {{ levelHint }}
+          </p>
+          <p v-if="intersectionNote" class="providers-section-hint">
+            {{ intersectionNote }}
+          </p>
+          <p v-if="codexEffortFilterHint" class="providers-section-hint">
+            {{ codexEffortFilterHint }}
+          </p>
+        </template>
       </div>
 
       <AppLoadError

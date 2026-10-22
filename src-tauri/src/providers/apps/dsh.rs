@@ -353,6 +353,10 @@ impl AppAdapter for DshAdapter {
             // 显式 false 间接表达（见 apply），真值+空等级组合无法表达。
             unwritten_model_fields: &[ModelField::Reasoning],
             supported_reasoning_levels: ReasoningLevel::all(),
+            behavior_notes: &[
+                "桌面版对 settings.yaml 是一次性导入语义（启动时改名 .imported），Reins 不写它：路由与默认档以行级 patch 写入全局与 desktop profile 的 cordis.patch.yml。",
+                "密钥写入 dsh 托管的 .credentials.yaml（严格名字映射），路由经 apiKeyEnv 引用。",
+            ],
         }
     }
 

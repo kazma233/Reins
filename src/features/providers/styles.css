@@ -497,6 +497,65 @@
   margin-right: 4px;
 }
 
+/* header 右上角的工具级默认思考等级：紧凑内联，与徽标/按钮同排 */
+.providers-app__level {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.providers-app__level-label {
+  color: var(--color-muted);
+  font-size: var(--font-size-sm);
+  white-space: nowrap;
+}
+
+.providers-app__level-select {
+  flex: 0 0 auto;
+  width: 230px;
+}
+
+/* 覆盖浮动变体的留白：本控件不带 label 文本，按普通小控件对齐 header 行高 */
+.providers-app__level-select select {
+  height: var(--button-height-compact);
+  padding: 0 26px 0 10px;
+  font-size: var(--font-size-sm);
+  font-weight: 400;
+}
+
+/* 工具名旁的「?」行为说明入口 */
+.providers-app__help {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  margin-left: 6px;
+  padding: 0;
+  border: 1px solid var(--color-hairline);
+  border-radius: 50%;
+  background: transparent;
+  color: var(--color-muted);
+  font-size: var(--font-size-xs);
+  line-height: 1;
+  cursor: pointer;
+  vertical-align: 2px;
+}
+
+.providers-app__help:hover {
+  color: var(--color-ink);
+  border-color: var(--color-muted);
+}
+
+.providers-help-list {
+  margin: 0;
+  padding-left: 18px;
+  display: grid;
+  gap: 8px;
+  color: var(--color-body);
+  font-size: var(--font-size-md);
+}
+
 /* 低调小按钮：行内低频操作用；危险变体只描边不实心。 */
 .providers-mini-button {
   display: inline-flex;

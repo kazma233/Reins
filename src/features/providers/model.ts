@@ -210,15 +210,20 @@ export function reapplyProvider(
   return providers.find((provider) => provider.id === entry.providerId) ?? null;
 }
 
-// 应用弹窗的思考等级可选项：选中模型在该工具下可用等级的交集，外加当前
-// 已写入的等级——当前值即使不在交集里（模型目录后来收窄）也要能显示与
-// 保留，否则重新应用会把它写没。
+// 应用弹窗的思考等级可选项：多供应商并存的工具（additive）档位只是各
+// 模型条目的默认预填值，直接给工具全集，不因某个模型的声明收窄；其余
+// 工具按选中模型可用等级取交集，外加当前已写入的等级——当前值即使不在
+// 交集里（模型目录后来收窄）也要能显示与保留，否则重新应用会把它写没。
 export function reasoningLevelChoices(
   appState: ProviderAppState,
   provider: ProviderView,
   selectedModelIds: string[],
   current: ReasoningLevel | null
 ): ReasoningLevel[] {
+  if (appState.additive) {
+    const levels = [...appState.supportedReasoningLevels];
+    return current && !levels.includes(current) ? [...levels, current] : levels;
+  }
   const selected = provider.models.filter((model) =>
     selectedModelIds.includes(model.id)
   );
@@ -230,6 +235,97 @@ export function reasoningLevelChoices(
   }
   const levels = options ?? [];
   return current && !levels.includes(current) ? [...levels, current] : levels;
+}
+
+// 应用弹窗的交集收窄说明：列出因选中模型未声明而被排除出候选的档位及
+// 排除方，让「为什么候选比工具支持集少」在界面上可解释。additive 工具
+// 不做交集、模型都未约束、没有档位被排除、或交集为空（另有空态文案）
+// 时返回 null 不展示。
+export function reasoningIntersectionNote(
+  appState: ProviderAppState,
+  provider: ProviderView,
+  selectedModelIds: string[],
+  current: ReasoningLevel | null
+): string | null {
+  if (appState.additive) {
+    return null;
+  }
+  const selected = provider.models.filter((model) =>
+    selectedModelIds.includes(model.id)
+  );
+  const constrained = selected.filter((model) => model.reasoningLevels);
+  if (constrained.length === 0) {
+    return null;
+  }
+  // 当前已写入的档位即使不在交集里也会追加进候选（见 reasoningLevelChoices），
+  // 不算「未列出」。
+  const excluded = appState.supportedReasoningLevels.filter(
+    (level) =>
+      level !== current &&
+      constrained.some((model) => !model.reasoningLevels!.includes(level))
+  );
+  if (excluded.length === 0) {
+    return null;
+  }
+  const remaining = appState.supportedReasoningLevels.filter(
+    (level) =>
+      level === current ||
+      constrained.every((model) => model.reasoningLevels!.includes(level))
+  );
+  if (remaining.length === 0) {
+    return null;
+  }
+  // 按排除方分组，同一批模型排除的档位合并成一句。
+  const byBlockers = new Map<string, ReasoningLevel[]>();
+  for (const level of excluded) {
+    const blockers = constrained
+      .filter((model) => !model.reasoningLevels!.includes(level))
+      .map((model) => model.id)
+      .join("、");
+    byBlockers.set(blockers, [...(byBlockers.get(blockers) ?? []), level]);
+  }
+  const parts = [...byBlockers].map(
+    ([blockers, levels]) =>
+      `${levels
+        .map((level) => `${REASONING_LEVEL_LABELS[level]}（${level}）`)
+        .join("、")} 因 ${blockers} 未声明`
+  );
+  return `候选档位取的是选中模型支持范围的交集：${parts.join("；")}。`;
+}
+
+// Agent 页 additive 工具的「默认思考等级」下拉：候选 = 工具支持全集 +
+// 不设置。档位与供应商无关，写入值映射（如有）随档位标注。
+export function toolLevelOptions(
+  appState: ProviderAppState
+): { value: string; label: string }[] {
+  return [
+    { value: "", label: "不设置（应用不改档位）" },
+    ...appState.supportedReasoningLevels.map((level) => {
+      const writes = reasoningEffortWrite(appState, level);
+      const base = `${REASONING_LEVEL_LABELS[level]}（${level}）`;
+      return {
+        value: level,
+        label:
+          writes === level ? base : `${REASONING_LEVEL_LABELS[level]}（${level}，写入 ${writes}）`,
+      };
+    }),
+  ];
+}
+
+// additive 应用弹窗的档位只读文案：档位跟随工具级默认设置，不在弹窗里选。
+export function toolLevelText(appState: ProviderAppState): string {
+  if (appState.supportedReasoningLevels.length === 0) {
+    return "该工具不写入思考档位。";
+  }
+  const level = appState.appReasoningLevel;
+  if (!level) {
+    return "该工具未设置默认思考等级，本次应用不改各模型的档位（保留现状）。可在 Agent 页的工具卡片上设置。";
+  }
+  const writes = reasoningEffortWrite(appState, level);
+  const label = `${REASONING_LEVEL_LABELS[level]}（${level}）`;
+  return writes === level
+    ? `将按工具默认档「${label}」写入所有勾选模型；档位在 Agent 页的工具卡片上设置。`
+    : `将按工具默认档「${REASONING_LEVEL_LABELS[level]}（${level}，写入 ${writes}）」写入所有勾选模型；档位在 Agent 页的工具卡片上设置。`;
 }
 
 // 应用弹窗的初始选择：优先沿用该平台已写入的模型，并以当前默认模型为

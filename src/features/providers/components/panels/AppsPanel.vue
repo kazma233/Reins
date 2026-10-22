@@ -4,12 +4,15 @@ import ConfirmDialog from "@shared/ui/ConfirmDialog.vue";
 import AppCard from "@shared/ui/AppCard.vue";
 import AppFieldError from "@shared/ui/AppFieldError.vue";
 import AppLoadError from "@shared/ui/AppLoadError.vue";
-import { applyProviderToApp, removeExternalEntry, removeProviderFromApp } from "../../api";
+import AppSelect from "@shared/ui/AppSelect.vue";
+import DialogShell from "@shared/ui/DialogShell.vue";
+import { applyProviderToApp, removeExternalEntry, removeProviderFromApp, setProviderAppReasoningLevel } from "../../api";
 import type {
   ApplyProviderInput,
   ProviderAppEntry,
   ProviderAppId,
   ProviderView,
+  ReasoningLevel,
 } from "../../generated";
 import {
   APP_LABELS,
@@ -19,6 +22,7 @@ import {
   protocolLabel,
   reasoningEffortMappingText,
   reapplyProvider,
+  toolLevelOptions,
 } from "../../model";
 import { useProvidersAction } from "../../composables/useProvidersAction";
 import { useProvidersState } from "../../composables/useProvidersState";
@@ -109,6 +113,24 @@ function confirmApply(input: ApplyProviderInput) {
   });
 }
 
+// 工具级默认档：保存后定点刷新该工具卡片（appReasoningLevel 随卡片状态回读）。
+function setToolReasoningLevel(app: ProviderAppId, value: string) {
+  runProvidersAction({
+    action: () =>
+      setProviderAppReasoningLevel(app, value === "" ? null : (value as ReasoningLevel)),
+    reloadApp: app,
+  });
+}
+
+// 「?」行为说明弹窗：内容来自工具能力表 behaviorNotes（适配器实证注释同源）。
+const helpApp = ref<ProviderAppId | null>(null);
+const helpAppState = computed(() => {
+  if (helpApp.value === null || !state.value) {
+    return null;
+  }
+  return state.value.apps.find((item) => item.app === helpApp.value) ?? null;
+});
+
 function requestRemove(app: ProviderAppId, providerId: string, entryKey: string) {
   removeError.value = null;
   removeTarget.value = { app, providerId, entryKey, external: false };
@@ -170,10 +192,39 @@ function confirmRemove() {
     <div v-else-if="state" class="providers-app-list">
       <AppCard v-for="appState in state.apps" :key="appState.app">
         <template #header>
-          <h4 class="providers-app__title">{{ APP_LABELS[appState.app] }}</h4>
+          <h4 class="providers-app__title">
+            {{ APP_LABELS[appState.app] }}
+            <button
+              v-if="appState.behaviorNotes.length > 0"
+              class="providers-app__help"
+              type="button"
+              :aria-label="`${APP_LABELS[appState.app]} 行为说明`"
+              @click="helpApp = appState.app"
+            >
+              ?
+            </button>
+          </h4>
           <span class="providers-badge providers-badge--muted">
             {{ appState.additive ? "多提供商并存" : "单活动提供商" }}
           </span>
+        </template>
+        <!-- additive 且支持档位的工具：默认档入口放 header 右上角 -->
+        <template v-if="appState.additive && appState.supportedReasoningLevels.length > 0" #ext>
+          <div class="providers-app__level">
+            <span class="providers-app__level-label">默认思考等级</span>
+            <AppSelect
+              :model-value="appState.appReasoningLevel ?? ''"
+              :options="toolLevelOptions(appState)"
+              :disabled="runningAction"
+              size="sm"
+              tone="plain"
+              class-name="providers-app__level-select"
+              aria-label="默认思考等级"
+              @update:model-value="
+                (value: string) => setToolReasoningLevel(appState.app, value)
+              "
+            />
+          </div>
         </template>
         <template #headerMeta>
           <div class="providers-app__meta">
@@ -302,6 +353,21 @@ function confirmRemove() {
       @close="closeApplyDialog"
       @confirm="confirmApply"
     />
+
+    <DialogShell
+      v-if="helpAppState"
+      :open="true"
+      eyebrow="工具行为"
+      :title="`${APP_LABELS[helpAppState.app]} 的隐形行为`"
+      title-id="provider-app-help-dialog-title"
+      @close="helpApp = null"
+    >
+      <ul class="providers-help-list">
+        <li v-for="(note, index) in helpAppState.behaviorNotes" :key="index">
+          {{ note }}
+        </li>
+      </ul>
+    </DialogShell>
 
     <ConfirmDialog
       :open="removeTarget !== null"

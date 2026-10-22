@@ -67,6 +67,7 @@ pub fn run() {
             providers::commands::fetch_modelsdev_catalog,
             providers::commands::preview_provider_apply,
             providers::commands::apply_provider_to_app,
+            providers::commands::set_provider_app_reasoning_level,
             providers::commands::remove_provider_from_app,
             providers::commands::remove_external_entry,
         ])

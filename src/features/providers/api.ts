@@ -10,6 +10,7 @@ import type {
   ProviderProtocol,
   ProviderUpsertInput,
   ProvidersState,
+  ReasoningLevel,
 } from "./generated";
 
 // 全部 invoke 封装；类型只来自 generated/。明文 API Key 只经
@@ -28,6 +29,14 @@ export function getProviderAppState(app: ProviderAppId): Promise<ProviderAppStat
 // 返回落库后的归一化提供商 ID（小写、`_`→`-`），写密钥等后续调用以它为准。
 export function upsertProvider(input: ProviderUpsertInput): Promise<string> {
   return invoke("upsert_provider", { input });
+}
+
+// 工具级默认思考等级（app_settings 段）；null 表示不设置，应用不改档位。
+export function setProviderAppReasoningLevel(
+  app: ProviderAppId,
+  defaultReasoningLevel: ReasoningLevel | null
+): Promise<void> {
+  return invoke("set_provider_app_reasoning_level", { app, defaultReasoningLevel });
 }
 
 export function deleteProvider(providerId: string): Promise<ProviderMutationResult> {

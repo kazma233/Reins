@@ -61,6 +61,10 @@ impl AppAdapter for ClaudeAdapter {
             // Claude Code 配置里没有对应键。
             unwritten_model_fields: &[ModelField::SupportsImages, ModelField::Reasoning],
             supported_reasoning_levels: SUPPORTED_LEVELS,
+            behavior_notes: &[
+                "单活动提供商：应用即替换 settings.json 里的 base URL、认证、模型与 effortLevel，文件中其他键保留。",
+                "聚合模型对 Claude Code 是「不认识的模型 ID」，上下文窗口按内置同名模型推断。",
+            ],
         }
     }
 

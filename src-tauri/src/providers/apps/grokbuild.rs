@@ -175,6 +175,10 @@ impl AppAdapter for GrokbuildAdapter {
             // 图像输入（配置无对应字段）无落点。
             unwritten_model_fields: &[ModelField::MaxOutputTokens, ModelField::SupportsImages],
             supported_reasoning_levels: ReasoningLevel::all(),
+            behavior_notes: &[
+                "选择最高（max）档时实际以 xhigh 落盘：Grok 交互界面只渲染到 xhigh，两档的 thinking 参数完全相同（1.0.41 实测）。",
+                "Anthropic Messages 协议下 Grok 固定请求 {Base URL}/messages，不自动补 /v1 段。",
+            ],
         }
     }
 

@@ -24,6 +24,7 @@ function appState(app: ProviderAppId): ProviderAppState {
     reasoningLevelWrites: [],
     additive: true,
     unwrittenModelFields: [],
+    behaviorNotes: [],
     entries: [],
     loadError: null,
   };

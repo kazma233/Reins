@@ -75,6 +75,9 @@ impl AppAdapter for PiAdapter {
             // Pi 的 models.json 逐模型写 reasoning/contextWindow/maxTokens/input。
             unwritten_model_fields: &[],
             supported_reasoning_levels: ReasoningLevel::all(),
+            behavior_notes: &[
+                "默认 Provider、模型与思考档写在 settings.json；移除平台时这三项随删清空。",
+            ],
         }
     }
 

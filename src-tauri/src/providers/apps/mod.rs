@@ -69,6 +69,9 @@ pub(crate) struct AppCapability {
     // 这些值不会影响该工具。
     pub(crate) unwritten_model_fields: &'static [ModelField],
     pub(crate) supported_reasoning_levels: &'static [ReasoningLevel],
+    // 工具的隐形行为约束（如档位覆盖、进程缓存、一次性导入语义），
+    // Agent 页「?」说明弹窗按此展示；没有值得说明的行为时为空。
+    pub(crate) behavior_notes: &'static [&'static str],
 }
 
 // 模型元数据维度：required_model_fields 用它做应用门控，
@@ -520,6 +523,12 @@ pub(crate) fn empty_state(app: ProviderAppId, config_paths: Vec<PathBuf>) -> Pro
             .map(|field| field.label().to_string())
             .collect(),
         default_reasoning_level: None,
+        app_reasoning_level: None,
+        behavior_notes: capability
+            .behavior_notes
+            .iter()
+            .map(|note| note.to_string())
+            .collect(),
         entries: Vec::new(),
         load_error: None,
     }

@@ -319,6 +319,10 @@ impl AppAdapter for ZcodeAdapter {
             // 档位是每模型值域 + 会话级选择。
             unwritten_model_fields: &[],
             supported_reasoning_levels: &[],
+            behavior_notes: &[
+                "ZCode 的模型与思考档选择是会话级、不落盘：Reins 不写这两项。",
+                "官方 OAuth 登录不经 Reins（凭据由 ZCode 自管的 credentials.json 存储，不读写）。",
+            ],
         }
     }
 

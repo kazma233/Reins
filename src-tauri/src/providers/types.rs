@@ -129,6 +129,20 @@ pub(crate) struct RawProvidersDocument {
     pub(crate) version: i64,
     #[serde(default)]
     pub(crate) providers: BTreeMap<String, RawProvider>,
+    // 工具级设置：多供应商并存工具的默认思考等级等，与供应商无关。
+    // 旧文件没有此段，default 兼容。
+    #[serde(default)]
+    pub(crate) app_settings: BTreeMap<ProviderAppId, ProviderAppSetting>,
+}
+
+// 单个工具的 Reins 侧设置。字段按需增加，保持无 schema 段的轻量形态。
+#[derive(Clone, Debug, Default, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../src/features/providers/generated/")]
+pub(crate) struct ProviderAppSetting {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional = nullable)]
+    pub(crate) default_reasoning_level: Option<ReasoningLevel>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -287,6 +301,14 @@ pub(crate) struct ProviderAppState {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[ts(optional = nullable)]
     pub(crate) default_reasoning_level: Option<ReasoningLevel>,
+    // Reins 里为该工具配置的默认思考等级（app_settings 段，与供应商无关）。
+    // additive 工具应用时用它写入各模型；未设置为空表示应用不改档位。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional = nullable)]
+    pub(crate) app_reasoning_level: Option<ReasoningLevel>,
+    // 工具的隐形行为约束（能力表 behavior_notes 同源下发）；Agent 页
+    // 「?」说明弹窗按此展示。
+    pub(crate) behavior_notes: Vec<String>,
     pub(crate) entries: Vec<ProviderAppEntry>,
     // 单个工具配置损坏时不拖垮整个页面，把错误放进对应卡片。
     #[serde(skip_serializing_if = "Option::is_none")]

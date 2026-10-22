@@ -17,9 +17,12 @@ import {
   providerSyncPlan,
   reasoningEffortMappingText,
   reasoningEffortWrite,
+  reasoningIntersectionNote,
   reasoningLevelChoices,
   reasoningLevelOptions,
   reapplyProvider,
+  toolLevelOptions,
+  toolLevelText,
   unwrittenModelFieldsText,
   validateProviderForm,
 } from "./model";
@@ -34,6 +37,7 @@ function appState(overrides: Partial<ProviderAppState> = {}): ProviderAppState {
     reasoningLevelWrites: [],
     additive: false,
     unwrittenModelFields: [],
+    behaviorNotes: [],
     entries: [],
     loadError: null,
     ...overrides,
@@ -315,6 +319,123 @@ describe("reasoningLevelChoices", () => {
 
   it("returns nothing when no model is selected", () => {
     expect(reasoningLevelChoices(appState(), models, [], null)).toEqual([]);
+  });
+
+  it("offers the full tool set for additive apps regardless of model levels", () => {
+    // 多供应商并存的工具档位只是默认预填值，模型声明不收窄候选。
+    const additive = appState({
+      additive: true,
+      supportedReasoningLevels: ["low", "high", "max"],
+    });
+    expect(
+      reasoningLevelChoices(additive, models, ["model-a", "model-b"], null)
+    ).toEqual(["low", "high", "max"]);
+    expect(
+      reasoningLevelChoices(additive, models, ["model-a"], "max")
+    ).toEqual(["low", "high", "max"]);
+  });
+});
+
+describe("reasoningIntersectionNote", () => {
+  const models = provider({
+    models: [
+      { id: "model-a", label: "Model A", reasoningLevels: ["low", "high"] },
+      { id: "model-b", label: "Model B", reasoningLevels: null },
+      { id: "model-c", label: "Model C", reasoningLevels: ["low", "medium"] },
+    ],
+  });
+
+  it("names the excluded levels and the models that exclude them", () => {
+    // 工具支持 minimal/low/medium/high，交集是 low；被排除的档位按排除方分组。
+    const note = reasoningIntersectionNote(
+      appState(),
+      models,
+      ["model-a", "model-c"],
+      null
+    );
+    expect(note).toContain("最低（minimal） 因 model-a、model-c 未声明");
+    expect(note).toContain("高（high） 因 model-c 未声明");
+    expect(note).toContain("中（medium） 因 model-a 未声明");
+  });
+
+  it("returns null when no model constrains the levels", () => {
+    expect(
+      reasoningIntersectionNote(appState(), models, ["model-b"], null)
+    ).toBeNull();
+  });
+
+  it("returns null when nothing is excluded", () => {
+    const covering = provider({
+      models: [{ id: "model-a", label: "Model A", reasoningLevels: ["low", "high", "minimal", "medium"] }],
+    });
+    expect(
+      reasoningIntersectionNote(appState(), covering, ["model-a"], null)
+    ).toBeNull();
+  });
+
+  it("keeps the current level out of the excluded list even when unconstrained models drop it", () => {
+    // 当前已写入的档位会追加进候选，不属于「未列出」。
+    const note = reasoningIntersectionNote(
+      appState(),
+      models,
+      ["model-c"],
+      "high"
+    );
+    expect(note).toBe("候选档位取的是选中模型支持范围的交集：最低（minimal） 因 model-c 未声明。");
+  });
+
+  it("returns null when the intersection is empty (empty-state hint covers it)", () => {
+    const exclusive = provider({
+      models: [{ id: "model-a", label: "Model A", reasoningLevels: ["max"] }],
+    });
+    expect(
+      reasoningIntersectionNote(appState(), exclusive, ["model-a"], null)
+    ).toBeNull();
+  });
+
+  it("returns null for additive apps since candidates are never narrowed", () => {
+    const additive = appState({ additive: true });
+    expect(
+      reasoningIntersectionNote(additive, models, ["model-a", "model-c"], null)
+    ).toBeNull();
+  });
+});
+
+describe("toolLevelOptions and toolLevelText", () => {
+  it("builds tool level options from the app's supported set with a no-op entry", () => {
+    const additive = appState({
+      additive: true,
+      supportedReasoningLevels: ["low", "high"],
+      reasoningLevelWrites: [{ level: "high", writes: "xhigh" }],
+    });
+    expect(toolLevelOptions(additive)).toEqual([
+      { value: "", label: "不设置（应用不改档位）" },
+      { value: "low", label: "低（low）" },
+      { value: "high", label: "高（high，写入 xhigh）" },
+    ]);
+  });
+
+  it("describes the unset tool level as keep-as-is", () => {
+    const additive = appState({ additive: true });
+    expect(toolLevelText(additive)).toContain("不改各模型的档位");
+  });
+
+  it("describes the configured tool level with its write value", () => {
+    const additive = appState({
+      additive: true,
+      appReasoningLevel: "max",
+      reasoningLevelWrites: [{ level: "max", writes: "max" }],
+    });
+    expect(toolLevelText(additive)).toContain("最高（max）");
+    expect(toolLevelText(additive)).toContain("Agent 页");
+  });
+
+  it("says the tool does not write levels when the support set is empty", () => {
+    const noLevels = appState({ additive: true, supportedReasoningLevels: [] });
+    expect(toolLevelText(noLevels)).toContain("不写入思考档位");
+    expect(toolLevelOptions(noLevels)).toEqual([
+      { value: "", label: "不设置（应用不改档位）" },
+    ]);
   });
 });
 

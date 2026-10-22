@@ -197,6 +197,12 @@ impl AppAdapter for CodexAdapter {
                 ModelField::Reasoning,
             ],
             supported_reasoning_levels: SUPPORTED_LEVELS,
+            behavior_notes: &[
+                "单活动提供商：应用会替换 Codex 当前配置中的供应商设置。",
+                "已运行的 Codex 不会自动读取变更（0.159 起模型目录由后台守护进程缓存）：完全退出后重开；仍未生效时执行 codex app-server daemon restart。",
+                "Codex 桌面应用的模型控件只展示其设置里「可用推理强度」勾选过的档位。",
+                "Reins 另写 reins-models.json 模型目录（整体替换语义）：应用期间 Codex 内置模型不出现在选择器，移除平台后恢复。",
+            ],
         }
     }
 
