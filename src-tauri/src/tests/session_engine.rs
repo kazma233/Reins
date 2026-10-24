@@ -245,6 +245,131 @@ fn zcode_engine_without_session_table_lists_empty() -> Result<()> {
     Ok(())
 }
 
+// 贡献表增量:opencode 活跃写入(回写旧消息 tokens、追加新消息、删除消息)
+// 后,下一次扫描按行级 (id, time_updated) 幂等更新聚合;增量结果必须与
+// 全新 store 的全量提取一致。
+#[test]
+fn opencode_contrib_updates_incrementally_on_db_writes() -> Result<()> {
+    let dir = env::temp_dir().join(format!("reins-opencode-contrib-{}", Uuid::new_v4()));
+    fs::create_dir_all(&dir)?;
+    super::seed_opencode_family_at(&dir, "ses_contrib", "ses_contrib_child")?;
+    let db_path = dir.join("opencode.db");
+
+    {
+        let connection = Connection::open(&db_path)?;
+        super::seed_opencode_message_row(
+            &connection,
+            "ses_contrib",
+            "msg-a1",
+            1_744_366_402_000,
+            2,
+            "assistant",
+            &json!({
+                "time": { "created": 1_744_366_402_000_i64 },
+                "model": { "providerID": "p1", "id": "model-x" },
+                "tokens": { "input": 100, "output": 40, "reasoning": 10,
+                            "cache": { "read": 5, "write": 2 } },
+            }),
+        )?;
+    }
+
+    let engine = opencode::engine_at(dir.clone(), dir.join("store"));
+
+    // 首次扫描全量提取;usage 口径:input 不含缓存读,output 并 reasoning。
+    let first = engine.list_entries()?;
+    let first_summary = first[0].summary.as_ref().expect("summary");
+    let first_usage = first_summary.token_usage.as_ref().expect("usage");
+    assert_eq!(first_usage.input_tokens, 100);
+    assert_eq!(first_usage.output_tokens, 50);
+    assert_eq!(
+        first_summary
+            .models
+            .iter()
+            .map(|model| model.model.clone())
+            .collect::<Vec<_>>(),
+        vec!["model-x".to_string()]
+    );
+
+    // 跨毫秒确保 db mtime(行缓存 freshness)与行级 stamp 都能观察到变化。
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    {
+        let connection = Connection::open(&db_path)?;
+        // 回写旧消息:tokens 变化伴随 time_updated 推进。
+        connection.execute(
+            "UPDATE session_message
+             SET time_updated = time_updated + 1000,
+                 data = json_set(data, '$.tokens.input', 300)
+             WHERE id = 'msg-a1'",
+            [],
+        )?;
+        // 追加新消息:不同模型,另一份 usage。
+        super::seed_opencode_message_row(
+            &connection,
+            "ses_contrib",
+            "msg-a2",
+            1_744_366_403_000,
+            3,
+            "assistant",
+            &json!({
+                "time": { "created": 1_744_366_403_000_i64 },
+                "model": { "providerID": "p1", "id": "model-y" },
+                "tokens": { "input": 50, "output": 20, "reasoning": 0,
+                            "cache": { "read": 0, "write": 0 } },
+            }),
+        )?;
+        // 删除子会话的 assistant 消息:贡献随之消失。
+        connection.execute(
+            "DELETE FROM session_message WHERE session_id = 'ses_contrib_child' AND type = 'assistant'",
+            [],
+        )?;
+    }
+
+    // 增量扫描(共享 store 的贡献表 diff)与全新 store 的全量提取对照。
+    let incremental = engine.list_entries()?;
+    let fresh = opencode::engine_at(dir.clone(), dir.join("store_fresh"));
+    let full = fresh.list_entries()?;
+
+    assert_eq!(incremental.len(), full.len());
+    let incremental_usage = incremental[0]
+        .summary
+        .as_ref()
+        .expect("summary")
+        .token_usage
+        .as_ref()
+        .expect("usage");
+    let full_usage = full[0]
+        .summary
+        .as_ref()
+        .expect("summary")
+        .token_usage
+        .as_ref()
+        .expect("usage");
+    assert_eq!(incremental_usage, full_usage);
+    // 回写后的期望值:300 + 50,旧值不得重复累计。
+    assert_eq!(incremental_usage.input_tokens, 350);
+
+    let incremental_models: Vec<String> = incremental[0]
+        .summary
+        .as_ref()
+        .expect("summary")
+        .models
+        .iter()
+        .map(|model| model.model.clone())
+        .collect();
+    let full_models: Vec<String> = full[0]
+        .summary
+        .as_ref()
+        .expect("summary")
+        .models
+        .iter()
+        .map(|model| model.model.clone())
+        .collect();
+    assert_eq!(incremental_models, full_models);
+
+    fs::remove_dir_all(&dir).ok();
+    Ok(())
+}
+
 // 重定向后的会话根:读取器走 agents 清单的 GlobalRoot(重定向优先、HOME
 // 兜底),与 workspace/providers 同一条路径来源——设了变量的用户在三个域
 // 看到同一份数据。codex 侧的行为证据:CODEX_HOME 重定向时官方 CLI 把

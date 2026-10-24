@@ -742,7 +742,11 @@ impl FamilySpec for DshSpec {
         root.to_path_buf()
     }
 
-    fn list_rows(&self, scan_root: &Path) -> Result<Vec<DshFamilyRow>> {
+    fn list_rows(
+        &self,
+        scan_root: &Path,
+        _cache: &super::rows_cache::RowsDb,
+    ) -> Result<Vec<DshFamilyRow>> {
         let paths = session_transcript_paths_at(scan_root)?;
         let archived = archived_session_ids(scan_root)?;
         let rows = scan_files(

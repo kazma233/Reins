@@ -98,7 +98,11 @@ impl FamilySpec for ClaudeSpec {
     }
 
     // 坏文件静默跳过:一个损坏转录不能让整个列表失败,也不记日志。
-    fn list_rows(&self, scan_root: &Path) -> Result<Vec<ClaudeSessionRow>> {
+    fn list_rows(
+        &self,
+        scan_root: &Path,
+        _cache: &super::rows_cache::RowsDb,
+    ) -> Result<Vec<ClaudeSessionRow>> {
         let files = crate::support::fs::enumerate_jsonl_files(scan_root)?;
         scan_files(
             files,

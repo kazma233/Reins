@@ -110,8 +110,12 @@ impl FamilySpec for OpenCodeSpec {
         root.to_path_buf()
     }
 
-    fn list_rows(&self, scan_root: &Path) -> Result<Vec<OpenCodeSessionRow>> {
-        list_session_rows(scan_root)
+    fn list_rows(
+        &self,
+        scan_root: &Path,
+        cache: &super::rows_cache::RowsDb,
+    ) -> Result<Vec<OpenCodeSessionRow>> {
+        list_session_rows(scan_root, cache)
     }
 
     fn group_families(&self, rows: Vec<OpenCodeSessionRow>) -> Result<Vec<OpenCodeSessionFamily>> {
@@ -381,7 +385,10 @@ pub(crate) fn delete_plan(input: &DeletePlanInput) -> Result<Vec<DeletePlanActio
         .collect())
 }
 
-fn list_session_rows(scan_root: &Path) -> Result<Vec<OpenCodeSessionRow>> {
+fn list_session_rows(
+    scan_root: &Path,
+    cache: &super::rows_cache::RowsDb,
+) -> Result<Vec<OpenCodeSessionRow>> {
     // db 与 session_v2 表都随首次会话写入才落地,缺失只说明该来源还没有会话。
     // 这里用读写模式打开,不先判存在就会凭空创建一个空 db 文件。
     let db_path = db_path_at(scan_root);
@@ -395,8 +402,9 @@ fn list_session_rows(scan_root: &Path) -> Result<Vec<OpenCodeSessionRow>> {
         return Ok(Vec::new());
     }
 
-    let token_usages = session_token_usages(&connection)?;
-    let models_by_session = session_models(&connection)?;
+    let contribs = sync_assistant_contribs(&connection, cache, &db_path)?;
+    let token_usages = usage_by_session(&contribs);
+    let models_by_session = models_by_session(&contribs);
     // time_archived 由 v1→v2 迁移期加入,老库可能没有该列;缺失时列表照常
     // 产出,归档位恒假。
     let archived_column = super::sqlite_column_exists(&connection, "session_v2", "time_archived")?;
@@ -460,111 +468,112 @@ fn list_session_rows(scan_root: &Path) -> Result<Vec<OpenCodeSessionRow>> {
         .context("Failed to read OpenCode sessions")
 }
 
-// 会话用过的模型按 session_id 预聚合:同模型可能换过 provider,一并计入。
-// 计数只用于排序(主模型排最前),调用次数相同则按模型名稳定排序。
-fn session_models(connection: &Connection) -> Result<HashMap<String, Vec<SessionModel>>> {
+// assistant 消息的行级贡献:usage 求和与模型分组的持久最小单元。行内容
+// 可变(opencode 会回写消息行),不能按会话或 rowid 水位做增量合并;失效键
+// 用消息行自己的 time_updated——data 变化伴随它推进。轻扫只读 (id,
+// time_updated) 两个整数列,不触碰 data 大 JSON;仅变化行做 json_extract。
+#[derive(Clone, Serialize, Deserialize)]
+struct AssistantContrib {
+    session_id: String,
+    message_time: i64,
+    input: i64,
+    output: i64,
+    reasoning: i64,
+    cache_read: i64,
+    cache_write: i64,
+    provider: Option<String>,
+    model: Option<String>,
+}
+
+// 贡献表同步:diff 后只提取变化行,返回当前全量贡献。db 的 session_message
+// 表缺失只说明还没有消息,按空贡献处理。
+fn sync_assistant_contribs(
+    connection: &Connection,
+    cache: &super::rows_cache::RowsDb,
+    db_path: &Path,
+) -> Result<Vec<AssistantContrib>> {
     if !super::sqlite_table_exists(connection, "session_message")? {
-        return Ok(HashMap::new());
+        return Ok(Vec::new());
     }
 
     let mut statement = connection
-        .prepare(
-            "SELECT session_id,
-                    json_extract(data, '$.model.providerID'),
-                    json_extract(data, '$.model.id'),
-                    COUNT(*) AS calls
-             FROM session_message
-             WHERE type = 'assistant'
-               AND json_extract(data, '$.model.id') IS NOT NULL
-             GROUP BY session_id, 2, 3
-             ORDER BY session_id, calls DESC, 3",
-        )
-        .context("Failed to prepare OpenCode model query")?;
-
-    let rows = statement
+        .prepare("SELECT id, time_updated FROM session_message WHERE type = 'assistant'")
+        .context("Failed to prepare OpenCode assistant scan")?;
+    let current = statement
         .query_map([], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, Option<String>>(1)?,
-                row.get::<_, String>(2)?,
-            ))
-        })
-        .context("Failed to read OpenCode models")?;
+            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+        })?
+        .collect::<std::result::Result<HashMap<String, i64>, _>>()
+        .context("Failed to read OpenCode assistant stamps")?;
 
-    let mut models = HashMap::<String, Vec<SessionModel>>::new();
-    for row in rows {
-        let (session_id, provider, model) = row?;
-        models
-            .entry(session_id)
-            .or_default()
-            .push(SessionModel::new(provider.as_deref(), &model));
+    let db_key = crate::support::fs::path_key(db_path);
+    let cached = cache.load_contribs(SourceApp::OpenCode, &db_key);
+    let cached_stamps: HashMap<String, i64> = cached
+        .iter()
+        .map(|(id, stamp, _)| (id.clone(), *stamp))
+        .collect();
+    let mut contribs: HashMap<String, AssistantContrib> = cached
+        .into_iter()
+        .filter_map(|(id, _, payload)| {
+            serde_json::from_str(&payload)
+                .ok()
+                .map(|contrib| (id, contrib))
+        })
+        .collect();
+
+    let mut changed_ids = Vec::new();
+    for (id, stamp) in &current {
+        if cached_stamps
+            .get(id)
+            .is_none_or(|cached_stamp| cached_stamp != stamp)
+        {
+            changed_ids.push(id.clone());
+        }
     }
-    Ok(models)
+    let mut removed_ids = Vec::new();
+    for id in cached_stamps.keys() {
+        if !current.contains_key(id) {
+            removed_ids.push(id.clone());
+        }
+    }
+
+    if !changed_ids.is_empty() || !removed_ids.is_empty() {
+        let fresh = extract_assistant_contribs(connection, &changed_ids)?;
+        let upserts = fresh
+            .iter()
+            .map(|(id, stamp, contrib)| {
+                serde_json::to_string(contrib)
+                    .map(|payload| (id.clone(), *stamp, payload))
+                    .context("Failed to serialize OpenCode assistant contribution")
+            })
+            .collect::<Result<Vec<_>>>()?;
+        for (id, _, contrib) in &fresh {
+            contribs.insert(id.clone(), contrib.clone());
+        }
+        cache.sync_contribs(SourceApp::OpenCode, &db_key, &upserts, &removed_ids);
+    }
+
+    Ok(contribs.into_values().collect())
 }
 
-// assistant 消息的 data.tokens 是每次调用的增量,按会话求和;reasoning 与
-// output 在 OpenCode 里分列存储,输出侧相加才与其他来源口径一致。SQLite 的
-// NULL 会传染加法,reasoning 缺失的行经 COALESCE 按 0 计;拆合与钳制由
-// normalized_usage 的归一口径统一处理。
-fn session_token_usages(connection: &Connection) -> Result<HashMap<String, SessionTokenUsage>> {
-    let mut statement = connection
-        .prepare(
-            "SELECT session_id,
-                    COALESCE(SUM(json_extract(data, '$.tokens.input')), 0),
-                    COALESCE(SUM(json_extract(data, '$.tokens.output')), 0),
-                    COALESCE(SUM(json_extract(data, '$.tokens.reasoning')), 0),
-                    COALESCE(SUM(json_extract(data, '$.tokens.cache.read')), 0),
-                    COALESCE(SUM(json_extract(data, '$.tokens.cache.write')), 0)
-             FROM session_message
-             WHERE type = 'assistant'
-             GROUP BY session_id",
-        )
-        .context("Failed to prepare OpenCode token usage query")?;
-
-    let rows = statement
-        .query_map([], |row| {
-            let session_id: String = row.get(0)?;
-            let column = |index: usize| -> rusqlite::Result<i64> {
-                Ok(row.get::<_, Option<i64>>(index)?.unwrap_or_default())
-            };
-            Ok((
-                session_id,
-                super::usage_stats::split_reasoning_usage(super::usage_stats::UsageColumns {
-                    input: column(1)?,
-                    output: column(2)?,
-                    reasoning: column(3)?,
-                    cache_read: column(4)?,
-                    cache_write: column(5)?,
-                }),
-            ))
-        })
-        .context("Failed to read OpenCode token usages")?;
-
-    rows.collect::<std::result::Result<HashMap<_, _>, _>>()
-        .context("Failed to read OpenCode token usages")
-}
-
-// 用量曲线的小时桶:assistant 消息的增量 usage 按消息时间归小时,归一口径与
-// session_token_usages 一致(normalized_usage 单点);消息时间优先
-// data.time.created,回退 time_created 列,与消息时间线一致。db 缺失、或
-// session_message 表还没建,都表示来源不可用,返回 None。
-pub(crate) fn usage_hours() -> Result<Option<SqlUsageHours>> {
-    let db_path = db_path()?;
-    if !db_path.is_file() {
-        return Ok(None);
-    }
-    let connection = match Connection::open(db_path) {
-        Ok(connection) => connection,
-        Err(_) => return Ok(None),
-    };
-    if !super::sqlite_table_exists(&connection, "session_message")? {
-        return Ok(None);
+// 变化行的 json_extract;token 原始列与模型字段一次取齐,message_time 的
+// COALESCE 口径与消息时间线一致(data.time.created 回退 time_created)。
+fn extract_assistant_contribs(
+    connection: &Connection,
+    ids: &[String],
+) -> Result<Vec<(String, i64, AssistantContrib)>> {
+    if ids.is_empty() {
+        return Ok(Vec::new());
     }
 
+    let placeholders = vec!["?"; ids.len()].join(",");
     let mut statement = connection
-        .prepare(
-            "SELECT session_id,
+        .prepare(&format!(
+            "SELECT id,
+                    session_id,
+                    time_updated,
                     COALESCE(json_extract(data, '$.time.created'), time_created),
+                    json_extract(data, '$.model.providerID'),
                     json_extract(data, '$.model.id'),
                     COALESCE(json_extract(data, '$.tokens.input'), 0),
                     COALESCE(json_extract(data, '$.tokens.output'), 0),
@@ -572,30 +581,136 @@ pub(crate) fn usage_hours() -> Result<Option<SqlUsageHours>> {
                     COALESCE(json_extract(data, '$.tokens.cache.read'), 0),
                     COALESCE(json_extract(data, '$.tokens.cache.write'), 0)
              FROM session_message
-             WHERE type = 'assistant'",
-        )
-        .context("Failed to prepare OpenCode usage hours query")?;
+             WHERE type = 'assistant' AND id IN ({placeholders})"
+        ))
+        .context("Failed to prepare OpenCode assistant extract")?;
 
     let rows = statement
-        .query_map([], |row| {
-            let timestamp: i64 = row.get(1)?;
-            let column = |index: usize| -> rusqlite::Result<i64> {
-                Ok(row.get::<_, Option<i64>>(index)?.unwrap_or_default())
-            };
+        .query_map(params_from_iter(ids.iter()), |row| {
             Ok((
                 row.get::<_, String>(0)?,
-                timestamp,
-                row.get::<_, Option<String>>(2)?,
-                super::usage_stats::split_reasoning_usage(super::usage_stats::UsageColumns {
-                    input: column(3)?,
-                    output: column(4)?,
-                    reasoning: column(5)?,
-                    cache_read: column(6)?,
-                    cache_write: column(7)?,
-                }),
+                row.get::<_, i64>(2)?,
+                AssistantContrib {
+                    session_id: row.get(1)?,
+                    message_time: row.get(3)?,
+                    provider: row.get(4)?,
+                    model: row.get(5)?,
+                    input: row.get(6)?,
+                    output: row.get(7)?,
+                    reasoning: row.get(8)?,
+                    cache_read: row.get(9)?,
+                    cache_write: row.get(10)?,
+                },
             ))
         })
-        .context("Failed to read OpenCode usage hours")?;
+        .context("Failed to read OpenCode assistant contributions")?;
+
+    rows.collect::<std::result::Result<Vec<_>, _>>()
+        .context("Failed to read OpenCode assistant contributions")
+}
+
+// assistant 消息的 data.tokens 是每次调用的增量,按会话求和后统一走归一
+// 口径(钳制在求和之后,与原 SQL SUM 的顺序一致);reasoning 与 output 分列
+// 存储,输出侧相加才与其他来源口径一致。
+fn usage_by_session(contribs: &[AssistantContrib]) -> HashMap<String, SessionTokenUsage> {
+    let mut sums: HashMap<String, super::usage_stats::UsageColumns> = HashMap::new();
+    for contrib in contribs {
+        let columns = sums.entry(contrib.session_id.clone()).or_default();
+        columns.input += contrib.input;
+        columns.output += contrib.output;
+        columns.reasoning += contrib.reasoning;
+        columns.cache_read += contrib.cache_read;
+        columns.cache_write += contrib.cache_write;
+    }
+
+    sums.into_iter()
+        .map(|(session_id, columns)| {
+            (
+                session_id,
+                super::usage_stats::split_reasoning_usage(columns),
+            )
+        })
+        .collect()
+}
+
+// 会话用过的模型:同模型可能换过 provider,一并计入。计数只用于排序
+// (主模型排最前),调用次数相同则按模型名稳定排序(原 SQL 口径,provider
+// 顺序在 SQL 里未定义,这里取 provider 升序保证确定性)。
+fn models_by_session(contribs: &[AssistantContrib]) -> HashMap<String, Vec<SessionModel>> {
+    let mut calls: HashMap<(String, Option<String>, String), usize> = HashMap::new();
+    for contrib in contribs {
+        if let Some(model) = &contrib.model {
+            *calls
+                .entry((
+                    contrib.session_id.clone(),
+                    contrib.provider.clone(),
+                    model.clone(),
+                ))
+                .or_default() += 1;
+        }
+    }
+
+    let mut models = HashMap::<String, Vec<SessionModel>>::new();
+    let mut per_session: HashMap<String, Vec<(Option<String>, String, usize)>> = HashMap::new();
+    for ((session_id, provider, model), count) in calls {
+        per_session
+            .entry(session_id)
+            .or_default()
+            .push((provider, model, count));
+    }
+    for (session_id, mut entries) in per_session {
+        entries.sort_by(|left, right| {
+            right
+                .2
+                .cmp(&left.2)
+                .then_with(|| left.1.cmp(&right.1))
+                .then_with(|| left.0.cmp(&right.0))
+        });
+        models.insert(
+            session_id,
+            entries
+                .into_iter()
+                .map(|(provider, model, _)| SessionModel::new(provider.as_deref(), &model))
+                .collect(),
+        );
+    }
+    models
+}
+
+// 用量曲线的小时桶:assistant 消息的增量 usage 按消息时间归小时,数据来自
+// 贡献表(与列表扫描共享同一份同步,活跃写入时不再全表 json_extract);
+// 归一口径与列表侧一致(split_reasoning_usage 单点),消息时间优先
+// data.time.created,回退 time_created 列,与消息时间线一致。db 缺失、或
+// session_message 表还没建,都表示来源不可用,返回 None。
+pub(crate) fn usage_hours() -> Result<Option<SqlUsageHours>> {
+    let db_path = db_path()?;
+    if !db_path.is_file() {
+        return Ok(None);
+    }
+    let connection = match Connection::open(&db_path) {
+        Ok(connection) => connection,
+        Err(_) => return Ok(None),
+    };
+    if !super::sqlite_table_exists(&connection, "session_message")? {
+        return Ok(None);
+    }
+
+    let cache = super::rows_cache::RowsDb::at_store_dir()?;
+    let contribs = sync_assistant_contribs(&connection, &cache, &db_path)?;
+    let rows = contribs.iter().map(|contrib| {
+        rusqlite::Result::Ok((
+            contrib.session_id.clone(),
+            contrib.message_time,
+            contrib.model.clone(),
+            super::usage_stats::split_reasoning_usage(super::usage_stats::UsageColumns {
+                input: contrib.input,
+                output: contrib.output,
+                reasoning: contrib.reasoning,
+                cache_read: contrib.cache_read,
+                cache_write: contrib.cache_write,
+            }),
+        ))
+    });
 
     let hours = super::usage_stats::hours_from_usage_rows(rows)
         .context("Failed to read OpenCode usage hours")?;

@@ -188,6 +188,7 @@ struct CachedSqlUsage {
 // 改口径(如将来加 token 桶)只改这一处。输入列的语义因来源而异:zcode 的
 // input_tokens 是全口径(未命中 + 缓存读),opencode 的 tokens.input 已
 // 不含缓存读,因此入口分两个函数显式声明。
+#[derive(Default)]
 pub(crate) struct UsageColumns {
     pub(crate) input: i64,
     pub(crate) output: i64,

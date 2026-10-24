@@ -77,6 +77,7 @@ impl RowsDb {
     pub(crate) fn clear_all(&self) {
         let result = self.with_connection(|connection| {
             connection.execute("DELETE FROM rows_cache", [])?;
+            connection.execute("DELETE FROM row_contrib", [])?;
             Ok(())
         });
         if let Err(error) = result {
@@ -84,7 +85,77 @@ impl RowsDb {
         }
     }
 
-    fn with_connection<T>(&self, operation: impl FnOnce(&Connection) -> Result<T>) -> Result<T> {
+    /// 行级贡献表:来源聚合类扫描按 (app, root, 行id) 存单行贡献,行级
+    /// 失效键 stamp 由来源声明(如 opencode 的消息 time_updated)。返回
+    /// (id, stamp, payload);读失败按空集处理,调用方退回全量重提取,
+    /// 权威数据始终是来源自身。
+    pub(crate) fn load_contribs(&self, app: SourceApp, root: &str) -> Vec<(String, i64, String)> {
+        self.with_connection(|connection| {
+            let mut statement = connection.prepare(
+                "SELECT id, stamp, payload FROM row_contrib WHERE app = ?1 AND root = ?2",
+            )?;
+            let rows = statement.query_map(rusqlite::params![app.as_str(), root], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            })?;
+            let collected =
+                rows.collect::<std::result::Result<Vec<(String, i64, String)>, rusqlite::Error>>()?;
+            Ok(collected)
+        })
+        .unwrap_or_else(|error| {
+            crate::logger::log_error(format!("row contrib load failed: {error}"));
+            Vec::new()
+        })
+    }
+
+    /// 贡献表事务写回:upsert 变化行、删除消失行;失败记日志放弃,下轮
+    /// 按 stamp diff 自然补偿。
+    pub(crate) fn sync_contribs(
+        &self,
+        app: SourceApp,
+        root: &str,
+        upserts: &[(String, i64, String)],
+        removed_ids: &[String],
+    ) {
+        let result = self.with_connection(|connection| {
+            let transaction = connection.transaction()?;
+            {
+                let mut statement = transaction.prepare(
+                    "INSERT INTO row_contrib (app, root, id, stamp, payload)
+                     VALUES (?1, ?2, ?3, ?4, ?5)
+                     ON CONFLICT(app, root, id) DO UPDATE SET stamp = excluded.stamp, payload = excluded.payload",
+                )?;
+                for (id, stamp, payload) in upserts {
+                    statement.execute(rusqlite::params![app.as_str(), root, id, stamp, payload])?;
+                }
+            }
+            if !removed_ids.is_empty() {
+                let placeholders = vec!["?"; removed_ids.len()].join(",");
+                transaction.execute(
+                    &format!("DELETE FROM row_contrib WHERE app = ?1 AND root = ?2 AND id IN ({placeholders})"),
+                    rusqlite::params_from_iter(
+                        [app.as_str().to_string(), root.to_string()]
+                            .into_iter()
+                            .chain(removed_ids.iter().cloned()),
+                    ),
+                )?;
+            }
+            transaction.commit()?;
+            Ok(())
+        });
+
+        if let Err(error) = result {
+            crate::logger::log_error(format!("row contrib sync failed: {error}"));
+        }
+    }
+
+    fn with_connection<T>(
+        &self,
+        operation: impl FnOnce(&mut Connection) -> Result<T>,
+    ) -> Result<T> {
         let mut guard = self
             .connection
             .lock()
@@ -94,7 +165,7 @@ impl RowsDb {
             *guard = Some(open_connection(&self.dir)?);
         }
 
-        operation(guard.as_ref().expect("connection was just ensured"))
+        operation(guard.as_mut().expect("connection was just ensured"))
     }
 }
 
@@ -154,6 +225,19 @@ fn open_connection(dir: &Path) -> Result<Connection> {
         )",
         [],
     )?;
+    // 行级贡献表:rows_cache 存整来源行集合(单键),row_contrib 存来源自己
+    // 声明的行级贡献(多键),同一库文件、同一失效信任模型。
+    connection.execute(
+        "CREATE TABLE IF NOT EXISTS row_contrib (
+            app TEXT NOT NULL,
+            root TEXT NOT NULL,
+            id TEXT NOT NULL,
+            stamp INTEGER NOT NULL,
+            payload TEXT NOT NULL,
+            PRIMARY KEY (app, root, id)
+        )",
+        [],
+    )?;
 
     Ok(connection)
 }
@@ -196,8 +280,7 @@ mod tests {
     fn store_then_load_round_trips_and_stamp_gates_hits() {
         let dir = std::env::temp_dir().join(format!("reins-rows-cache-{}", uuid::Uuid::new_v4()));
         let db = RowsDb::at(dir.clone());
-        let loaded: Option<Vec<(String, i64)>> =
-            db.load(SourceApp::Codex, "/scan/root", "stamp:1");
+        let loaded: Option<Vec<(String, i64)>> = db.load(SourceApp::Codex, "/scan/root", "stamp:1");
         assert!(loaded.is_none(), "empty cache misses");
 
         db.store(SourceApp::Codex, "/scan/root", "stamp:1", &rows());
@@ -207,16 +290,19 @@ mod tests {
         assert_eq!(hit, rows());
 
         // freshness 变化或换扫描根都视为 miss。
-        assert!(db
-            .load::<(String, i64)>(SourceApp::Codex, "/scan/root", "stamp:2")
-            .is_none());
-        assert!(db
-            .load::<(String, i64)>(SourceApp::Codex, "/other/root", "stamp:1")
-            .is_none());
+        assert!(
+            db.load::<(String, i64)>(SourceApp::Codex, "/scan/root", "stamp:2")
+                .is_none()
+        );
+        assert!(
+            db.load::<(String, i64)>(SourceApp::Codex, "/other/root", "stamp:1")
+                .is_none()
+        );
         // 来源不同也不共享行。
-        assert!(db
-            .load::<(String, i64)>(SourceApp::Dsh, "/scan/root", "stamp:1")
-            .is_none());
+        assert!(
+            db.load::<(String, i64)>(SourceApp::Dsh, "/scan/root", "stamp:1")
+                .is_none()
+        );
 
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -228,9 +314,10 @@ mod tests {
         db.store(SourceApp::Codex, "/scan/root", "stamp:1", &rows());
         db.clear_all();
 
-        assert!(db
-            .load::<(String, i64)>(SourceApp::Codex, "/scan/root", "stamp:1")
-            .is_none());
+        assert!(
+            db.load::<(String, i64)>(SourceApp::Codex, "/scan/root", "stamp:1")
+                .is_none()
+        );
 
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -241,9 +328,60 @@ mod tests {
         let db = RowsDb::at(dir.clone());
         // 存入的形状与请求的类型不符,读出按 miss 而不是报错。
         db.store(SourceApp::Codex, "/scan/root", "stamp:1", &rows());
-        assert!(db
-            .load::<String>(SourceApp::Codex, "/scan/root", "stamp:1")
-            .is_none());
+        assert!(
+            db.load::<String>(SourceApp::Codex, "/scan/root", "stamp:1")
+                .is_none()
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn contrib_round_trip_stamp_gates_and_removal() {
+        let dir = std::env::temp_dir().join(format!("reins-rows-cache-{}", uuid::Uuid::new_v4()));
+        let db = RowsDb::at(dir.clone());
+
+        // 空表按空集处理,不报错。
+        assert!(db.load_contribs(SourceApp::OpenCode, "/db").is_empty());
+
+        db.sync_contribs(
+            SourceApp::OpenCode,
+            "/db",
+            &[
+                ("m1".to_string(), 10, r#"{"usage":1}"#.to_string()),
+                ("m2".to_string(), 20, r#"{"usage":2}"#.to_string()),
+            ],
+            &[],
+        );
+        let loaded = db.load_contribs(SourceApp::OpenCode, "/db");
+        assert_eq!(loaded.len(), 2);
+
+        // stamp 变化的行 upsert 覆盖,消失的行删除,未变的行原样保留。
+        db.sync_contribs(
+            SourceApp::OpenCode,
+            "/db",
+            &[("m1".to_string(), 11, r#"{"usage":3}"#.to_string())],
+            &["m2".to_string()],
+        );
+        let loaded = db.load_contribs(SourceApp::OpenCode, "/db");
+        assert_eq!(
+            loaded,
+            vec![("m1".to_string(), 11, r#"{"usage":3}"#.to_string())]
+        );
+
+        // 来源或扫描根不同不共享贡献。
+        db.sync_contribs(
+            SourceApp::OpenCode,
+            "/db",
+            &[("m3".to_string(), 1, "{}".to_string())],
+            &[],
+        );
+        assert_eq!(db.load_contribs(SourceApp::Zcode, "/db").len(), 0);
+        assert_eq!(db.load_contribs(SourceApp::OpenCode, "/other").len(), 0);
+
+        // 显式清缓存连贡献表一起清。
+        db.clear_all();
+        assert!(db.load_contribs(SourceApp::OpenCode, "/db").is_empty());
 
         std::fs::remove_dir_all(&dir).ok();
     }

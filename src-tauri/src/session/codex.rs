@@ -101,7 +101,11 @@ impl FamilySpec for CodexSpec {
         root.join("sessions")
     }
 
-    fn list_rows(&self, scan_root: &Path) -> Result<Vec<CodexSessionRow>> {
+    fn list_rows(
+        &self,
+        scan_root: &Path,
+        _cache: &super::rows_cache::RowsDb,
+    ) -> Result<Vec<CodexSessionRow>> {
         let mut rows = Vec::new();
         for root in transcript_roots(scan_root) {
             rows.extend(scan_files(

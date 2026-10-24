@@ -129,7 +129,10 @@ pub(crate) trait FamilySpec: Clone + Send + Sync + 'static {
 
     /// 实例 root 下的行扫描根;目录索引的 source_key。
     fn scan_root(&self, root: &Path) -> PathBuf;
-    fn list_rows(&self, scan_root: &Path) -> Result<Vec<Self::Row>>;
+    /// 物理行扫描。cache 是引擎实例的持久缓存句柄:聚合型来源可以在
+    /// 行级增量里用它存单行贡献(见 rows_cache 的贡献表),目录型来源
+    /// 忽略即可。
+    fn list_rows(&self, scan_root: &Path, cache: &RowsDb) -> Result<Vec<Self::Row>>;
     /// 分组与 root 选取(孤儿语义等最危险的差异全部活在这里)。
     fn group_families(&self, rows: Vec<Self::Row>) -> Result<Vec<Family<Self::Row>>>;
     /// 目录失效。默认:扫描根目录 mtime 与其下 jsonl 文件 mtime 的最大值。
@@ -451,7 +454,7 @@ impl<R: FamilySpec> ReaderEngine<R> {
             return self.rebuild_index(freshness, rows);
         }
 
-        let rows = self.spec.list_rows(&self.scan_root)?;
+        let rows = self.spec.list_rows(&self.scan_root, &self.rows_cache)?;
         self.rows_cache
             .store(self.spec.app(), &root_key, &stamp, &rows);
         self.rebuild_index(freshness, rows)
@@ -999,7 +1002,11 @@ mod tests {
             root.join("scan")
         }
 
-        fn list_rows(&self, scan_root: &Path) -> Result<Vec<TestRow>> {
+        fn list_rows(
+            &self,
+            scan_root: &Path,
+            _cache: &crate::session::rows_cache::RowsDb,
+        ) -> Result<Vec<TestRow>> {
             self.scan_calls.fetch_add(1, Ordering::SeqCst);
 
             let files = crate::support::fs::enumerate_jsonl_files(scan_root)?;

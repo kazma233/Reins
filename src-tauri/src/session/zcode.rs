@@ -109,7 +109,11 @@ impl FamilySpec for ZcodeSpec {
         root.to_path_buf()
     }
 
-    fn list_rows(&self, scan_root: &Path) -> Result<Vec<ZcodeSessionRow>> {
+    fn list_rows(
+        &self,
+        scan_root: &Path,
+        _cache: &super::rows_cache::RowsDb,
+    ) -> Result<Vec<ZcodeSessionRow>> {
         list_session_rows(scan_root)
     }
 

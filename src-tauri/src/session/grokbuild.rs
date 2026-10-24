@@ -133,21 +133,31 @@ impl GrokIndex {
     }
 
     // 构建逻辑与迁入前逐条对齐：行来自 summary 解析，归属只认 meta，
-    // 父缺失的子会话保留占位入口。输入改为扫描阶段收集的路径，
-    // 解析成本只发生在指纹失配时。
+    // 父缺失的子会话保留占位入口。输入改为扫描阶段收集的路径(自家枚举,
+    // 非符号链接、已在根内),解析成本只发生在指纹失配时:每会话一次读取
+    // summary/usage,不再逐文件重复跑路径验证。
     fn build_family_index(
         &self,
         sessions: &[(PathBuf, Option<PathBuf>)],
         meta_paths: &[PathBuf],
     ) -> Result<FamilyIndex<Row>> {
         let mut rows: HashMap<String, Row> = HashMap::new();
+        // child 校验所需的 (attempt_id, session_kind):解析时顺手留存,
+        // 避免 child 循环整份重读 summary.json。
+        let mut facts: HashMap<String, (Option<String>, Option<String>)> = HashMap::new();
         for (path, history) in sessions {
-            let summary = summary(path)?;
+            let value = read_summary(path)?;
+            let usage = read_usage_file(path)?;
+            let summary = summary_from_parts(&value, path, usage.as_ref())?;
             let readable = match history {
                 // 尚未写入 history 的会话按 0 条消息读取，而不是当成坏会话。
                 Some(path) => File::open(path).is_ok(),
                 None => true,
             };
+            facts.insert(
+                summary.source_session_id.clone(),
+                (value.attempt_id.clone(), value.session_kind.clone()),
+            );
             let id = summary.source_session_id.clone();
             if rows
                 .insert(
@@ -190,9 +200,11 @@ impl GrokIndex {
                 continue;
             }
             let mut child = if let Some(row) = rows.get(&meta.child_session_id) {
-                let raw: Summary = serde_json::from_reader(File::open(row.member_path())?)?;
-                if raw.attempt_id.as_deref() != Some(meta.attempt_id.as_str())
-                    || raw.session_kind.as_deref() != Some("subagent")
+                let (attempt_id, session_kind) = facts
+                    .get(&meta.child_session_id)
+                    .expect("rows 与 facts 同源插入");
+                if attempt_id.as_deref() != Some(meta.attempt_id.as_str())
+                    || session_kind.as_deref() != Some("subagent")
                 {
                     bail!("Grok Build child summary does not match subagent meta");
                 }
@@ -593,8 +605,16 @@ fn validate_path(path: &Path) -> Result<PathBuf> {
 
 fn summary(path: &Path) -> Result<SessionSummary> {
     let path = validate_path(path)?;
+    let value: Summary = read_summary(&path)?;
+    let usage = read_usage_file(&path)?;
+    summary_from_parts(&value, &path, usage.as_ref())
+}
+
+// summary.json 的读取与内容校验:调用方负责路径本身可信(公共入口已
+// validate,扫描路径来自自家枚举)。
+fn read_summary(path: &Path) -> Result<Summary> {
     let value: Summary =
-        serde_json::from_reader(File::open(&path)?).context("Invalid Grok Build summary")?;
+        serde_json::from_reader(File::open(path)?).context("Invalid Grok Build summary")?;
     valid_id(&value.info.id)?;
     if value.chat_format_version != 1 {
         bail!(
@@ -610,16 +630,38 @@ fn summary(path: &Path) -> Result<SessionSummary> {
     {
         bail!("Grok Build summary id does not match session directory");
     }
+    Ok(value)
+}
+
+// usage.json 整份读取一次,供 usage 与模型两路共用。
+fn read_usage_file(summary_path: &Path) -> Result<Option<UsageFile>> {
+    let Some(usage_path) = sibling_at(summary_path, "usage.json")? else {
+        return Ok(None);
+    };
+    let file: UsageFile = serde_json::from_reader(File::open(&usage_path)?)
+        .with_context(|| format!("Invalid Grok Build usage file {}", usage_path.display()))?;
+    Ok(Some(file))
+}
+
+// 从已读取的 summary/usage 装配列表摘要;扫描路径与按 id 的单会话读取共用。
+fn summary_from_parts(
+    value: &Summary,
+    path: &Path,
+    usage: Option<&UsageFile>,
+) -> Result<SessionSummary> {
     let title = value
         .generated_title
+        .clone()
         .filter(|s| !s.trim().is_empty())
-        .or_else(|| (!value.session_summary.trim().is_empty()).then_some(value.session_summary))
+        .or_else(|| {
+            (!value.session_summary.trim().is_empty()).then(|| value.session_summary.clone())
+        })
         .unwrap_or_else(|| value.info.id.clone());
     Ok(SessionSummary {
         source_app: SourceApp::GrokBuild,
-        source_session_id: value.info.id,
+        source_session_id: value.info.id.clone(),
         title,
-        cwd: Some(value.info.cwd),
+        cwd: Some(value.info.cwd.clone()),
         git_branch: None,
         transcript_path: path.display().to_string(),
         created_at: Some(
@@ -630,8 +672,12 @@ fn summary(path: &Path) -> Result<SessionSummary> {
             crate::support::time::parse_timestamp(&value.updated_at)
                 .context("Invalid Grok Build updated_at")?,
         ),
-        token_usage: session_usage(&path)?,
-        models: session_models(&path, value.current_model_id.as_deref())?,
+        // inputTokens 含缓存命中部分,扣除口径见 grok_slice_usage。
+        token_usage: usage.and_then(|file| file.session.as_ref().map(grok_slice_usage)),
+        // 会话用过的模型:usage.json 的 turns[].modelUsage 按模型切片,能看出
+        // 换过模型;文件缺失(或旧版本没有 turns)时退回 current_model_id,
+        // 只是"当前选中的模型"。Grok Build 没有 provider 字段。
+        models: session_models(usage, value.current_model_id.as_deref()),
         // Grok Build 既无归档也无压缩:上游 Summary 没有 archived 字段,
         // 转录一律明文(session/persistence.rs)。
         archived: false,
@@ -639,26 +685,13 @@ fn summary(path: &Path) -> Result<SessionSummary> {
     })
 }
 
-fn session_usage(path: &Path) -> Result<Option<SessionTokenUsage>> {
-    let Some(usage_path) = sibling(path, "usage.json")? else {
-        return Ok(None);
-    };
-    let file: UsageFile = serde_json::from_reader(File::open(&usage_path)?)
-        .with_context(|| format!("Invalid Grok Build usage file {}", usage_path.display()))?;
-
-    // inputTokens 含缓存命中部分,扣除口径见 grok_slice_usage。
-    Ok(file.session.as_ref().map(grok_slice_usage))
-}
-
 // 会话用过的模型:usage.json 的 turns[].modelUsage 按模型切片,能看出换过模型;
 // 该文件缺失(或旧版本没有 turns)时退回 summary.json 的 current_model_id,
 // 只是"当前选中的模型",不代表整段会话。Grok Build 没有 provider 字段。
-fn session_models(path: &Path, current_model_id: Option<&str>) -> Result<Vec<SessionModel>> {
+fn session_models(usage: Option<&UsageFile>, current_model_id: Option<&str>) -> Vec<SessionModel> {
     let mut tally = ModelTally::default();
 
-    if let Some(usage_path) = sibling(path, "usage.json")? {
-        let file: UsageFile = serde_json::from_reader(File::open(&usage_path)?)
-            .with_context(|| format!("Invalid Grok Build usage file {}", usage_path.display()))?;
+    if let Some(file) = usage {
         for turn in &file.turns {
             for model in turn.model_usage.keys() {
                 tally.record(None, model);
@@ -670,14 +703,15 @@ fn session_models(path: &Path, current_model_id: Option<&str>) -> Result<Vec<Ses
         tally.record(None, model);
     }
 
-    Ok(tally.into_models())
+    tally.into_models()
 }
 
 // 用量曲线的小时桶:turns[] 每轮自带增量用量与 endedAt,按轮归到本地时区的
 // 小时;旧版本 usage.json 没有 turns 时返回空桶。
 pub(crate) fn usage_hours(summary_path: &Path) -> Result<UsageHourBuckets> {
     let mut buckets = UsageHourBuckets::new();
-    let Some(usage_path) = sibling(summary_path, "usage.json")? else {
+    // 输入来自 session_summary_paths 的自家枚举,兄弟检查走轻量版。
+    let Some(usage_path) = sibling_at(summary_path, "usage.json")? else {
         return Ok(buckets);
     };
 
@@ -699,7 +733,12 @@ pub(crate) fn usage_hours(summary_path: &Path) -> Result<UsageHourBuckets> {
             })
         };
         if turn.model_usage.is_empty() {
-            super::merge_usage_event(&mut buckets, timestamp.and_then(super::hour_key), None, turn_usage());
+            super::merge_usage_event(
+                &mut buckets,
+                timestamp.and_then(super::hour_key),
+                None,
+                turn_usage(),
+            );
         } else {
             for (model, slice) in &turn.model_usage {
                 super::merge_usage_event(
@@ -736,7 +775,14 @@ pub(crate) fn session_summary_paths() -> Result<Vec<PathBuf>> {
 
 fn sibling(path: &Path, name: &str) -> Result<Option<PathBuf>> {
     let path = validate_path(path)?;
-    let parent = path.parent().context("Missing session directory")?;
+    sibling_at(&path, name)
+}
+
+// 兄弟文件的符号链接防线。调用方先保证 summary 路径本身已验证(公共入口
+// sibling)或来自自家枚举(walkdir 不跟符号链接,扫描路径天然在根内),
+// 这里只拦兄弟文件自身指向外部或非常规形态;NotFound 视为还没有该文件。
+fn sibling_at(summary_path: &Path, name: &str) -> Result<Option<PathBuf>> {
+    let parent = summary_path.parent().context("Missing session directory")?;
     let candidate = parent.join(name);
     match fs::symlink_metadata(&candidate) {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
