@@ -339,23 +339,23 @@ fn snapshot_default_config_template_pins_pi_dir() {
     let env = Environment::from_env();
 
     let template = default_config_template(&env);
-    // 模板写法先按解析口径求出真实落点，再对 HOME 下的路径折回 ~ 缩写。
+    // 模板写法先按解析口径求出真实落点，再对 HOME 下的路径折回 ~ 缩写；
+    // 模板分隔符统一用 `/`（见 template_global_path），期望同口径。
     let resolved_pi = env.resolve(Redirect::PiAgentDir).expect("pi agent dir");
-    let skill_line = format!(
-        "    skill_dir: ~/{}",
-        resolved_pi
-            .join("skills")
-            .strip_prefix(env.home.as_deref().unwrap())
+    let template_relative = |path: std::path::PathBuf| {
+        path.strip_prefix(env.home.as_deref().unwrap())
             .unwrap()
             .display()
+            .to_string()
+            .replace('\\', "/")
+    };
+    let skill_line = format!(
+        "    skill_dir: ~/{}",
+        template_relative(resolved_pi.join("skills"))
     );
     let mcp_line = format!(
         "      config_path: ~/{}",
-        resolved_pi
-            .join("mcp.json")
-            .strip_prefix(env.home.as_deref().unwrap())
-            .unwrap()
-            .display()
+        template_relative(resolved_pi.join("mcp.json"))
     );
     assert!(template.contains(&skill_line), "模板应固化 pi skills 路径");
     assert!(template.contains(&mcp_line), "模板应固化 pi mcp 路径");

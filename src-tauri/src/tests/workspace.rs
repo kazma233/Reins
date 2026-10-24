@@ -244,17 +244,19 @@ fn sync_target_options_report_alias_skill_dir_without_named_owner() -> Result<()
     assert!(by_id("plain").linked_target_id.is_none());
 
     // 外部目录：叫不出名字，但归属字段有值（界面据此禁用并说明内容在哪）。
+    // canonicalize 在 Windows 产出 \\?\ 前缀，展示值经 display_path 剥离，
+    // 期望同样要走 display_path。
     let alias = by_id("alias");
     assert!(alias.linked_target_id.is_none());
     assert_eq!(
         alias.skill_dir_link_target.as_deref(),
         Some(
-            external_skill_dir
-                .canonicalize()
-                .unwrap_or(external_skill_dir.clone())
-                .display()
-                .to_string()
-                .as_str()
+            display_path(
+                &external_skill_dir
+                    .canonicalize()
+                    .unwrap_or(external_skill_dir.clone())
+            )
+            .as_str()
         )
     );
 
@@ -890,12 +892,13 @@ fn target_presets_cover_builtin_agents_with_env_resolved_paths() -> Result<()> {
     assert_eq!(codex.label, "Codex");
     assert_eq!(
         codex.skill_dir,
-        home.join(".agents/skills").display().to_string()
+        home.join(".agents").join("skills").display().to_string()
     );
     assert_eq!(
         codex.config_path.as_deref(),
         Some(
-            home.join(".codex/config.toml")
+            home.join(".codex")
+                .join("config.toml")
                 .display()
                 .to_string()
                 .as_str()
@@ -907,12 +910,13 @@ fn target_presets_cover_builtin_agents_with_env_resolved_paths() -> Result<()> {
     assert_eq!(claude.label, "Claude Code");
     assert_eq!(
         claude.skill_dir,
-        home.join(".claude/skills").display().to_string()
+        home.join(".claude").join("skills").display().to_string()
     );
     assert_eq!(
         claude.config_path.as_deref(),
         Some(
-            home.join(".claude/.claude.json")
+            home.join(".claude")
+                .join(".claude.json")
                 .display()
                 .to_string()
                 .as_str()
@@ -924,12 +928,18 @@ fn target_presets_cover_builtin_agents_with_env_resolved_paths() -> Result<()> {
     assert_eq!(opencode.label, "OpenCode");
     assert_eq!(
         opencode.skill_dir,
-        home.join(".config/opencode/skills").display().to_string()
+        home.join(".config")
+            .join("opencode")
+            .join("skills")
+            .display()
+            .to_string()
     );
     assert_eq!(
         opencode.config_path.as_deref(),
         Some(
-            home.join(".config/opencode/opencode.json")
+            home.join(".config")
+                .join("opencode")
+                .join("opencode.json")
                 .display()
                 .to_string()
                 .as_str()
@@ -941,12 +951,14 @@ fn target_presets_cover_builtin_agents_with_env_resolved_paths() -> Result<()> {
     assert_eq!(zcode.label, "ZCode");
     assert_eq!(
         zcode.skill_dir,
-        home.join(".zcode/skills").display().to_string()
+        home.join(".zcode").join("skills").display().to_string()
     );
     assert_eq!(
         zcode.config_path.as_deref(),
         Some(
-            home.join(".zcode/cli/config.json")
+            home.join(".zcode")
+                .join("cli")
+                .join("config.json")
                 .display()
                 .to_string()
                 .as_str()
@@ -999,12 +1011,13 @@ fn target_presets_cover_builtin_agents_with_env_resolved_paths() -> Result<()> {
     assert_eq!(dsh.label, "DeepSeek Harness");
     assert_eq!(
         dsh.skill_dir,
-        home.join(".dsh/skills").display().to_string()
+        home.join(".dsh").join("skills").display().to_string()
     );
     assert_eq!(
         dsh.config_path.as_deref(),
         Some(
-            home.join(".dsh/cordis.patch.yml")
+            home.join(".dsh")
+                .join("cordis.patch.yml")
                 .display()
                 .to_string()
                 .as_str()

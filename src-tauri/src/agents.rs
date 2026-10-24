@@ -41,8 +41,13 @@ impl GlobalRoot {
     // （root 基准），而 CLI 状态文件 .claude.json 恒在 HOME 下。
     pub(crate) fn resolve_path(self, env: &Environment, path: &str) -> Option<PathBuf> {
         match path.strip_prefix("~/") {
-            Some(relative) => env.home.as_ref().map(|home| home.join(relative)),
-            None => self.resolve(env).map(|root| root.join(path)),
+            Some(relative) => env
+                .home
+                .as_ref()
+                .map(|home| crate::support::fs::join_manifest_relative(home, relative)),
+            None => self
+                .resolve(env)
+                .map(|root| crate::support::fs::join_manifest_relative(&root, path)),
         }
     }
 

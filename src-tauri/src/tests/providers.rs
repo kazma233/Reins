@@ -287,8 +287,10 @@ fn codex_apply_writes_catalog_before_config() -> Result<()> {
                 .join("\n")
         })
         .expect("config.toml 应在预览里");
+    // TOML 序列化的字符串引号形态不定（路径含反斜杠时用单引号字面量），
+    // 断言认键与指针值本身，不锁引号。
     assert!(
-        config_content.contains(&format!("model_catalog_json = \"{}\"", paths[0])),
+        config_content.contains("model_catalog_json") && config_content.contains(paths[0]),
         "config.toml 的 model_catalog_json 应指向目录文件 {}：{config_content}",
         paths[0]
     );

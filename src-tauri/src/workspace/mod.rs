@@ -197,7 +197,9 @@ fn template_targets(env: &Environment) -> Vec<TemplateTarget> {
 // 模板里的全局路径写法：先按解析口径求出真实落点，再折回 ~ 缩写。
 // 解析只有 GlobalRoot::resolve_path 一处（与 target defaults 同一个函数），
 // 所以「模板写出的路径」与「解析后的路径」必然一致；root 被 env 重定向时
-// 求出的绝对路径不是 HOME 子路径，显示为绝对路径。
+// 求出的绝对路径不是 HOME 子路径，显示为绝对路径。模板是写给用户与 reins
+// 解析器共用的文本，`~` 缩写本身就是 `/` 风格，分隔符统一用 `/`，Windows
+// 上不混入反斜杠（解析端两种分隔符都接受）。
 fn template_global_path(env: &Environment, root: crate::agents::GlobalRoot, rel: &str) -> String {
     let Some(resolved) = root.resolve_path(env, rel) else {
         return format!("{}/{}", root.home_prefix(), rel);
@@ -210,8 +212,8 @@ fn template_global_path(env: &Environment, root: crate::agents::GlobalRoot, rel:
         .and_then(|home| resolved.strip_prefix(home).ok())
     {
         Some(relative) if relative.as_os_str().is_empty() => "~".to_string(),
-        Some(relative) => format!("~/{}", relative.display()),
-        None => resolved.display().to_string(),
+        Some(relative) => format!("~/{}", relative.display().to_string().replace('\\', "/")),
+        None => resolved.display().to_string().replace('\\', "/"),
     }
 }
 

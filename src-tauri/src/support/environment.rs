@@ -121,9 +121,12 @@ pub(crate) fn manifest_path(
     path: &str,
 ) -> Option<PathBuf> {
     if let Some(home_relative) = path.strip_prefix("~/") {
-        return env.home.as_ref().map(|home| home.join(home_relative));
+        return env
+            .home
+            .as_ref()
+            .map(|home| crate::support::fs::join_manifest_relative(home, home_relative));
     }
-    root.map(|base| base.join(path))
+    root.map(|base| crate::support::fs::join_manifest_relative(&base, path))
 }
 
 // 某工具在全局清单里声明的 MCP 配置路径（无该入口时 None）。

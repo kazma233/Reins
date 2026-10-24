@@ -150,6 +150,16 @@ pub(crate) fn display_path(path: &Path) -> String {
     }
 }
 
+// 清单里的相对路径以 `/` 书写;Windows 下把整段交给 join 会原样保留 `/`,
+// 产出「home\.codex/config.toml」这类混合分隔符。逐段 join 保证解析结果
+// 是平台规范形态(fs 操作与展示共用一份口径)。
+pub(crate) fn join_manifest_relative(base: &Path, relative: &str) -> PathBuf {
+    relative
+        .split('/')
+        .filter(|part| !part.is_empty())
+        .fold(base.to_path_buf(), |path, part| path.join(part))
+}
+
 pub(crate) fn enumerate_jsonl_files(root: &Path) -> Result<Vec<PathBuf>> {
     if !root.exists() {
         return Ok(Vec::new());

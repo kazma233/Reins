@@ -96,12 +96,13 @@ fn dsh_defaults_preset_and_prefix_relaxation() -> Result<()> {
         .ok_or_else(|| anyhow!("缺少 dsh 预设"))?;
     assert_eq!(
         preset.skill_dir,
-        home.join(".dsh/skills").display().to_string()
+        home.join(".dsh").join("skills").display().to_string()
     );
     assert_eq!(
         preset.config_path.as_deref(),
         Some(
-            home.join(".dsh/cordis.patch.yml")
+            home.join(".dsh")
+                .join("cordis.patch.yml")
                 .display()
                 .to_string()
                 .as_str()
