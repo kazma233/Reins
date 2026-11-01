@@ -6,10 +6,6 @@
 - 通过全局配置文件 `config.yaml`，把 Skills 和 MCP 配置分发到多个 agent target
 - 管理聚合提供商（OpenRouter、自建网关等）的模型配置，一键应用到 Codex、Claude Code、OpenCode、Pi、Grok Build、ZCode、DSH
 
-## 安装
-
-到 [Releases](https://github.com/kazma233/Reins/releases) 下载对应平台的安装包；暂无对应平台的包时，按[开发与构建](#开发与构建)准备环境后执行 `pnpm tauri build` 自行构建。
-
 ## 数据目录
 
 `config.yaml`、`providers.yaml` 与 git cache 都存放在 Reins 数据目录下，按各系统标准配置目录 + `reins` 解析：macOS 为 `~/Library/Application Support/reins`，Linux 为 `~/.config/reins`（遵循 `XDG_CONFIG_HOME`），Windows 为 `%APPDATA%\reins`。下文用 `<reins 目录>` 指代该目录。
@@ -83,6 +79,7 @@ pnpm check                  # 类型与编译检查（vue-tsc --noEmit + cargo c
 pnpm test                   # 前端单元测试（vitest）
 pnpm build                  # 前端类型检查 + 构建
 pnpm codegen                # 重新导出 ts-rs 生成的 TS 绑定（改 Rust 侧契约后运行）
+pnpm tauri build            # 打包当前平台的安装包
 cargo test --manifest-path src-tauri/Cargo.toml   # Rust 测试
 ```
 
