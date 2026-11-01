@@ -1,0 +1,1223 @@
+use std::borrow::Cow;
+use std::collections::{HashMap, HashSet};
+use std::fs::{self, File};
+use std::io::{BufRead, BufReader};
+use std::path::{Path, PathBuf};
+use std::process::Command;
+use std::sync::{Arc, Mutex};
+
+use anyhow::{Context, Result, anyhow, bail};
+use rusqlite::{Connection, params};
+use serde::Deserialize;
+use serde_json::{Value, json};
+
+use super::{
+    ContentBlock, DeletePlanAction, ModelTally, SessionEvent, SessionFileEntry,
+    SessionMessage, SessionModel, SessionOverview, SessionReader,
+    SessionSummary, SessionTokenUsage, SourceApp, UsageHourBuckets,
+    delete::{DeletePlanInput, run_official_cli},
+};
+
+use super::family_index::{Family, FamilyIndex, FamilyRow};
+use super::family_timeline::{FamilyAgentLabel, family_agents};
+
+pub(crate) struct GrokBuildBackend {
+    // 按根缓存索引实例：换根（测试切 HOME）即整实例重建，与 pi 的 reader
+    // slot 同形。
+    slot: Mutex<Option<(PathBuf, Arc<GrokIndex>)>>,
+}
+
+pub(crate) static BACKEND: GrokBuildBackend = GrokBuildBackend {
+    slot: Mutex::new(None),
+};
+
+impl GrokBuildBackend {
+    fn index(&self) -> Result<Arc<GrokIndex>> {
+        let root = root()?;
+        // 根不存在时保留原始拼写，实例内的扫描对缺失根返回空索引。
+        let root = if root.exists() {
+            crate::support::fs::canonicalize(&root)?
+        } else {
+            root
+        };
+        let mut slot = self
+            .slot
+            .lock()
+            .map_err(|_| anyhow!("Grok Build index slot lock was poisoned"))?;
+        if let Some((cached_root, index)) = slot.as_ref()
+            && *cached_root == root
+        {
+            return Ok(index.clone());
+        }
+        let index = Arc::new(GrokIndex::new(root));
+        *slot = Some((index.root.clone(), index.clone()));
+        Ok(index)
+    }
+
+    // 索引实例的失效入口：reins 删除自己的数据后在动作发生地清掉；
+    // 通用清缓存流程（clear_all_caches）经 SessionReader::clear_cache 到这。
+    pub(crate) fn clear_cache(&self) -> Result<()> {
+        *self
+            .slot
+            .lock()
+            .map_err(|_| anyhow!("Grok Build index slot lock was poisoned"))? = None;
+        Ok(())
+    }
+}
+
+// 一个根下的族索引与它的指纹门控缓存。家族结构（summary.json 集合、
+// subagent 归属）与可读性（chat_history.jsonl 在不在）都由文件集合决定，
+// 指纹覆盖三类文件的（路径, mtime, 大小）：外部进程（官方 CLI、grok 自己）
+// 写入后指纹失配即重建；reins 自己删除经 clear_cache 显式清。
+struct GrokIndex {
+    root: PathBuf,
+    cached: Mutex<Option<CachedFamilies>>,
+}
+
+struct CachedFamilies {
+    fingerprint: String,
+    index: FamilyIndex<Row>,
+}
+
+impl GrokIndex {
+    fn new(root: PathBuf) -> Self {
+        Self {
+            root,
+            cached: Mutex::new(None),
+        }
+    }
+
+    fn family_index(&self) -> Result<FamilyIndex<Row>> {
+        if !self.root.exists() {
+            return Ok(FamilyIndex::build(Vec::new()));
+        }
+
+        let mut fingerprint_files = Vec::new();
+        let mut sessions = Vec::new();
+        for entry in walkdir::WalkDir::new(&self.root).min_depth(3).max_depth(3) {
+            let entry = entry?;
+            if !entry.file_type().is_file() || entry.file_name() != "summary.json" {
+                continue;
+            }
+            let history = sibling(entry.path(), "chat_history.jsonl")?;
+            fingerprint_files.push(entry.path().to_path_buf());
+            if let Some(history) = history.as_ref() {
+                fingerprint_files.push(history.clone());
+            }
+            sessions.push((entry.path().to_path_buf(), history));
+        }
+        let meta_paths = collect_subagent_meta_paths(&self.root)?;
+        fingerprint_files.extend(meta_paths.iter().cloned());
+        let fingerprint = super::sessions_fingerprint(&fingerprint_files)?;
+
+        {
+            let cached = self
+                .cached
+                .lock()
+                .map_err(|_| anyhow!("Grok Build index cache lock was poisoned"))?;
+            if let Some(cached) = cached.as_ref().filter(|c| c.fingerprint == fingerprint) {
+                return Ok(cached.index.clone());
+            }
+        }
+
+        let index = self.build_family_index(&sessions, &meta_paths)?;
+        *self
+            .cached
+            .lock()
+            .map_err(|_| anyhow!("Grok Build index cache lock was poisoned"))? =
+            Some(CachedFamilies {
+                fingerprint,
+                index: index.clone(),
+            });
+        Ok(index)
+    }
+
+    // 构建逻辑与迁入前逐条对齐：行来自 summary 解析，归属只认 meta，
+    // 父缺失的子会话保留占位入口。输入改为扫描阶段收集的路径(自家枚举,
+    // 非符号链接、已在根内),解析成本只发生在指纹失配时:每会话一次读取
+    // summary/usage,不再逐文件重复跑路径验证。
+    fn build_family_index(
+        &self,
+        sessions: &[(PathBuf, Option<PathBuf>)],
+        meta_paths: &[PathBuf],
+    ) -> Result<FamilyIndex<Row>> {
+        let mut rows: HashMap<String, Row> = HashMap::new();
+        // child 校验所需的 (attempt_id, session_kind):解析时顺手留存,
+        // 避免 child 循环整份重读 summary.json。
+        let mut facts: HashMap<String, (Option<String>, Option<String>)> = HashMap::new();
+        for (path, history) in sessions {
+            let value = read_summary(path)?;
+            let usage = read_usage_file(path)?;
+            let summary = summary_from_parts(&value, path, usage.as_ref())?;
+            let readable = match history {
+                // 尚未写入 history 的会话按 0 条消息读取，而不是当成坏会话。
+                Some(path) => File::open(path).is_ok(),
+                None => true,
+            };
+            facts.insert(
+                summary.source_session_id.clone(),
+                (value.attempt_id.clone(), value.session_kind.clone()),
+            );
+            let id = summary.source_session_id.clone();
+            if rows
+                .insert(
+                    id,
+                    Row {
+                        summary,
+                        meta: None,
+                        readable,
+                    },
+                )
+                .is_some()
+            {
+                bail!("Conflicting Grok Build session ids");
+            }
+        }
+
+        let metas = parse_subagent_metas(meta_paths)?;
+        let mut owners: HashMap<String, String> = HashMap::new();
+        let mut subagent_ids = HashSet::new();
+        for meta in &metas {
+            if !subagent_ids.insert(meta.subagent_id.clone())
+                || meta.parent_session_id == meta.child_session_id
+                || owners
+                    .insert(
+                        meta.child_session_id.clone(),
+                        meta.parent_session_id.clone(),
+                    )
+                    .is_some()
+            {
+                bail!("Conflicting Grok Build subagent ownership");
+            }
+        }
+
+        let claimed: HashSet<String> = owners.keys().cloned().collect();
+        let mut children: HashMap<String, Vec<Row>> = HashMap::new();
+        for meta in &metas {
+            if !rows.contains_key(&meta.parent_session_id)
+                || claimed.contains(&meta.parent_session_id)
+            {
+                continue;
+            }
+            let mut child = if let Some(row) = rows.get(&meta.child_session_id) {
+                let (attempt_id, session_kind) = facts
+                    .get(&meta.child_session_id)
+                    .expect("rows 与 facts 同源插入");
+                if attempt_id.as_deref() != Some(meta.attempt_id.as_str())
+                    || session_kind.as_deref() != Some("subagent")
+                {
+                    bail!("Grok Build child summary does not match subagent meta");
+                }
+                row.clone()
+            } else {
+                let created_at =
+                    parse_optional_timestamp(meta.started_at.as_deref(), "subagent started_at")?;
+                let updated_at = parse_optional_timestamp(
+                    meta.completed_at.as_deref(),
+                    "subagent completed_at",
+                )?
+                .or(created_at);
+                Row {
+                    summary: SessionSummary {
+                        source_app: SourceApp::GrokBuild,
+                        source_session_id: meta.child_session_id.clone(),
+                        title: meta.title(),
+                        cwd: None,
+                        git_branch: None,
+                        transcript_path: meta.child_summary_path.display().to_string(),
+                        created_at,
+                        updated_at,
+                        // 子会话文件缺失,无法读 usage.json。
+                        token_usage: None,
+                        models: Vec::new(),
+                        archived: false,
+                        compressed: false,
+                    },
+                    meta: None,
+                    readable: false,
+                }
+            };
+            child.meta = Some(meta.clone());
+            children
+                .entry(meta.parent_session_id.clone())
+                .or_default()
+                .push(child);
+        }
+
+        let mut families = Vec::new();
+        for (id, row) in &rows {
+            if owners
+                .get(id)
+                .is_some_and(|parent| rows.contains_key(parent) && !claimed.contains(parent))
+            {
+                continue;
+            }
+            let mut members = vec![row.clone()];
+            members.extend(children.remove(id).unwrap_or_default());
+            families.push(Family {
+                root: row.clone(),
+                members,
+            });
+        }
+        Ok(FamilyIndex::build(families))
+    }
+}
+
+pub(crate) fn root() -> Result<PathBuf> {
+    super::spec_root(SourceApp::GrokBuild).map(|home| home.join("sessions"))
+}
+
+#[derive(Deserialize)]
+struct Info {
+    id: String,
+    cwd: String,
+}
+#[derive(Deserialize)]
+struct Summary {
+    info: Info,
+    chat_format_version: u64,
+    session_summary: String,
+    generated_title: Option<String>,
+    created_at: String,
+    updated_at: String,
+    attempt_id: Option<String>,
+    session_kind: Option<String>,
+    // 会话当前选中的模型;旧版本会话可能没有该字段。
+    current_model_id: Option<String>,
+}
+
+// Grok CLI 落盘的会话目录 usage.json:session 是全轮 turn_completed 的累计
+// 汇总,turns/modelUsage 只是切片。旧版本会话没有该文件,也没有 turns 数组。
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct UsageFile {
+    session: Option<UsageTotals>,
+    #[serde(default)]
+    turns: Vec<UsageTurn>,
+}
+
+#[derive(Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct UsageTotals {
+    #[serde(default)]
+    input_tokens: u64,
+    #[serde(default)]
+    output_tokens: u64,
+    #[serde(default)]
+    cached_read_tokens: u64,
+    #[serde(default)]
+    cache_creation_tokens: u64,
+}
+
+// 每轮的增量切片:sum(turns) == session 汇总,endedAt 是该轮完成时间。
+// modelUsage 是该轮按模型的切片(map 键为模型名),空 map 的旧版本会话没有
+// 模型信息。
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct UsageTurn {
+    #[serde(default)]
+    ended_at: Option<String>,
+    #[serde(default)]
+    input_tokens: u64,
+    #[serde(default)]
+    output_tokens: u64,
+    #[serde(default)]
+    cached_read_tokens: u64,
+    #[serde(default)]
+    cache_creation_tokens: u64,
+    #[serde(default)]
+    model_usage: std::collections::BTreeMap<String, UsageTotals>,
+}
+
+// inputTokens 含缓存命中部分(实测 input+output==totalTokens),扣除后与
+// 其他来源的"新输入"口径一致;outputTokens 已含 reasoning。
+fn grok_slice_usage(totals: &UsageTotals) -> SessionTokenUsage {
+    SessionTokenUsage {
+        input_tokens: totals
+            .input_tokens
+            .saturating_sub(totals.cached_read_tokens),
+        output_tokens: totals.output_tokens,
+        cache_read_tokens: totals.cached_read_tokens,
+        cache_write_tokens: totals.cache_creation_tokens,
+    }
+}
+
+#[derive(Clone, Deserialize)]
+struct SubagentMeta {
+    subagent_id: String,
+    attempt_id: String,
+    parent_session_id: String,
+    child_session_id: String,
+    subagent_type: Option<String>,
+    description: Option<String>,
+    status: Option<String>,
+    started_at: Option<String>,
+    completed_at: Option<String>,
+    // 声明关系时子会话应当存在的同级目录路径，仅用于缺失子会话的占位入口。
+    #[serde(skip)]
+    child_summary_path: PathBuf,
+}
+
+impl SubagentMeta {
+    fn title(&self) -> String {
+        self.description
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string)
+            .or_else(|| self.subagent_type.clone())
+            .unwrap_or_else(|| self.child_session_id.clone())
+    }
+}
+
+fn parse_optional_timestamp(value: Option<&str>, label: &str) -> Result<Option<i64>> {
+    value
+        .map(|value| {
+            crate::support::time::parse_timestamp(value)
+                .with_context(|| format!("Invalid Grok Build {label}"))
+        })
+        .transpose()
+}
+
+#[derive(Clone)]
+struct Row {
+    summary: SessionSummary,
+    meta: Option<SubagentMeta>,
+    readable: bool,
+}
+
+impl FamilyRow for Row {
+    fn member_path(&self) -> Cow<'_, Path> {
+        Cow::Borrowed(Path::new(&self.summary.transcript_path))
+    }
+    fn family_root_id(&self) -> &str {
+        &self.summary.source_session_id
+    }
+    fn member_id(&self) -> &str {
+        &self.summary.source_session_id
+    }
+    fn member_created_at(&self) -> Option<i64> {
+        self.summary.created_at
+    }
+    fn member_updated_at(&self) -> Option<i64> {
+        self.summary.updated_at
+    }
+    fn member_tie_breaker(&self) -> Cow<'_, str> {
+        Cow::Borrowed(self.member_id())
+    }
+}
+
+fn valid_id(id: &str) -> Result<()> {
+    if id.is_empty()
+        || id == "."
+        || id == ".."
+        || !id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+    {
+        bail!("Invalid Grok Build id");
+    }
+    Ok(())
+}
+
+fn regular_path(path: &Path) -> Result<()> {
+    let configured_root = root()?;
+    let root = crate::support::fs::canonicalize(&configured_root)?;
+    let relative = path
+        .strip_prefix(&root)
+        .or_else(|_| path.strip_prefix(&configured_root))
+        .context("Grok Build path outside sessions root")?;
+    let mut current = root;
+    for component in relative.components() {
+        if !matches!(component, std::path::Component::Normal(_)) {
+            bail!("Invalid Grok Build path");
+        }
+        current.push(component);
+        if fs::symlink_metadata(&current)?.file_type().is_symlink() {
+            bail!("Grok Build symlink is not allowed");
+        }
+    }
+    Ok(())
+}
+
+// meta.json 的路径收集与解析分开:路径集合进索引指纹,解析只发生在
+// 指纹失配的重建里。
+fn collect_subagent_meta_paths(root: &Path) -> Result<Vec<PathBuf>> {
+    let mut paths = Vec::new();
+    for entry in walkdir::WalkDir::new(root).min_depth(5).max_depth(5) {
+        let entry = entry?;
+        if entry.file_type().is_file() && entry.file_name() == "meta.json" {
+            paths.push(entry.path().to_path_buf());
+        }
+    }
+    Ok(paths)
+}
+
+fn parse_subagent_metas(paths: &[PathBuf]) -> Result<Vec<SubagentMeta>> {
+    let mut metas = Vec::new();
+    for path in paths {
+        regular_path(path)?;
+        let child_dir = path.parent().context("Invalid subagent directory")?;
+        let subagents_dir = child_dir.parent().context("Invalid subagent directory")?;
+        if subagents_dir.file_name().and_then(|value| value.to_str()) != Some("subagents") {
+            continue;
+        }
+        let parent_dir = subagents_dir
+            .parent()
+            .context("Invalid subagent directory")?;
+        let bucket = parent_dir.parent().context("Invalid subagent directory")?;
+        let mut meta: SubagentMeta = serde_json::from_reader(File::open(path)?)
+            .context("Invalid Grok Build subagent meta")?;
+        for id in [
+            &meta.subagent_id,
+            &meta.parent_session_id,
+            &meta.child_session_id,
+        ] {
+            valid_id(id)?;
+        }
+        let parent_id = parent_dir
+            .file_name()
+            .and_then(|value| value.to_str())
+            .context("Invalid parent directory")?;
+        if meta.parent_session_id != parent_id
+            || child_dir.file_name().and_then(|value| value.to_str())
+                != Some(meta.subagent_id.as_str())
+        {
+            bail!("Grok Build subagent meta directory mismatch");
+        }
+        meta.child_summary_path = bucket.join(&meta.child_session_id).join("summary.json");
+        metas.push(meta);
+    }
+    Ok(metas)
+}
+
+// 自由函数转发到按根缓存的实例:八处调用点(family_for_id、parse_*、
+// delete、delete_plan_input)零改动。
+fn family_index() -> Result<FamilyIndex<Row>> {
+    BACKEND.index()?.family_index()
+}
+
+// 会话身份的唯一寻址入口:id → family 直查,未命中文案逐字保留现状契约。
+fn family_for_id(source_session_id: &str) -> Result<Family<Row>> {
+    family_index()?
+        .family_for_id(source_session_id)
+        .ok_or_else(|| anyhow!("Grok Build session not found"))
+}
+
+// events 按成员自身目录读取:id 解析到该成员的 transcript 路径(索引里的
+// 每个 id 都是某条成员的 member id)。
+fn member_path_for_id(source_session_id: &str) -> Result<PathBuf> {
+    let family = family_for_id(source_session_id)?;
+    family
+        .members
+        .iter()
+        .find(|row| row.member_id() == source_session_id)
+        .map(|row| PathBuf::from(row.summary.transcript_path.clone()))
+        .ok_or_else(|| anyhow!("Grok Build session not found"))
+}
+
+fn family_summary(family: &Family<Row>) -> SessionSummary {
+    let mut summary = family.root.summary.clone();
+    family.apply_summary_aggregates(&mut summary);
+    // 子代理子会话是完整会话目录、各有自己的 usage.json,按成员求和。
+    summary.token_usage = family.sum_token_usage(|row| row.summary.token_usage);
+    // 模型同样按成员合并:子代理可能换过模型,与 token 求和同口径。
+    let mut tally = ModelTally::default();
+    for row in &family.members {
+        tally.absorb(&row.summary.models);
+    }
+    summary.models = tally.into_models();
+    summary
+}
+
+fn marker(row: &Row) -> SessionMessage {
+    let meta = row.meta.as_ref().expect("child meta");
+    let title = meta.title();
+    let mut content = block("output_text", Some(title.clone()));
+    content.payload = Some(json!({
+        "type": "subagent_started",
+        "session_id": row.member_id(),
+        "title": title,
+        "parent_session_id": meta.parent_session_id,
+        "agent_role": meta.subagent_type,
+        "status": meta.status,
+        "started_at": meta.started_at,
+        "completed_at": meta.completed_at,
+        "transcript_path": row.summary.transcript_path,
+    }));
+    SessionMessage {
+        id: format!(
+            "grok-subagent-{}-{}",
+            meta.parent_session_id,
+            row.member_id()
+        ),
+        role: "assistant".to_string(),
+        timestamp: row.summary.created_at,
+        blocks: vec![content],
+        model: None,
+        session_id: Some(row.member_id().to_string()),
+    }
+}
+
+// 主时间线只暴露子代理入口（marker），子会话正文由 parse_agent_messages
+// 在打开入口时单独读取；父会话分页因此不必扫描全部子会话。
+fn parent_messages(family: &Family<Row>) -> Result<Vec<SessionMessage>> {
+    let mut result = messages(family.root.member_path().as_ref())?;
+    // history 没有逐条时间，入口单独追加，不推断 spawn 在父会话中的位置。
+    result.extend(
+        family
+            .members
+            .iter()
+            .filter(|row| row.meta.is_some())
+            .map(marker),
+    );
+    Ok(result)
+}
+
+// overview 只列 root 和可读成员的路径；缺失子会话只保留入口，不产生假路径。
+fn family_source_paths(family: &Family<Row>) -> Result<Vec<String>> {
+    let mut paths = source_paths(family.root.member_path().as_ref())?;
+    for row in family
+        .members
+        .iter()
+        .filter(|row| row.meta.is_some() && row.readable)
+    {
+        paths.extend(source_paths(row.member_path().as_ref())?);
+    }
+    Ok(paths)
+}
+
+// 所有入口（包括直接传入 transcript_path）都必须留在固定会话布局内。
+fn validate_path(path: &Path) -> Result<PathBuf> {
+    let root = crate::support::fs::canonicalize(&root()?)?;
+    regular_path(path)?;
+    let path = crate::support::fs::canonicalize(path)?;
+    let relative = path
+        .strip_prefix(&root)
+        .context("Grok Build session is outside sessions root")?;
+    if relative.components().count() != 3
+        || path.file_name().and_then(|v| v.to_str()) != Some("summary.json")
+    {
+        bail!("Invalid Grok Build summary path");
+    }
+    Ok(path)
+}
+
+fn summary(path: &Path) -> Result<SessionSummary> {
+    let path = validate_path(path)?;
+    let value: Summary = read_summary(&path)?;
+    let usage = read_usage_file(&path)?;
+    summary_from_parts(&value, &path, usage.as_ref())
+}
+
+// summary.json 的读取与内容校验:调用方负责路径本身可信(公共入口已
+// validate,扫描路径来自自家枚举)。
+fn read_summary(path: &Path) -> Result<Summary> {
+    let value: Summary =
+        serde_json::from_reader(File::open(path)?).context("Invalid Grok Build summary")?;
+    valid_id(&value.info.id)?;
+    if value.chat_format_version != 1 {
+        bail!(
+            "Unsupported Grok Build chat_format_version: {}",
+            value.chat_format_version
+        );
+    }
+    if path
+        .parent()
+        .and_then(Path::file_name)
+        .and_then(|v| v.to_str())
+        != Some(value.info.id.as_str())
+    {
+        bail!("Grok Build summary id does not match session directory");
+    }
+    Ok(value)
+}
+
+// usage.json 整份读取一次,供 usage 与模型两路共用。
+fn read_usage_file(summary_path: &Path) -> Result<Option<UsageFile>> {
+    let Some(usage_path) = sibling_at(summary_path, "usage.json")? else {
+        return Ok(None);
+    };
+    let file: UsageFile = serde_json::from_reader(File::open(&usage_path)?)
+        .with_context(|| format!("Invalid Grok Build usage file {}", usage_path.display()))?;
+    Ok(Some(file))
+}
+
+// 从已读取的 summary/usage 装配列表摘要;扫描路径与按 id 的单会话读取共用。
+fn summary_from_parts(
+    value: &Summary,
+    path: &Path,
+    usage: Option<&UsageFile>,
+) -> Result<SessionSummary> {
+    let title = value
+        .generated_title
+        .clone()
+        .filter(|s| !s.trim().is_empty())
+        .or_else(|| {
+            (!value.session_summary.trim().is_empty()).then(|| value.session_summary.clone())
+        })
+        .unwrap_or_else(|| value.info.id.clone());
+    Ok(SessionSummary {
+        source_app: SourceApp::GrokBuild,
+        source_session_id: value.info.id.clone(),
+        title,
+        cwd: Some(value.info.cwd.clone()),
+        git_branch: None,
+        transcript_path: path.display().to_string(),
+        created_at: Some(
+            crate::support::time::parse_timestamp(&value.created_at)
+                .context("Invalid Grok Build created_at")?,
+        ),
+        updated_at: Some(
+            crate::support::time::parse_timestamp(&value.updated_at)
+                .context("Invalid Grok Build updated_at")?,
+        ),
+        // inputTokens 含缓存命中部分,扣除口径见 grok_slice_usage。
+        token_usage: usage.and_then(|file| file.session.as_ref().map(grok_slice_usage)),
+        // 会话用过的模型:usage.json 的 turns[].modelUsage 按模型切片,能看出
+        // 换过模型;文件缺失(或旧版本没有 turns)时退回 current_model_id,
+        // 只是"当前选中的模型"。Grok Build 没有 provider 字段。
+        models: session_models(usage, value.current_model_id.as_deref()),
+        // Grok Build 既无归档也无压缩:上游 Summary 没有 archived 字段,
+        // 转录一律明文(session/persistence.rs)。
+        archived: false,
+        compressed: false,
+    })
+}
+
+// 会话用过的模型:usage.json 的 turns[].modelUsage 按模型切片,能看出换过模型;
+// 该文件缺失(或旧版本没有 turns)时退回 summary.json 的 current_model_id,
+// 只是"当前选中的模型",不代表整段会话。Grok Build 没有 provider 字段。
+fn session_models(usage: Option<&UsageFile>, current_model_id: Option<&str>) -> Vec<SessionModel> {
+    let mut tally = ModelTally::default();
+
+    if let Some(file) = usage {
+        for turn in &file.turns {
+            for model in turn.model_usage.keys() {
+                tally.record(None, model);
+            }
+        }
+    }
+
+    if let Some(model) = current_model_id {
+        tally.record(None, model);
+    }
+
+    tally.into_models()
+}
+
+// 用量曲线的小时桶:turns[] 每轮自带增量用量与 endedAt,按轮归到本地时区的
+// 小时;旧版本 usage.json 没有 turns 时返回空桶。
+pub(crate) fn usage_hours(summary_path: &Path) -> Result<UsageHourBuckets> {
+    let mut buckets = UsageHourBuckets::new();
+    // 输入来自 session_summary_paths 的自家枚举,兄弟检查走轻量版。
+    let Some(usage_path) = sibling_at(summary_path, "usage.json")? else {
+        return Ok(buckets);
+    };
+
+    let file: UsageFile = serde_json::from_reader(File::open(&usage_path)?)
+        .with_context(|| format!("Invalid Grok Build usage file {}", usage_path.display()))?;
+
+    for turn in &file.turns {
+        let timestamp = turn
+            .ended_at
+            .as_deref()
+            .and_then(crate::support::time::parse_timestamp);
+
+        let turn_usage = || {
+            grok_slice_usage(&UsageTotals {
+                input_tokens: turn.input_tokens,
+                output_tokens: turn.output_tokens,
+                cached_read_tokens: turn.cached_read_tokens,
+                cache_creation_tokens: turn.cache_creation_tokens,
+            })
+        };
+        if turn.model_usage.is_empty() {
+            super::merge_usage_event(
+                &mut buckets,
+                timestamp.and_then(super::hour_key),
+                None,
+                turn_usage(),
+            );
+        } else {
+            for (model, slice) in &turn.model_usage {
+                super::merge_usage_event(
+                    &mut buckets,
+                    timestamp.and_then(super::hour_key),
+                    Some(model.as_str()),
+                    grok_slice_usage(slice),
+                );
+            }
+        }
+    }
+
+    Ok(buckets)
+}
+
+// 会话目录在 bucket 目录下第三层,depth=3 的 summary.json 即全部会话入口;
+// 与 family index 构建使用同一发现规则。
+pub(crate) fn session_summary_paths() -> Result<Vec<PathBuf>> {
+    let root = root()?;
+    if !root.exists() {
+        return Ok(Vec::new());
+    }
+
+    let root = crate::support::fs::canonicalize(&root)?;
+    Ok(walkdir::WalkDir::new(&root)
+        .min_depth(3)
+        .max_depth(3)
+        .into_iter()
+        .filter_map(|entry| entry.ok())
+        .filter(|entry| entry.file_type().is_file() && entry.file_name() == "summary.json")
+        .map(|entry| entry.into_path())
+        .collect())
+}
+
+fn sibling(path: &Path, name: &str) -> Result<Option<PathBuf>> {
+    let path = validate_path(path)?;
+    sibling_at(&path, name)
+}
+
+// 兄弟文件的符号链接防线。调用方先保证 summary 路径本身已验证(公共入口
+// sibling)或来自自家枚举(walkdir 不跟符号链接,扫描路径天然在根内),
+// 这里只拦兄弟文件自身指向外部或非常规形态;NotFound 视为还没有该文件。
+fn sibling_at(summary_path: &Path, name: &str) -> Result<Option<PathBuf>> {
+    let parent = summary_path.parent().context("Missing session directory")?;
+    let candidate = parent.join(name);
+    match fs::symlink_metadata(&candidate) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error.into()),
+        Ok(_) => {
+            let resolved = crate::support::fs::canonicalize(&candidate)?;
+            if resolved != candidate || !resolved.is_file() {
+                bail!("Invalid Grok Build auxiliary file path");
+            }
+            Ok(Some(resolved))
+        }
+    }
+}
+
+fn scan(path: &Path, name: &str, mut visit: impl FnMut(usize, Value) -> Result<()>) -> Result<()> {
+    let Some(file) = sibling(path, name)? else {
+        return Ok(());
+    };
+    for (index, line) in BufReader::new(File::open(file)?).lines().enumerate() {
+        let line = line?;
+        if line.trim().is_empty() {
+            continue;
+        }
+        let value = serde_json::from_str(&line)
+            .with_context(|| format!("Invalid Grok Build {name} JSON at line {}", index + 1))?;
+        // 前端只展示最外层错误消息，行号必须和原因拼在同一层，否则报错无法定位。
+        visit(index, value).map_err(|error| {
+            anyhow!(
+                "Invalid Grok Build {name} entry at line {}: {error}",
+                index + 1
+            )
+        })?;
+    }
+    Ok(())
+}
+
+fn required<'a>(value: &'a Value, key: &str) -> Result<&'a str> {
+    value
+        .get(key)
+        .and_then(Value::as_str)
+        .with_context(|| format!("Missing Grok Build string field: {key}"))
+}
+
+fn block(kind: &str, text: Option<String>) -> ContentBlock {
+    ContentBlock {
+        kind: kind.into(),
+        text,
+        tool_name: None,
+        tool_call_id: None,
+        is_error: None,
+        payload: None,
+    }
+}
+
+fn tool_statuses(path: &Path) -> Result<HashMap<String, bool>> {
+    let mut statuses = HashMap::new();
+    scan(path, "events.jsonl", |_, value| {
+        if value["type"] == "tool_completed" {
+            if let (Some(id), Some(outcome)) =
+                (value["tool_call_id"].as_str(), value["outcome"].as_str())
+            {
+                match outcome {
+                    "success" => {
+                        statuses.insert(id.to_owned(), false);
+                    }
+                    "error" => {
+                        statuses.insert(id.to_owned(), true);
+                    }
+                    _ => {}
+                }
+            }
+        }
+        Ok(())
+    })?;
+    scan(path, "updates.jsonl", |_, value| {
+        let update = &value["params"]["update"];
+        if matches!(
+            update["sessionUpdate"].as_str(),
+            Some("tool_call" | "tool_call_update")
+        ) {
+            if let (Some(id), Some(status)) =
+                (update["toolCallId"].as_str(), update["status"].as_str())
+            {
+                match status {
+                    "completed" => {
+                        statuses.entry(id.to_owned()).or_insert(false);
+                    }
+                    "failed" => {
+                        statuses.insert(id.to_owned(), true);
+                    }
+                    _ => {}
+                }
+            }
+        }
+        Ok(())
+    })?;
+    Ok(statuses)
+}
+
+fn messages(path: &Path) -> Result<Vec<SessionMessage>> {
+    let session_id = summary(path)?.source_session_id;
+    let statuses = tool_statuses(path)?;
+    let mut messages = Vec::new();
+    let mut tools = HashMap::new();
+    scan(path, "chat_history.jsonl", |index, value| {
+        let kind = required(&value, "type")?;
+        let mut blocks = Vec::new();
+        let role = match kind {
+            "system" => "system",
+            "user" => {
+                if value["synthetic_reason"] == "system_reminder" {
+                    return Ok(());
+                }
+                for item in value["content"]
+                    .as_array()
+                    .context("Invalid Grok Build user content")?
+                {
+                    match required(item, "type")? {
+                        "text" => blocks.push(block("text", Some(required(item, "text")?.into()))),
+                        "image" => {
+                            let url = required(item, "url")?;
+                            let mut image = block("image", Some(url.into()));
+                            image.payload = Some(json!({"type":"image", "url": url}));
+                            blocks.push(image);
+                        }
+                        _ => bail!("Unsupported Grok Build user content type"),
+                    }
+                }
+                "user"
+            }
+            "reasoning" => {
+                // 只投影可展示的思考；加密字段不得进入归一化 payload。
+                let content = value
+                    .get("content")
+                    .and_then(Value::as_array)
+                    .filter(|items| !items.is_empty())
+                    .or_else(|| value.get("summary").and_then(Value::as_array));
+                if let Some(items) = content {
+                    for item in items {
+                        blocks.push(block("thinking", Some(required(item, "text")?.into())));
+                    }
+                }
+                "assistant"
+            }
+            "assistant" => "assistant",
+            "tool_result" => {
+                let id = required(&value, "tool_call_id")?;
+                let mut result = block("tool_result", Some(required(&value, "content")?.into()));
+                result.tool_call_id = Some(id.into());
+                result.tool_name = tools.get(id).cloned();
+                result.is_error = statuses.get(id).copied();
+                blocks.push(result);
+                "tool"
+            }
+            _ => bail!(
+                "Unsupported Grok Build chat history type at line {}",
+                index + 1
+            ),
+        };
+        if matches!(kind, "system" | "assistant") {
+            let text = required(&value, "content")?;
+            if !text.is_empty() {
+                blocks.push(block("text", Some(text.into())));
+            }
+        }
+        if kind == "assistant" {
+            if let Some(calls) = value.get("tool_calls") {
+                for call in calls.as_array().context("Invalid Grok Build tool_calls")? {
+                    let id = required(call, "id")?;
+                    let name = required(call, "name")?;
+                    // 模型输出中断会把截断的 arguments 落盘，Grok Build 已把该调用记为
+                    // 失败并继续会话；按 {raw} 原文降级展示，不让单条坏数据导致整个会话不可读。
+                    let raw = required(call, "arguments")?;
+                    let arguments =
+                        serde_json::from_str::<Value>(raw).unwrap_or_else(|_| json!({"raw": raw}));
+                    let mut tool = block("tool_use", None);
+                    tool.tool_call_id = Some(id.into());
+                    tool.tool_name = Some(name.into());
+                    tool.payload = Some(json!({"input":arguments}));
+                    tools.insert(id.to_string(), name.to_string());
+                    blocks.push(tool);
+                }
+            }
+        }
+        if !blocks.is_empty() {
+            messages.push(SessionMessage {
+                id: format!("grok-{session_id}-message-{index}"),
+                role: role.into(),
+                timestamp: None,
+                blocks,
+                model: None,
+                session_id: Some(session_id.clone()),
+            });
+        }
+        Ok(())
+    })?;
+    Ok(messages)
+}
+
+// events 时间线全量装载;原始记录不裁剪字段(加密字段仍不下发)。
+fn all_events(path: &Path) -> Result<Vec<SessionEvent>> {
+    let mut events = Vec::new();
+    scan(path, "events.jsonl", |index, value| {
+        let kind = required(&value, "type")?;
+        events.push(SessionEvent {
+            id: format!("grok-event-{index}"),
+            kind: kind.into(),
+            timestamp: value["ts"]
+                .as_str()
+                .and_then(crate::support::time::parse_timestamp),
+            summary: kind.into(),
+            // raw 页展示原始记录：不裁剪字段（加密字段仍不下发）
+            payload: Some(super::record_payload(&value)),
+            session_id: None,
+        });
+        Ok(())
+    })?;
+    Ok(events)
+}
+
+fn source_paths(path: &Path) -> Result<Vec<String>> {
+    let mut paths = vec![validate_path(path)?.display().to_string()];
+    for name in ["chat_history.jsonl", "events.jsonl", "updates.jsonl"] {
+        if let Some(path) = sibling(path, name)? {
+            paths.push(path.display().to_string());
+        }
+    }
+    Ok(paths)
+}
+
+impl SessionReader for GrokBuildBackend {
+    fn clear_cache(&self) -> Result<()> {
+        BACKEND.clear_cache()
+    }
+
+    fn list_entries(&self) -> Result<Vec<SessionFileEntry>> {
+        let mut entries = family_index()?
+            .families
+            .into_iter()
+            .map(|family| {
+                let summary = family_summary(&family);
+                SessionFileEntry {
+                    path: PathBuf::from(&summary.transcript_path),
+                    source_session_id: family.root.member_id().to_string(),
+                    sort_timestamp: summary.updated_at.unwrap_or_default(),
+                    summary: Some(summary),
+                }
+            })
+            .collect::<Vec<_>>();
+        super::sort_entries(&mut entries);
+        Ok(entries)
+    }
+    fn parse_summary(&self, source_session_id: &str) -> Result<SessionSummary> {
+        // 与 family 聚合语义一致：成员 id 解析到所属 family 的 root 摘要。
+        let family = family_for_id(source_session_id)?;
+        Ok(family_summary(&family))
+    }
+
+    fn delete_plan_input(&self, source_session_id: &str) -> Result<super::delete::DeletePlanInput> {
+        Ok(super::delete::DeletePlanInput::from_family(&family_for_id(
+            source_session_id,
+        )?))
+    }
+    fn parse_overview(&self, source_session_id: &str) -> Result<SessionOverview> {
+        let family = family_for_id(source_session_id)?;
+        Ok(SessionOverview {
+            summary: family_summary(&family),
+            source_paths: family_source_paths(&family)?,
+            message_count: None,
+            event_count: None,
+            agents: family_agents(&family, |row| match &row.meta {
+                Some(meta) => FamilyAgentLabel::Child(meta.title()),
+                None => FamilyAgentLabel::Root,
+            }),
+        })
+    }
+    fn parse_messages(&self, source_session_id: &str) -> Result<Vec<SessionMessage>> {
+        parent_messages(&family_for_id(source_session_id)?)
+    }
+    fn parse_events(&self, source_session_id: &str) -> Result<Vec<SessionEvent>> {
+        let path = member_path_for_id(source_session_id)?;
+        summary(&path)?;
+        all_events(&path)
+    }
+    fn parse_agent_messages(
+        &self,
+        source_session_id: &str,
+        agent_session_id: &str,
+    ) -> Result<Vec<SessionMessage>> {
+        let family = family_for_id(source_session_id)?;
+        let row = family
+            .members
+            .iter()
+            .find(|row| row.meta.is_some() && row.member_id() == agent_session_id)
+            .context("Grok Build subagent does not belong to this session")?;
+        // 子会话缺失或损坏时整个父会话仍可读，只有打开该入口才报错。
+        if !row.readable {
+            bail!("Grok Build subagent session is not readable");
+        }
+        // marker + 子会话正文：弹窗依赖 marker 分组，缺失时会退化为空内容。
+        let mut result = vec![marker(row)];
+        result.extend(messages(row.member_path().as_ref())?);
+        Ok(result)
+    }
+}
+
+// root 会话交给官方 `grok sessions delete`（目录、搜索索引、活跃保护都由
+// grok 自己处理）；该命令只认顶层会话、够不到 subagent 子会话，子会话按
+// 本地清理：成员目录 + session_search.sqlite 索引行。
+pub(crate) fn delete_session(source_session_id: &str) -> Result<()> {
+    let family = family_for_id(source_session_id)?;
+
+    run_official_delete(family.root.member_id())?;
+
+    for row in family.members.iter().skip(1) {
+        let member_path = row.member_path();
+        let dir = member_path
+            .as_ref()
+            .parent()
+            .context("Invalid Grok Build session directory")?;
+        // 子会话目录可能已缺失（family 保留了占位入口），跳过即可。
+        if dir.exists() {
+            fs::remove_dir_all(dir)
+                .with_context(|| format!("Failed to delete {}", dir.display()))?;
+        }
+    }
+    // root 的会话目录与索引行由官方命令清理，这里只清本地删除的子会话行。
+    delete_search_index_rows(&family)?;
+
+    // cwd 分组目录删空后顺手清掉；prompt_history.jsonl 等共享文件会让它保留。
+    // 成员路径来自 canonicalize 后的索引扫描，root 先规范化才能对上前缀。
+    let sessions_root = crate::support::fs::canonicalize(&root()?)?;
+    for row in &family.members {
+        if let Some(dir) = row.member_path().as_ref().parent().and_then(Path::parent) {
+            super::delete::prune_empty_parents(sessions_root.clone(), Some(dir));
+        }
+    }
+    // 「删除 → 索引失效」写在动作发生地,不依赖指纹口径恰好覆盖删除的
+    // 全部文件副作用(实测指纹失配也会兜住,这里显式清是契约不是必需)。
+    BACKEND.clear_cache()
+}
+
+// delete_session 的预演:root 交官方命令,官方够不到的子会话目录与搜索
+// 索引行走本地清理;root 自身的目录与索引行由官方命令负责,不进动作清单。
+pub(crate) fn delete_plan(input: &DeletePlanInput) -> Result<Vec<DeletePlanAction>> {
+    let mut actions = vec![DeletePlanAction::RunCli {
+        program: "grok".to_string(),
+        args: vec![
+            "sessions".to_string(),
+            "delete".to_string(),
+            input.root_id.clone(),
+        ],
+    }];
+
+    // 成员会话目录 = 成员转录的父目录,去重保首见序;root 自己的目录由官方
+    // 命令清理,不进动作清单。
+    let mut session_dirs = Vec::<String>::new();
+    for member in &input.members {
+        if member.is_root {
+            continue;
+        }
+        if let Some(dir) = member.path.parent() {
+            let dir = dir.display().to_string();
+            if !session_dirs.iter().any(|seen| seen == &dir) {
+                session_dirs.push(dir);
+            }
+        }
+    }
+    for dir in session_dirs {
+        actions.push(DeletePlanAction::RemoveDirectory { path: dir });
+    }
+
+    // 搜索索引只清本地删除的子会话行;SQL 单引号转义规则与 sqlite 一致。
+    let child_ids = input
+        .session_ids()
+        .into_iter()
+        .filter(|id| id != &input.root_id)
+        .collect::<Vec<_>>();
+    if !child_ids.is_empty() {
+        let ids = child_ids
+            .iter()
+            .map(|id| format!("'{}'", id.replace('\'', "''")))
+            .collect::<Vec<_>>()
+            .join(", ");
+        actions.push(DeletePlanAction::Sqlite {
+            db_path: "~/.grok/sessions/session_search.sqlite".to_string(),
+            sql: format!("DELETE FROM session_docs WHERE session_id IN ({ids});"),
+        });
+    }
+
+    Ok(actions)
+}
+
+// grok 对不存在的会话输出 "No session found" 但 exit 0（幂等语义），只有
+// 真正失败才 exit 非零；失败时的命令输出由 run_official_cli 原样带回。
+fn run_official_delete(session_id: &str) -> Result<()> {
+    run_official_cli(
+        &format!("grok sessions delete {session_id}"),
+        grok_binary()?.arg("sessions").arg("delete").arg(session_id),
+    )
+}
+
+// 会话数据由 grok home 内的 CLI 写入，删除优先用同源二进制；home 内没有
+// （如数据目录搬迁后）退回 PATH 上的 grok。
+fn grok_binary() -> Result<Command> {
+    let home = super::spec_root(SourceApp::GrokBuild)?;
+    let home_binary = home.join("bin").join("grok");
+    if home_binary.is_file() {
+        return Ok(Command::new(home_binary));
+    }
+    Ok(Command::new("grok"))
+}
+
+// session_docs 按 session_id 主键存全文索引，删除触发的 FTS 维护由 grok
+// 建库时的触发器完成；该库是搜索索引而非会话本体，旧版本会话可能没有。
+// 只清子会话行：root 的索引行随官方删除命令一并处理。
+fn delete_search_index_rows(family: &Family<Row>) -> Result<()> {
+    let db_path = root()?.join("session_search.sqlite");
+    if !db_path.exists() {
+        return Ok(());
+    }
+    let connection = Connection::open(&db_path)
+        .with_context(|| format!("Failed to open {}", db_path.display()))?;
+    for row in family.members.iter().skip(1) {
+        connection
+            .execute(
+                "DELETE FROM session_docs WHERE session_id = ?1",
+                params![row.member_id()],
+            )
+            .with_context(|| {
+                format!(
+                    "Failed to delete Grok Build search index for {}",
+                    row.member_id()
+                )
+            })?;
+    }
+    Ok(())
+}

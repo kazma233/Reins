@@ -1,0 +1,14 @@
+.app-root-shell {
+  display: flex;
+  height: 100vh;
+  background: var(--color-canvas);
+}
+
+/* feature 视图按纵向 flex 子项布局（flex: 1 1 auto），这里保持列方向容器语义 */
+.app-main {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}

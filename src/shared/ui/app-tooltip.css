@@ -1,0 +1,34 @@
+.app-tooltip {
+  display: inline-flex;
+  align-items: center;
+}
+
+/* 气泡挂在 body 上、fixed 定位（位置由 computeTooltipOffset 算好写进 style）：
+   卡片与弹窗都有 overflow: hidden，就地渲染的气泡会被裁掉。
+   悬停即显：原生 title 的提示延迟由浏览器控制（约一秒），无法满足即时提示。 */
+.app-tooltip__bubble {
+  position: fixed;
+  z-index: var(--z-tooltip);
+  width: max-content;
+  max-width: min(320px, calc(100vw - 16px));
+  padding: 6px 8px;
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-dark);
+  color: var(--color-on-primary);
+  word-break: break-all;
+  font-size: var(--font-size-xs);
+  font-weight: 400;
+  line-height: 1.4;
+  text-align: left;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition:
+    opacity 0.08s ease,
+    visibility 0.08s ease;
+}
+
+.app-tooltip__bubble--visible {
+  opacity: 1;
+  visibility: visible;
+}

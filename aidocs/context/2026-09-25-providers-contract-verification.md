@@ -1,0 +1,302 @@
+# providers 域工具契约二次核对（官方文档来源）
+
+- 日期：2026-09-25
+- 性质：契约核对记录。逐项比对 providers 域五个工具的写入/反读契约与官方文档，给出结论、来源与后续动作。
+- 结论速览：写入契约主体与官方一致；发现 3 个不一致（Pi `off` 值、Claude 思考等级值域、OpenCode 思考等级声明未实现）与 2 条风险备注（Grok `model_providers` 未文档化、OpenCode Windows 路径 XDG 不生效）。
+- 后续复测：2026-09-27 起按日期追加补充节（Grok base_url 与逐模型元数据、OpenCode `openai_responses` 复测、其余四个工具的模型元数据配置面），结论以对应日期的小节为准。
+
+## 来源
+
+| 工具 | 页面 | 说明 |
+| --- | --- | --- |
+| Codex | https://learn.chatgpt.com/docs/config-file/config-reference | config.toml 完整参考（`/docs/...` 加 `.md` 可取 Markdown）；2026-09-28 起该域名对本机返回 Forbidden，改按源码核对 |
+| Codex | https://learn.chatgpt.com/llms.txt | 文档索引 |
+| Codex | `codex-rs/core/config.schema.json`（`rust-v0.145.0` 标签） | 由 `ConfigToml` 生成的配置键权威清单（`model_context_window`、`model_auto_compact_token_limit` 等） |
+| Codex | `codex-rs/models-manager/src/model_info.rs`（同标签） | `model_context_window` 的覆盖逻辑与未知模型的兜底元数据 |
+| Claude Code | https://code.claude.com/docs/en/settings-reference | `effortLevel`/`env`/`model` 键参考（加 `.md` 取 Markdown） |
+| Claude Code | https://code.claude.com/docs/en/env-vars | `ANTHROPIC_BASE_URL`/`ANTHROPIC_API_KEY` 语义；`CLAUDE_CODE_MAX_CONTEXT_TOKENS`/`CLAUDE_CODE_MAX_OUTPUT_TOKENS`/`CLAUDE_CODE_AUTO_COMPACT_WINDOW` 等模型窗口与输出旋钮 |
+| OpenCode | https://opencode.ai/v2/docs/config/ | v2 配置位置与顶层键 |
+| OpenCode | https://opencode.ai/v2/docs/providers/ | v2 规范 provider schema（`providers`/`package`/`settings`）；模型字段表（`capabilities`/`limit`/`variants`） |
+| OpenCode | https://opencode.ai/v2/docs/models/ | 模型字段示例与目录外模型的兜底假设（200000 上下文 / 32000 输出 / text+image 输入） |
+| OpenCode | https://opencode.ai/config.json | `$schema` 指向的 JSON Schema；provider 外壳仍是 v1 形态，模型条目字段（含 `limit`/`modalities`）可作对照 |
+| OpenCode | https://opencode.ai/v2/docs/migrate-v1/ | v1 格式兼容承诺（内存归一化、不改源文件） |
+| Pi | https://pi.dev/docs/latest/models | models.json 形态、`api` 取值示例、`input`/`inputLimits` 字段 |
+| Pi | https://pi.dev/docs/latest/settings | `defaultProvider`/`defaultModel`/`defaultThinkingLevel` 及枚举 |
+| Pi | 本机 `@earendil-works/pi-ai` 包 `dist/types.d.ts` | `KnownApi` 枚举（全部合法值）与模型字段 `contextWindow`/`maxTokens`/`reasoning` |
+| Grok Build | https://docs.x.ai/build/overview | 自定义模型入口、`~/.grok/config.toml` 路径 |
+| Grok Build | https://docs.x.ai/build/settings/reference | config.toml 全量键参考（`api_backend`、`api_key`、`extra_headers`、`[models]`） |
+
+## 逐工具核对结论
+
+### Codex（`$CODEX_HOME/config.toml`，协议仅 `openai_responses`）
+
+| 契约项 | 结论 | 依据 |
+| --- | --- | --- |
+| `wire_api` 仅 `"responses"` | ✅ 一致 | 官方原文 "responses is the only supported value, and it is the default when omitted" |
+| `[model_providers.<id>]` 的 `name`/`base_url` | ✅ 一致 | config-reference |
+| `experimental_bearer_token` 静态 Bearer | ✅ 字段存在（官方标注 discouraged，建议 `env_key`） | config-reference |
+| `model_provider`/`model` | ✅ 一致 | config-reference |
+| `model_reasoning_effort` 值域 | ⚠️ 部分确认 | 官方列举 `low/medium/high/xhigh/max/ultra`（"such as" 非穷举）；我们写出的 `none`/`minimal` 未在列，待真机验证 |
+
+### Claude Code（`~/.claude/settings.json`，协议仅 `anthropic_messages`）
+
+| 契约项 | 结论 | 依据 |
+| --- | --- | --- |
+| `env.ANTHROPIC_BASE_URL`（网关/代理端点） | ✅ 一致 | settings-reference `env` 示例 + env-vars 表 |
+| `env.ANTHROPIC_API_KEY`（以 `X-Api-Key` 发送） | ✅ 一致 | env-vars 表 |
+| `model` 键 | ✅ 一致 | settings-reference |
+| `effortLevel` 键名 | ✅ 一致 | settings-reference |
+| `effortLevel` 值域 `low/medium/high/xhigh/max` | ❌ 不一致 | 官方值域不含 `off`/`minimal`；我们能力表声明 7 档并按小写写出 `none`/`minimal`，选这两档会写出无效值 |
+
+### OpenCode v2（`~/.config/opencode/opencode.json`，协议 `openai_chat_completions` + `anthropic_messages`）
+
+| 契约项 | 结论 | 依据 |
+| --- | --- | --- |
+| v2 规范 schema：`providers` + `package` + `settings.baseURL`/`settings.apiKey` + `models` | ✅ 一致 | v2 providers 文档 |
+| `package` 按协议：`@opencode/ai/providers/openai-compatible` / `@opencode/ai/providers/anthropic` | ✅ 一致 | v2 providers 文档原生包清单 + 端点代理示例（anthropic + settings.baseURL） |
+| 顶层 `model = "<provider>/<model>"` | ✅ 一致 | v2 config 文档 |
+| 全局配置路径 `~/.config/opencode/opencode.json` | ✅ 一致 | v2 config 文档 |
+| v1 遗留 schema（`provider`/`npm`/`options`） | ✅ 只读展示、可删除，不写入 | migrate-v1：v2 运行时继续兼容 v1（内存归一化、不改源文件） |
+| `openai_responses` 不放行 | ❌→✅ 已恢复放行（2026-09-27 复测） | v2.0.18 复测 `openai/responses` 端到端可用；`openai-compatible/responses` 仍异常，见 2026-09-27 补充节 |
+| 思考等级 | ❌ 不一致 | 能力表声明 7 档全集、弹窗可选，但 `apply` 不消费 `default_reasoning_level`；v2 文档亦未确认思考等级写法 |
+| Windows 路径 | ✅ 已对齐 | 本机实测 OpenCode v2.0.15+ 不认 `XDG_CONFIG_HOME`（读 `%USERPROFILE%\.config\opencode`）；Reins 已去掉 XDG 优先级，统一按 `HOME/.config` 解析 |
+
+### Pi（`$PI_CODING_AGENT_DIR/models.json` + `settings.json`，三协议全支持）
+
+| 契约项 | 结论 | 依据 |
+| --- | --- | --- |
+| `api` 三值 `openai-completions`/`openai-responses`/`anthropic-messages` | ✅ 全部合法 | `KnownApi` 枚举（本机 pi-ai 包 types.d.ts）+ models 页示例 |
+| `providers.<id>` 的 `baseUrl`/`apiKey`/`models` | ✅ 一致 | models 页示例 |
+| `defaultProvider`/`defaultModel`/`defaultThinkingLevel` | ✅ 一致 | settings 页 |
+| 思考等级枚举 `off\|minimal\|low\|medium\|high\|xhigh\|max` | ❌ 不一致（1 档） | 官方枚举首档是 `"off"`；我们 `ReasoningLevel::Off.as_str()` 写出 `"none"`，选「无」时 Pi 拿到无效值；其余 6 档合法 |
+
+### Grok Build（`$GROK_HOME/config.toml`，三协议全支持）
+
+| 契约项 | 结论 | 依据 |
+| --- | --- | --- |
+| `api_backend: chat_completions \| responses \| messages` | ✅ 一致 | settings-reference 原文，与实测值相同 |
+| `[model.<id>]` 的 `api_key`/`base_url`/`name`/`extra_headers` | ✅ 一致 | settings-reference（`extra_headers` 可承载 anthropic 头） |
+| `[model.<id>].context_window` | ✅ 已补写（2026-09-27） | settings-reference 原文「Context window size (drives auto-compact timing)」；此前未写，grok 缺该字段按 200000 兜底，见 2026-09-27 补充节 |
+| `[model.<id>].supports_reasoning_effort` | ✅ 已补写（2026-09-27） | settings-reference 原文「Reasoning controls when supported」；此前未写，grok 判该模型不支持思考等级并丢弃 `[models].default_reasoning_effort`，见 2026-09-27 补充节 |
+| `[model.<id>]` 的图像/多模态字段 | ⛔ 不存在 | settings-reference 全表无 image/vision 字段；1.0.41 实测 `supports_images`/`input`/`supports_vision` 被静默忽略，模型元数据无变化。图片相关只有 `[models].image_description`（语义为图片描述模型），Reins 不写图像输入 |
+| `[models].default` / `[models].default_reasoning_effort` | ✅ 键名与位置一致 | settings-reference（位于 `[models]` 段） |
+| `[model_providers]` 表 + `model_provider` 字段 | ⚠️ 备注：官方未文档化 | 官方简化格式是 `[model.<id>]` 直接带 `base_url`/`env_key`；我们的写法来自 grok 1.0.40 实测（`grok inspect --json` 可识别），需真机复测当前版本 |
+| `default_reasoning_effort` 值域 | ✅ 已实测 | 2026-09-27 grok 1.0.41：接受 `none/minimal/low/medium/high/xhigh/max`，拒绝 `off`（报 `invalid reasoning effort`）。Grok 交互 UI 只渲染 low/medium/high/xhigh 四档并把用户选择写回 config；Reins 已把 `Max` 档映射写出 `"xhigh"`（请求层两者等价，见下条），其余档同名直写 |
+| `messages` 后端 base_url 请求路径 = `{base_url}/messages`，不补 `/v1` | ❌→✅ 已修复 | 2026-09-27 grok 1.0.41 本地监听实测（配置 `/v1` 结尾 → 请求 `/v1/messages` 正常完成；不带 → 请求 `/messages`）；与 Anthropic SDK「base_url 不带版本段」约定不同，grokbuild 写入时对 `anthropic_messages` 规范化补 `/v1`，反读按同一口径比对 |
+
+## 真机验证结果（2026-09-25）
+
+本机版本：codex-cli 0.145.0、grok 1.0.40、opencode v2.0.16、pi 0.87.1。隔离目录验证，端点用不可达地址区分「配置错」与「网络错」。
+
+除配置解析外，四个 CLI 均做了「注册级」验证：工具自身的模型列表/请求路径确认 Reins 写入的条目被识别并使用。
+
+| 工具 | 验证方式 | 结果 |
+| --- | --- | --- |
+| Codex | 隔离 `CODEX_HOME` + apply 形态配置；`codex doctor`、`codex debug prompt-input`、`codex exec`（正负对照） | ✅ config loaded；`codex exec` 请求打向 `http://127.0.0.1:9/v1/responses`（正是我们配置的 provider + responses 协议）；负对照 `nonexistent-provider` 立即报 `Model provider not found` |
+| Grok | 隔离 `GROK_HOME` + apply 形态配置；`grok inspect --json`、`grok models`（正负对照） | ✅ `grok models` 列出两个 reins 模型、默认模型标记正确、`api_key` 被识别；对照无配置环境无 reins 条目、坏模型名立即报 `unknown model id` |
+| Pi | 隔离 `PI_CODING_AGENT_DIR` + apply 形态的 models.json/settings.json；`pi -p`（正负对照） | ✅ 默认模型解析并发起请求（Connection error 为端点不可达）；负对照 `No models match pattern` 明确警告 |
+| OpenCode | 全局 v2 条目经用户实际应用验证：`opencode models` | ✅ `reins-glm/glm-5.3` 等三个已应用模型出现在工具模型列表 |
+| Claude Code | 本机未安装 | 未验证（unverified） |
+
+补充验证记录（同日）：
+
+- Codex `model_reasoning_effort` 取 `none/minimal/low` 时 `codex doctor` 均 `config loaded`，`debug prompt-input` 正常渲染；请求时行为需真实端点。
+- OpenCode `openai_responses`：对照实验（同一探针条目换包名）显示 anthropic 包注册成功、`openai/responses` 与 `openai-compatible/responses` 在 v2.0.16 均静默加载失败，维持不放行；后续版本需复测。
+
+## 2026-09-27 补充：Grok messages 后端 base_url 实测（grok 1.0.41）
+
+方法：隔离 `GROK_HOME` + 本地 HTTP 监听器，配置 `api_backend = "messages"` + `extra_headers`（假 key），`grok -p` 单轮请求，观察监听器收到的请求。
+
+- base_url 以 `/v1` 结尾 → 请求 `POST /v1/messages`，携带 `x-api-key` 与 `anthropic-version`，grok 正常完成。
+- base_url 不带 `/v1` → 请求 `POST /messages`（无版本段），打真实端点（如智谱 `…/api/anthropic`）会 404。此为 2026-09-26 用户「glm 应用到 Grok 不可用」的根因；`x-api-key` 头本身传递正常，智谱官方也认该头（官方 curl 示例）。
+- 附带观察：grok 会话开始会向自定义 provider 端点发一个标题生成请求，模型名为 `grok-4.6`（非配置模型），打到第三方端点会报模型不存在，但不阻塞主对话。
+- `default_reasoning_effort` 值域实测：`off` 报 `invalid reasoning effort: "off" (expected one of: none, minimal, low, medium, high, xhigh, max)`，其余 7 值全部被 `grok models` 接受；缺省不写也接受。Grok 交互 UI 自行渲染四档（xhigh/high/medium/low）并把用户选择写回 config，与配置层 7 值枚举、Reins 弹窗档位均不同源。
+- `default_reasoning_effort` 请求层映射实测（messages 后端，本地监听）：`low/medium/high/xhigh/max` 五档发出的 `thinking` 参数完全相同（`{"type":"adaptive","display":"summarized"}`），无量化差异；`none`/`minimal`/缺省则不带 `thinking` 字段。即对第三方 messages 端点，high 以上各档在请求上等价，`max` 与 `xhigh` 无请求层区别，且 Grok UI 无 max 档可选。
+- 另注意到 `chat_completions`/`responses` 后端的路径拼接规则未实测；OpenAI 生态习惯 base_url 带 `/v1`，暂按用户配置原样写入。
+
+## 2026-09-27 补充：Grok per-model 元数据字段实测（grok 1.0.41）
+
+方法：隔离 `GROK_HOME` + 合成 config.toml（两个自定义模型对照：裸模型 / 带 `context_window` 等字段），`grok -p --debug-file` 与 `grok models`，读 debug 日志与 `session/new` 响应的 `availableModels[]._meta`；另用三个候选字段名探测未知字段行为。
+
+- **`context_window` 缺失时按 200000 兜底**：debug 日志原文 `new model missing context_window, defaulting to 200000 -- set context_window in [model.<key>] to override`；模型 _meta 为 `totalContextTokens: 200000`。写上 `context_window = 128000` 后日志不再出现该条、_meta 为 `128000`。该值驱动自动压缩时机（`[session].auto_compact_threshold_percent` 默认 85）——Reins 此前不写该字段，对非 200K 窗口的模型时机失准。处置：apply 现在有元数据就写 `context_window`，新增测试 `grok_apply_writes_context_window_and_reasoning_support`、`grok_apply_omits_absent_model_metadata`。
+- **`supports_reasoning_effort` 是默认档生效前提**：裸模型 + `[models].default_reasoning_effort = "high"` 时 grok 打 WARN `reasoning_effort: model does not support effort; ignoring it session_id=… model=test-bare effort=high`；模型写 `supports_reasoning_effort = true` 后 _meta 出现 `supportsReasoningEffort: true`（`reasoning_effort = "low"` 亦反映到 _meta 的 `reasoningEffort`）。即 Reins 此前写的 `default_reasoning_effort` 在其自定义模型上被静默忽略。处置：`model.reasoning == Some(true)` 时写 `supports_reasoning_effort = true`。
+- **图像输入无配置落点**：`[model.<id>]` 表无任何 image/vision 字段（settings-reference 全表核对），探测 `supports_images = true`、`input = ["text","image"]`、`supports_vision = true` 三个候选字段全部被静默忽略（debug 日志无 unknown-field 警告，模型 _meta 与裸模型完全相同）；连内置 `grok-4.6` 的 _meta 也没有图片能力字段。Reins 的 `supports_images` 元数据在 Grok 侧不写，由应用弹窗明示。
+- 交叉观察：`_meta.agentType` 均为 `grok-build-plan`；`max_completion_tokens` 实测被接受（解析无 unknown-field 警告），但它是采样上限而非元数据落点，Reins 不写。
+- 上述事实与各工具写入口径汇总到能力表 `unwritten_model_fields`，经 `ProviderAppState` 下发到应用弹窗；对应测试 `app_states_declare_unwritten_model_fields`。
+
+## 2026-09-27 补充：OpenCode openai_responses 复测（opencode v2.0.18）
+
+方法：隔离目录 + 项目级 `opencode.json`，同一探针条目仅换 `package`；注册级用 `opencode models`（负对照：无配置目录不出现探针条目，确认按目录解析无缓存串扰）；请求级用 `opencode run` + 本地 HTTP 监听器（baseURL `http://127.0.0.1:18081/v1`）。
+
+- `@opencode/ai/providers/openai/responses`：注册成功；请求 `POST {baseURL}/v1/responses`、`Authorization: Bearer`、标准 Responses wire format（`model` + `input` + `instructions`），监听器返回的最小 response 被正常消费、会话继续下一步。✅ 端到端可用。
+- `@opencode/ai/providers/openai-compatible/responses`：`opencode models` 可注册，但 `opencode run` 初始化即报 `Cannot find package '@opencode/ai'`，两次复现。❌ 不采用。
+- 对照组 `@opencode/ai/providers/openai-compatible`（chat）：注册、请求均正常。
+
+处置：OpenCode 能力表恢复放行 `openai_responses`，apply 写 `openai/responses` 包，新增测试 `opencode_apply_responses_uses_openai_responses_package`；compatible/responses 的包解析缺陷属 OpenCode 侧问题，上游修复后再评估切换。
+
+## 2026-09-28 补充：其余四个工具的模型元数据配置面核对
+
+起因：Grok 补写 `context_window` / `supports_reasoning_effort`（见上节）后，复查 Codex、Claude Code、OpenCode、Pi 是否同样存在「官方有配置面、Reins 未使用」的模型元数据缺口。
+
+方法：以各工具生成的配置 schema、源码与官方文档为准；本机版本 `codex-cli 0.145.0`、`claude 2.1.185`、`opencode v2.0.18`、`pi 0.87.1`。OpenCode 与 Codex 另做隔离实测（临时项目目录 + 合成配置，`opencode models` / `opencode debug config`）。本次只读核对，未改代码。
+
+| 工具 | 上下文窗口 | 最大输出 | 图像输入 | 思考能力 |
+| --- | --- | --- | --- | --- |
+| Codex | `model_context_window` 可用，Reins 未写 | 无字段 | 无字段 | `model_reasoning_effort` 已写 |
+| Claude Code | `env.CLAUDE_CODE_MAX_CONTEXT_TOKENS` 可用，未写 | `env.CLAUDE_CODE_MAX_OUTPUT_TOKENS` 可用，未写 | 无字段 | `effortLevel` 已写 |
+| OpenCode v2 | `models.<id>.limit.context` 可用，未写 | `models.<id>.limit.output` 可用，未写 | `models.<id>.capabilities.input` 可用，未写 | v2 无对应字段（维持不写） |
+| Pi | `contextWindow` 已写 | `maxTokens` 已写 | `input`（text/image）已写 | `reasoning` 已写 |
+
+- **Codex**：`codex-rs/core/config.schema.json`（由 `ConfigToml` 生成，`rust-v0.145.0` 标签，与本机版本对应）含顶层键 `model_context_window`（"Size of the context window for the model, in tokens."）与 `model_auto_compact_token_limit`；`models-manager/src/model_info.rs` 中 `config.model_context_window` 覆盖模型窗口并按 `max_context_window` 收敛。不在内置目录中的模型走兜底描述符并告警 `Unknown model {slug} is used. This will use fallback model metadata.`，兜底 `context_window: 272000`、`input_modalities` 取默认值、`supported_reasoning_levels` 为空集。schema 中无模型输出上限键（`tool_output_token_limit` 是工具输出截断，语义不同）。
+- **Claude Code**：env-vars 文档两条正对网关场景——`CLAUDE_CODE_MAX_CONTEXT_TOKENS`（原文：经 `ANTHROPIC_BASE_URL` 路由到「窗口与内置不符」的模型时用它纠正）、`CLAUDE_CODE_MAX_OUTPUT_TOKENS`（原文：对不认识的网关模型 ID 默认 32000）。两者都能写进我们已在用的 `settings.json` → `env`（该块覆盖同名 shell 变量）。相关旋钮另有 `CLAUDE_CODE_AUTO_COMPACT_WINDOW`（100000–1000000）、`CLAUDE_AUTOCOMPACT_PCT_OVERRIDE`、`CLAUDE_CODE_DISABLE_UNKNOWN_MODEL_WINDOW_ENFORCEMENT`（文档标注需 2.1.223+，本机 2.1.185）。无图像能力字段。
+- **OpenCode v2**：v2 providers 文档的模型字段表含 `limit`（Context/input/output token limits）与 `capabilities`（tools + 接受的输入/输出媒体类型）；models 页明确目录外模型按 200000 上下文、32000 输出、text+image 输入兜底，并注明「These are fallback assumptions, not detected capabilities. Set accurate capabilities and limit values when known」。隔离实测（v2.0.18，项目级 `opencode.json`）：写入 `limit{context:128000,output:16000}` 与 `capabilities{tools,input:[text,image],output:[text]}` 后 `opencode models` 注册成功、`opencode debug config` 原样解析出这些字段；同批写入的 v1 风格 `reasoning: true` 与 `temperature` 未出现在解析结果中（进一步印证 v2 不消费这两个键，与能力表不收思考等级的现状一致）。
+- **Pi**：本地 `@earendil-works/pi-ai/dist/types.d.ts` 的 `contextWindow`/`maxTokens`/`reasoning` 与 apply 写入一致，`input` 模态见 models 文档示例；四类元数据无缺口。更细的 `inputLimits`/`promptCache`/`compat.*` 不属本次四个维度，按模型的 `modelThinkingLevels` 也不写（用全局 `defaultThinkingLevel`）。
+
+影响与取舍（已采纳，见下节）：
+
+- 三个工具对我们接入的聚合模型都按固定兜底值处理窗口/输出（Codex 272000、OpenCode 200000 与 32000、Claude 输出 32000），与模型真实值不符时自动压缩时机与输出上限失准，性质同 Grok 的 200000 兜底。
+- Codex 与 Claude Code 的窗口/输出是「活动模型」级全局配置，不是 per-model：Reins 在这两处都是单活动 provider 且 `model` 写死为所选默认模型，因此写默认模型的窗口是自洽的；用户在工具内切换到其他模型时会失配，若采纳需先定策略（只写默认模型、限制单模型场景，或用 Claude 的 `modelSettings` 分担）。
+- OpenCode 的 `capabilities.input` 正好对上已有元数据 `supports_images`。
+
+未验证：
+
+- OpenCode `limit`/`capabilities` 只验证到被运行时解析进配置（注册 + `debug config`），是否真正驱动压缩与输出上限未做请求级验证。
+- Claude 两个 env 变量本次仅依据官方文档，未做真实网关端到端验证。
+- Codex 兜底描述符 `supported_reasoning_levels` 为空集时，已写入的 `model_reasoning_effort` 在请求层是否被采纳未验证（配置加载层此前已验证可加载）。
+
+## 2026-09-28 补充（二）：三处落点与 OpenCode 思考等级的落地
+
+用户判定上一节的「有落点未写」是缺陷并要求修复，OpenCode 另指出思考等级可配。核对与实测结论：
+
+- OpenCode 思考等级**确实可配**，但写法按协议分叉（上一轮只看到 `compatibility.reasoningField`，漏了模型级 `settings`）：
+  - `providers.<id>.models.<modelId>.settings.reasoningEffort`（官方 models 页字段表：「settings — Provider-package options such as baseURL or reasoningEffort」）。实测（v2.0.18 + 本地监听器）：写入 `"reasoningEffort": "xhigh"` 后，`opencode run` 发出的 `POST /v1/chat/completions` 请求体带 `reasoning_effort: "xhigh"`。✅ 上线。
+  - anthropic 包不消费 `reasoningEffort`（同法实测：请求体只有 model/system/messages/stream/max_tokens）；该包的思考入口是 `settings.thinking`：`{"type":"enabled","budgetTokens":16000}` → 请求体带 `thinking: {type:"enabled", budget_tokens:16000}`；`{"type":"disabled"}` → 带 `thinking: {type:"disabled"}`；**只写 `{"type":"enabled"}` 不带预算时请求不发出**（实测 captured=0），即 enabled 必须带预算。
+- 处置（已实现，测试见处置结果第 9–12 条）：
+  - Codex：写默认模型的 `model_context_window`；元数据缺失时仅在替换 Reins 自身配置的路径上清除，移除时按「值仍等于该模型元数据」归属清理。
+  - Claude Code：写 `env.CLAUDE_CODE_MAX_CONTEXT_TOKENS` 与 `env.CLAUDE_CODE_MAX_OUTPUT_TOKENS`（十进制字符串，官方同类变量示例为纯整数）；移除时随 `env` 块一并清掉。
+  - OpenCode：逐模型写 `limit{context,output}`（两项齐全才写，官方 schema 里二者成对必填）、`capabilities{tools,input,output}`（`supports_images` 决定输入模态）、`settings` 思考设置。
+  - OpenCode 能力表放行思考等级 none/minimal/low/medium/high/xhigh（`max` 不放行：openai 系无该档）；anthropic 包的档位→预算取固定阶梯 minimal 1024 / low 2048 / medium 8192 / high 16384 / xhigh 与 max 32768，`off` 写 `disabled`。该阶梯官方与 OpenCode 都未定义，属 Reins 的产品取值，换档位即换思考预算；**待定**：这组数值待确认（见后续动作第 6 条）。
+  - 能力表 `unwritten_model_fields` 同步收窄：Codex 变「最大输出、图像输入、推理能力」，Claude 变「图像输入、推理能力」，OpenCode 与 Pi 为空，Grok 不变。
+
+证据层级：OpenCode 为请求级实测（用 Reins 实际产出的 `opencode.json`，仅替换 baseURL 指向本地监听器）；Codex 为源码/schema 级（本机 `doctor` 不做未知键校验，未取得运行时证据）；Claude 为官方文档级（未做真实网关验证）。
+
+## 2026-09-28 补充（三）：magpie 对照偏差修复
+
+起因：对照 yetone/magpie README（模型/Provider 切换工具，本地网关路线）逐项核对 Reins 五工具写入口径，发现 5 处偏差。处置：修 4 项，1 项（无损编辑）经评估放弃立项（见后续动作第 7 条）。本节为修复项的契约依据与证据分级。
+
+### Codex `model_catalog_json`（新增写入口径）
+
+- 语义：官方 config schema 描述为「applied on startup only」的绝对路径；codex 源码（`core/src/config/mod.rs`）注释明确 **When set, this replaces the bundled catalog for the current process**——整体替换内置目录，非合并。应用期间 Codex 内置模型从选择器消失，移除平台后恢复（magpie 同款取舍）。
+- 文件格式：`ModelsResponse`（`{"models":[ModelInfo...]}`，`protocol/src/openai_models.rs`）。**空 models 数组报错**；文件解析失败会让 codex 配置加载整体失败——因此 remove 清键、apply 先写目录文件再写 config.toml。
+- 必填字段（0.145.0 隔离 CODEX_HOME 实测，隔离环境 `codex exec` 加载验证）：`supports_parallel_tool_calls` 无 serde default、缺字段即报 `missing field`；其余必填项按源码逐项核对。magpie 当前源码（internal/codexcat）未写该字段，其条目在 0.145.0 上无法加载——不可照抄。
+- `base_instructions` 是逐模型系统提示，空串即发空提示词。Reins 取 codex 0.145.0 内置兜底提示词（`codex-rs/models-manager/prompt.md`，Apache-2.0，嵌入 `apps/codex_prompt.md`）：未知模型今天经 fallback 拿到的就是这份，切换到目录条目行为零变化。
+- 条目取值对齐 fallback 元数据（`models-manager/src/model_info.rs` 的 `model_info_from_slug`：shell_type=default、truncation bytes/10000、supports_parallel_tool_calls=false），仅 visibility 改 list（fallback 是 none，即今日 Reins 模型在 Codex 选择器中不可见的直接原因）；思考档位优先取模型元数据 `reasoning_levels`，仅声明 `reasoning=true` 时给 low/medium/high 保守三档。
+
+### Claude Code 认证键改为 `ANTHROPIC_AUTH_TOKEN`（用户决策，方案 c）
+
+- 两个都是官方键：`ANTHROPIC_API_KEY` 走 `X-Api-Key` 头，`ANTHROPIC_AUTH_TOKEN` 走 `Authorization: Bearer` 头。改后只认 Bearer 的网关也能通；双写不可行（两凭据头并存会被部分网关拒绝，官方 API 也只接受其一）。
+- 迁移：apply 写 AUTH_TOKEN 并清掉旧版 Reins 写的 `ANTHROPIC_API_KEY`（应用态下认证键本就由 Reins 管理，与旧版覆写 API_KEY 值同权）；remove 一并清理两个键；反读检测到遗留 API_KEY 时提示「重新应用可清理」。
+
+### Claude Code 支持 `CLAUDE_CONFIG_DIR`
+
+- 官方支持该变量重定位配置目录；magpie 同样支持。实现与 `CODEX_HOME` / `PI_CODING_AGENT_DIR` / `GROK_HOME` 同一模式（`ToolEnv` 字段 + 路径解析优先级）。
+
+### OpenCode v2 支持 `opencode.jsonc`
+
+- 加载语义（v2.0.18 源码级，`packages/core/src/config/discovery.ts` + `config.ts`）：两个候选文件**都被加载**，顶层键按「最后定义者整键生效」（findLast）合并，即 `.jsonc` 覆盖 `.json` 的同名顶层键，非深合并；OpenCode 自身更新器（config.update）也选已存在的最高优先级文件、无文件时默认创建 `.jsonc`。
+- 运行时证据：项目级 `opencode.jsonc`（带注释）被 v2.0.18 `opencode models` 正常解析并列出探针模型。全局目录下 json/jsonc 并存优先级**未做运行时验证**（重定向 USERPROFILE/APPDATA 的隔离环境里 opencode 后台服务起不来，`Timed out waiting for background service`），按源码级证据实现。
+- 实现：读取两个文件（`.jsonc` 走 json5 解析），被覆盖文件里的条目照常展示并注明不生效；写入目标选已存在的最高优先级文件（`.jsonc` 优先），apply 顺带清理留在低优先级文件里的旧注册键；remove/remove_external 跨两个文件清理。写入 `.jsonc` 时按严格 JSON 序列化（注释丢失属无损编辑问题，已评估放弃立项，见后续动作第 7 条，diff 预览可见）。
+
+### 证据分级汇总
+
+| 项 | 证据层级 |
+| --- | --- |
+| Codex 目录文件格式与必填字段 | 隔离环境实测（codex 0.145.0，缺字段负对照 + 补齐正对照）+ 源码 |
+| Codex catalog 整体替换语义 | 源码级（未验证选择器实际表现，属交互层） |
+| Codex 提示词取自 0.145.0 兜底 | 源码级（文件即 fallback 引用的同一份 prompt.md） |
+| Claude AUTH_TOKEN 语义 | 官方 env-vars 文档级（未做真实 Bearer-only 网关端到端） |
+| CLAUDE_CONFIG_DIR | 官方文档级（官方支持该变量；Reins 侧路径解析有单测） |
+| OpenCode jsonc 解析 | 运行时实测（项目级）；全局并存优先级为源码级 |
+
+
+## 2026-09-29 补充（四）：codex 0.158.0 复验
+
+本机 codex 已由 0.145.0 升至 **0.158.0**（`codex --version`）。上面各节涉及 codex 的结论都基于 0.145.0，故按 0.158.0 复验目录文件这条新增链路。
+
+- **目录文件仍可加载**：隔离 `CODEX_HOME` + 我们 apply 生成的条目字段集（含 `supports_parallel_tool_calls`）+ `codex doctor`，无配置加载错误。
+- **提示词确实生效**：本地假端点（HttpListener）捕获 0.158.0 发出的请求，请求体 `instructions` 字段等于目录条目的 `base_instructions`（标记串命中）。即「目录条目 → 线上系统提示」整链路在 0.158.0 成立。
+- **字段漂移**：0.158.0 的 `ModelInfo` 已无 `supports_parallel_tool_calls`（0.145.0 是必填）；该类型无 `deny_unknown_fields`，未知字段被忽略，文件照常解析——我们继续写该字段无害，但属 0.145 时代的遗留。
+- **`base_instructions` 降级为 legacy**：0.158.0 源码含 `promotes_legacy_base_instructions` 迁移，以及「`base_instructions` 与 `model_messages` 都缺」的报错分支；我们写的 legacy 形式被提升后生效。
+- **`model_catalog_json` 语义未变**：0.158.0 源码注释仍为 "When set, this replaces the bundled catalog for the current process"（整体替换）。
+- **新键 `model_instructions_file`**（"Optional path to a file containing model instructions"）：未来可替代「把提示词内嵌进每个目录条目」，目录文件更小、提示词单点维护；但它是配置级指令文件，对内置模型的覆盖范围需先确认，暂不改用。
+- **仍未复验**：选择器里内置模型消失/恢复的实际表现（`disable_response_storage` 的替代机制已查明并于同日处理完毕，见后续动作第 8 条）。
+
+
+## 2026-09-29 补充（五）：目录条目迁移到 0.158.0 口径（用户决策）
+
+补充（四）记录的字段漂移按用户决策落地：目录条目不再写 `supports_parallel_tool_calls`（0.158.0 已删除该字段），系统提示从 legacy 顶层 `base_instructions` 改写 `model_messages.instructions_template`（0.158.0 起的规范形式；源码注释明确 "instructions_template is literal text"，与旧形式语义等价，不再依赖 legacy 提升路径）。`model_instructions_file` 仍不采用（config 级键、对内置模型的覆盖范围未确认，见补充（四））。
+
+验证（本机隔离 `CODEX_HOME`，npm 包 @openai/codex@0.158.0，`codex --version` 自报 0.155.1 但行为与 rust-v0.158.0 源码一致）：
+
+- 新格式条目 `codex doctor` config loaded；本地假端点捕获请求体，`instructions` 字段等于条目 `instructions_template`（标记串命中），「条目 → 线上系统提示」整链路成立。
+- 追加 Reins 会写的变体字段（`context_window`、`default_reasoning_level`、`input_modalities` 含 image）后仍加载通过。
+- 单测 `codex_apply_writes_model_catalog_and_remove_clears_pointer` 同步改为断言新字段、且不写 `supports_parallel_tool_calls`。
+
+取舍：`base_instructions` 在 0.145.0 是必填字段（无 serde default），因此新格式在旧版 codex 上会让配置加载**整体失败**（非静默降级）——迁移后要求用户侧 codex 已支持 `model_messages`（0.155 / 0.158 实测支持，引入版本未逐版考证）；codex 更新节奏快（0.145 → 0.158 约一个月），不再兼顾旧版。
+
+
+## 2026-10-13 补充（六）：兜底提示词上游路径复验
+
+- 上游 rust-v0.158.0、rust-v0.162.1 的 `codex-rs/models-manager/prompt.md` 与 Reins 嵌入版（取自 0.145.0）**逐字节一致**（20903 字节，diff 为空）：两个月内该提示词零漂移。
+- 0.158.0 起协议层新增第二处引用：`codex-rs/protocol/src/prompts/base_instructions/default.md`（`BASE_INSTRUCTIONS_DEFAULT`，protocol/src/models.rs），与嵌入版同样逐字节一致。旧路径仍在，两路径并存；后续 diff 上游时应同时检查两处。
+- 对照 magpie（`internal/codexcat/codex_prompt.md`，7589 字节）嵌的是 per-model 提示词 `core/gpt-5.2-codex_prompt.md` 而非这份兜底；cc-switch 用手工 per-provider 模板。三工具都内嵌提示词拷贝，Reins 的「对齐兜底」口径不变。
+- 附带发现：cc-switch 源码（services/provider/codex_client_catalog.rs）记录 codex 0.159 起 TUI 默认连托管守护进程（`codex app-server --managed-daemon`），模型目录只在守护进程重启时重读——Reins apply 后已运行的 codex 不会自动读到新目录，已在应用弹窗加提示。
+
+## 2026-10-13 补充（七）：ZCode 纳管（provider_config.json 契约实证）
+
+- 落点 `~/.zcode/v2/provider_config.json`（v2 布局；无官方重定向变量，根走 Home）。官方 OAuth 登录不经该文件（凭据在 `~/.zcode/v2/credentials.json`，属 ZCode 自管敏感存储，适配器不读写）。
+- 格式实证（ZCode.app bundle `/Applications/ZCode.app/Contents/Resources/glm/zcode.cjs` 的 zod schema + 本机文件，2026-10-13）：
+  - `api.type` 枚举 `["anthropic-messages","openai-chat-completions","openai-responses"]`，三种协议全支持，拼写 kebab-case；
+  - `group` 枚举 `["standard-personal","zai-family","bigmodel-family"]`，Reins 写 `standard-personal`；
+  - `providerRules[]`：`providerId`（键）/ `templateId`（官方模板平台才有）/ `providerName` / `config.access{type:"api-key",apiKey}`（**key 明文内嵌该文件**）/ `config.api{type,baseUrl}`（自定义平台才有）/ `personalModelIds` / `modelOrder`；
+  - 模型元数据落 `modelConfigRules.providerModelRules[]` 的 `config`：`enabled`、`properties.contextWindow`、`properties.inputFormat.supportsImage`、`optionSpecs.maxOutputTokens.max`、`optionSpecs.reasoningLevel.values`；
+  - 官方内置模板库在 app 包 `config/provider/zcode-builtin.json`（templateRules，含内置 baseUrl/协议/builtinModelIds），与用户文件分离。
+- 源码复核（开源仓库 `zai-org/ZCode`，2026-10-13，替代此前 bundle 推断）：
+  - `reasoningLevel` 的完整结构在 `packages/shared/src/model-config.ts`：`{values: string[], map: string}`，两者都是可独立继承的稀疏 overlay 叶子。`values` 按语义强度低→高排列、非空、不重复，首项是辅助调用的最低公开档位；`map` 是受限 CEL 表达式（读同名变量 `reasoningLevel`），返回 RFC 7396 JSON Merge Patch。
+  - 档位词汇：关闭档拼 `"disabled"`（三种协议兜底都认；`"none"` 只在 chat-completions 兜底里被当关闭，anthropic-messages / openai-responses 会当普通 effort 透传），其余档位名原样透传成各家 effort。**Reins 只写 `values` 不写 `map`**：内置 `modelApiRules` 有按 `api.type` 的 `.*` 兜底 map（anthropic-messages 写 `thinking.type`+`output_config.effort`，chat-completions 写 `thinking.type`/`enable_thinking`/`reasoning_effort`/`reasoning.effort`，responses 写 `reasoning.effort`），稀疏 overlay 下自动继承；自编 CEL 只会引入第二份协议知识。
+  - 稀疏 overlay 语义（`packages/provider/src/config/model-config.ts` 的 `ConfigOverlay`）：apply 以同 (provider, model) 的既有规则为底，只改写自有叶子（contextWindow / inputFormat.supportsImage / maxOutputTokens.max / reasoningLevel.values），保留 `enabled` 等非自有叶子；不写 `enabled`（内置 `.*` 兜底默认启用，显式写会覆盖用户的启停选择）。
+  - 手动规则互斥：`personalModelConfigRulesSchema` 禁止同一 (provider, model) 同时出现在 `providerModelRules` 与 `manualProviderModelRules`（冲突会让整份配置校验失败）。用户已手动配置的模型 apply 时跳过不写；remove 时 `manualProviderModelRules` 同 providerId 一并清理，对齐 ZCode 自己的 `deletePersonalProvider`（`deleteExactForProvider` 覆盖两类规则）。
+- 语义：additive（`providerOrder` 数组多平台并存）；条目级替换（同名 reins- 条目覆盖）；默认模型是 ZCode 会话级选择、无落盘字段，不写；无工具级默认思考档位（档位是每模型值域 + 会话级选择），故 `supported_reasoning_levels` 为空。
+- 处置：✅ 新增 `apps/zcode.rs` 适配器（inspect/apply/remove/remove_external + 方言表 `ZCODE_PROTOCOL`、`ZCODE_REASONING`），`ProviderAppId` 加 `Zcode`（6→7），agents 清单 `provider_app: Some(Zcode)`；思考档位随模型元数据写入（values 排序去重、off 拼 `disabled`），`unwritten_model_fields` 清空；新增测试 `zcode_apply_writes_entry_and_reads_back`、`zcode_reapply_replaces_models_and_keeps_user_entries`、`zcode_apply_sorts_reasoning_values_and_spells_off_as_disabled`、`zcode_apply_derives_reasoning_values_from_boolean_flag`、`zcode_apply_skips_manual_models_and_preserves_user_leaves`、`zcode_remove_clears_entry_and_keeps_external`、`zcode_remove_rejects_modified_entry`、`zcode_remove_external_deletes_user_entry`、`zcode_off_level_spells_disabled`。
+- `unverified`：写入形状按仓库 schema 与官方内置规则对齐，但未跑过 ZCode 自身加载校验（未在真实 ZCode 里应用过 reins 生成的 provider_config.json）。
+
+## 处置结果
+
+1. ✅ Pi `off` 档：单独映射为 `"off"`（pi.rs `thinking_level`），新增测试 `pi_off_level_writes_off`。
+2. ✅ Claude 能力表收窄为官方值域 low/medium/high/xhigh/max，`off/minimal` 不再放行。
+3. ✅ OpenCode 能力表思考等级清空（apply 本就不消费、文档未确认写法），弹窗不再出现该选项。
+4. ✅ Codex 能力表收掉 off 档（写入 "none" 无文档依据；minimal 保留，用户决策 A），新增测试 `codex_off_reasoning_level_is_rejected`。
+5. ✅ Grok `Max` 档映射写出 `"xhigh"`（2026-09-27：Grok UI 无 max 档、messages 后端请求层 max 与 xhigh 等价），新增测试 `grok_max_reasoning_writes_xhigh`；`messages` 后端 base_url 写入补 `/v1`，新增测试 `grok_anthropic_base_url_gets_v1_suffix_and_inspect_stays_applied`。
+6. ✅ OpenCode `openai_responses` 恢复放行（2026-09-27 v2.0.18 复测 `openai/responses` 端到端可用；`openai-compatible/responses` 仍有包解析缺陷，不采用），apply 写 `openai/responses`，新增测试 `opencode_apply_responses_uses_openai_responses_package`。
+7. ✅ Grok 逐模型补写 `context_window`（有元数据时）与 `supports_reasoning_effort = true`（`reasoning` 为真时），新增测试 `grok_apply_writes_context_window_and_reasoning_support`、`grok_apply_omits_absent_model_metadata`（2026-09-27，依据见上节）。
+8. ✅ 能力表新增 `unwritten_model_fields`，`ProviderAppState` 下发到应用弹窗明示不写入的模型元数据（Codex/Claude/OpenCode 四类全列、Grok 列最大输出与图像输入、Pi 为空），新增测试 `app_states_declare_unwritten_model_fields` 与前端 `model.test.ts` 用例。
+9. ✅ Codex 写 `model_context_window`（默认模型元数据；替换时无元数据则清、移除时按元数据归属清），新增测试 `codex_apply_writes_and_clears_model_context_window`、`codex_remove_clears_model_context_window`。
+10. ✅ Claude Code 写 `env.CLAUDE_CODE_MAX_CONTEXT_TOKENS` / `env.CLAUDE_CODE_MAX_OUTPUT_TOKENS`，移除时随 `env` 清掉，新增测试 `claude_apply_writes_context_and_output_env_and_remove_clears_them`。
+11. ✅ OpenCode 逐模型写 `limit{context,output}` 与 `capabilities{tools,input,output}`（limit 两项齐全才写、模态跟随 `supports_images`），新增测试 `opencode_apply_writes_model_limit_and_capabilities`、`opencode_apply_omits_incomplete_limit_and_narrows_modalities`。
+12. ✅ OpenCode 思考等级落地：能力表放行 none/minimal/low/medium/high/xhigh，openai 系写 `settings.reasoningEffort`、anthropic 包写 `settings.thinking`（档位→预算固定阶梯，`off` 写 disabled），新增测试 `opencode_apply_writes_reasoning_effort_or_thinking_budget`；能力表清单同步收窄（依据见 2026-09-28 补充（二））。
+13. ✅ Codex 写 `model_catalog_json` + `$CODEX_HOME/reins-models.json`（条目字段对齐 0.145.0 兜底元数据、visibility=list、base_instructions 用内置兜底提示词），移除时键随条目清、用户自有指向不动，新增测试 `codex_apply_writes_model_catalog_and_remove_clears_pointer`、`codex_remove_keeps_user_model_catalog_json`（2026-09-28，依据见补充（三）；2026-09-29 条目字段口径迁移至 0.158.0，见补充（五））。
+14. ✅ Claude Code 认证键改写 `ANTHROPIC_AUTH_TOKEN`，apply 清理旧版 `ANTHROPIC_API_KEY`，反读对遗留键给提示，新增测试 `claude_apply_cleans_legacy_api_key_and_notes_it`（2026-09-28，用户决策方案 c）。
+15. ✅ Claude Code 支持 `CLAUDE_CONFIG_DIR` 重定位（`ToolEnv` 统一模式），新增测试 `claude_honors_claude_config_dir`（2026-09-28）。
+16. ✅ OpenCode v2 支持 `opencode.jsonc`：双文件读取（json5 解析）、覆盖标注、写入目标选最高优先级已存在文件、apply 迁移低优先级文件里的旧注册键，新增测试 `opencode_reads_and_writes_jsonc_when_only_jsonc_exists`、`opencode_jsonc_takes_precedence_and_apply_migrates_registration`（2026-09-28）。
+
+## 后续动作
+
+1. ~~真机验证~~ 已完成，结果见上节。
+2. ~~修复 ❌ 三项~~ 已完成，见处置结果。
+3. plan 文档 unverified 项已同步更新（2026-09-25）。
+4. ~~待定：OpenCode 在 Windows 上不认 `XDG_CONFIG_HOME`~~ 已解决：路径解析去掉 XDG 优先级，统一按 `HOME/.config/opencode` 解析（2026-09-25）。
+5. ~~待决定：是否补写 Codex / Claude Code / OpenCode 的模型窗口与输出落点~~ 已采纳并实现（2026-09-28），见 2026-09-28 补充（二）与处置结果第 9–12 条；plan 文档 §6 写入口径已同步。
+6. ~~待定（产品取值）：OpenCode anthropic 包的档位→思考预算阶梯~~ 已查证并收敛（2026-09-29，依据 models.dev API 数据）：anthropic 旧模型（haiku-4.5 / sonnet-4.5 / sonnet-4.6 等）budget_tokens 仅标 `min: 1024`、无推荐阶梯，与现阶梯 minimal=1024 一致；新模型（opus-4.7 起、opus-5 / sonnet-5 / fable-5）已转 effort 参数，值域 low/medium/high/xhigh/max。官方无预算阶梯可抄，维持 Reins 现值（minimal 1024 / low 2048 / medium 8192 / high 16384 / xhigh 32768，`off` 写 disabled）。留意：OpenCode anthropic 包若日后支持 effort 透传，可改为直接透传档位、去掉自定预算（改动范围仅 `opencode.rs` 的 `thinking_budget_tokens` 与对应测试）。
+7. 不做：工具配置的无损编辑（保留注释/键序），2026-09-28 评估后放弃立项（分三层实现，合计约一周工作量，收益集中在 codex/grok 的 config.toml 注释与全局键序；diff 预览为现行缓解）。
+8. ~~待处理：codex 启动警告 `disable_response_storage is ignored`~~ 已处理（2026-09-29）：该键在用户自己的 `~/.codex/config.toml` 第 1 行，不在 Reins 写入面内。0.158.0 源码（core/src/client.rs）构造 Responses API 请求时 `store: false` 为硬编码、无任何配置开关——即「不存储服务端响应」已是无条件默认，删除该键无隐私行为变化。已从用户配置中删除该行（字节级只动这一行），`codex doctor` 修前报 `startup warning ... is ignored`、修后警告消失且 config loaded。
+9. ~~待观察：目录条目字段集随 codex 版本漂移~~ 已迁移（2026-09-29）：条目按 0.158.0 口径改写（删 `supports_parallel_tool_calls`、`base_instructions` → `model_messages.instructions_template`），见 2026-09-29 补充（五）。`model_instructions_file` 因覆盖范围未确认继续不采用。

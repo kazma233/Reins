@@ -1,0 +1,77 @@
+.app-mode-rail {
+  display: flex;
+  flex: 0 0 auto;
+  flex-direction: column;
+  gap: 4px;
+  width: 176px;
+  padding: 12px 8px;
+  border-right: 1px solid var(--color-hairline);
+  background: var(--color-surface-soft);
+}
+
+/* 窄列表:每行图标 + 名字,整行可点;不再是一个个方形图标按钮 */
+.app-mode-rail__button {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: var(--radius-button);
+  background: transparent;
+  color: var(--color-body);
+  font-size: var(--button-font-size);
+  text-align: left;
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    background 0.18s ease,
+    color 0.18s ease;
+  font-weight: var(--button-font-weight);
+}
+
+/* 图标收在容器里:条件链(v-if/v-else-if)必须相邻,名字放在容器之后 */
+.app-mode-rail__icon {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+}
+
+.app-mode-rail__button svg {
+  width: 18px;
+  height: 18px;
+}
+
+@media (hover: hover) {
+  .app-mode-rail__button:hover {
+    background: var(--color-surface-strong);
+    color: var(--color-ink);
+  }
+}
+
+/* 选中态用淡蓝 tint 而非实心蓝:左栏是常驻结构,实心蓝会让它永远比内容抢眼 */
+.app-mode-rail__button.is-active {
+  background: var(--color-primary-tint);
+  color: var(--color-primary);
+  font-weight: 600;
+}
+
+.app-mode-rail__button:focus-visible {
+  outline: 2px solid var(--color-focus-ring);
+  outline-offset: 2px;
+}
+
+/* 关于入口推到底部,与上面的模式列表分开 */
+.app-mode-rail__footer {
+  display: flex;
+  margin-top: auto;
+  padding-top: 8px;
+  flex-direction: column;
+  gap: 4px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .app-mode-rail__button {
+    transition: none;
+  }
+}

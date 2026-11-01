@@ -1,0 +1,1011 @@
+use std::collections::{HashMap, HashSet};
+use std::fs;
+use std::io::BufRead;
+use std::path::{Path, PathBuf};
+use std::process::Command;
+use std::sync::Arc;
+
+use anyhow::{Context, Result};
+use rusqlite::Connection;
+use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
+use walkdir::WalkDir;
+
+use super::family_index::{
+    Family, FamilyRow, OrphanPolicy, ParentChainRow, group_families_by_parent_chain,
+};
+use super::family_timeline::FamilyAgentLabel;
+use super::reader_engine::{
+    FamilyReader, FamilySpec, Freshness, MarkerShape, MemberTimeline, OverviewCounts, ReaderEngine,
+    RowErrorPolicy, scan_files,
+};
+use super::transcript;
+use super::{
+    ContentBlock, DeletePlanAction, ModelTally, SessionEvent, SessionMessage, SessionModel,
+    SessionSummary, SessionTokenUsage, SourceApp, SummaryAccumulator, TimelineRecord,
+    UsageHourBuckets, delete::{DeletePlanInput, run_official_cli},
+};
+
+// 归档会话的存放目录,与活跃会话的 sessions/ 并列在 CODEX_HOME 下;上游
+// 归档/取消归档都是在两者之间 rename 文件(thread-store/local/archive_thread.rs),
+// 所以文件所在目录就是归档状态的权威。
+const ARCHIVED_SESSIONS_SUBDIR: &str = "archived_sessions";
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub(crate) struct CodexSessionRow {
+    path: PathBuf,
+    summary: SessionSummary,
+    parent_session_id: Option<String>,
+    forked_from_id: Option<String>,
+    agent_nickname: Option<String>,
+    agent_role: Option<String>,
+    // resume 产生的续跑段：与原始段共享 session id，靠 session_meta 里的
+    // history_base 区分。family root 必须选原始段，否则标题取自续跑段的
+    // 首条消息（通常是"继续"），且选哪一段取决于文件枚举顺序、不确定。
+    is_resume_segment: bool,
+}
+
+type CodexSessionFamily = Family<CodexSessionRow>;
+
+impl ParentChainRow for CodexSessionRow {
+    fn chain_id(&self) -> &str {
+        &self.summary.source_session_id
+    }
+
+    fn parent_id(&self) -> Option<&str> {
+        self.parent_session_id.as_deref()
+    }
+}
+
+impl FamilyRow for CodexSessionRow {
+    fn member_path(&self) -> std::borrow::Cow<'_, Path> {
+        std::borrow::Cow::Borrowed(&self.path)
+    }
+
+    fn family_root_id(&self) -> &str {
+        &self.summary.source_session_id
+    }
+
+    fn member_id(&self) -> &str {
+        &self.summary.source_session_id
+    }
+
+    fn member_created_at(&self) -> Option<i64> {
+        self.summary.created_at
+    }
+
+    fn member_updated_at(&self) -> Option<i64> {
+        self.summary.updated_at
+    }
+
+    fn member_tie_breaker(&self) -> std::borrow::Cow<'_, str> {
+        std::borrow::Cow::Borrowed(&self.summary.source_session_id)
+    }
+}
+
+#[derive(Clone)]
+pub(crate) struct CodexSpec;
+
+impl FamilySpec for CodexSpec {
+    type Row = CodexSessionRow;
+
+    fn app(&self) -> SourceApp {
+        SourceApp::Codex
+    }
+
+    fn label(&self) -> &'static str {
+        "Codex"
+    }
+
+    fn scan_root(&self, root: &Path) -> PathBuf {
+        root.join("sessions")
+    }
+
+    fn list_rows(
+        &self,
+        scan_root: &Path,
+        _cache: &super::rows_cache::RowsDb,
+    ) -> Result<Vec<CodexSessionRow>> {
+        let mut rows = Vec::new();
+        for root in transcript_roots(scan_root) {
+            rows.extend(scan_files(
+                rollout_files_in(&root)?,
+                parse_session_index_row,
+                RowErrorPolicy::Abort,
+                "Codex",
+            )?);
+        }
+        Ok(rows)
+    }
+
+    // 归档与压缩都改文件路径:归档把 rollout 在 sessions/ 与 archived_sessions/
+    // 之间移动,压缩是原地改名。两者只改父目录 mtime,引擎默认的「jsonl 文件
+    // mtime 最大值」看不见,所以 codex 自己走一遍两个根的整棵树。
+    fn index_freshness(&self, scan_root: &Path) -> Result<Freshness> {
+        let mut latest = 0;
+
+        for root in transcript_roots(scan_root) {
+            if !root.is_dir() {
+                continue;
+            }
+            latest = latest.max(crate::support::time::file_modified_timestamp_millis(&root)?);
+            // 遍历期间文件可能正好被压缩或归档搬走,取不到 metadata 的条目跳过
+            // 即可——搬运本身就会让父目录 mtime 变化,从而触发下一次重建。
+            for entry in WalkDir::new(&root)
+                .min_depth(1)
+                .into_iter()
+                .filter_map(std::result::Result::ok)
+            {
+                if let Ok(stamp) =
+                    crate::support::time::file_modified_timestamp_millis(entry.path())
+                {
+                    latest = latest.max(stamp);
+                }
+            }
+        }
+
+        Ok(Freshness::Stamp(latest))
+    }
+
+    fn group_families(&self, rows: Vec<CodexSessionRow>) -> Result<Vec<CodexSessionFamily>> {
+        // 孤儿策略:父链中断时保留最后已知 id,孤儿挂靠最近的存活祖先
+        //(与 opencode/zcode 认领缺失 id 的语义不同,见 family_index)。
+        Ok(group_families_by_parent_chain(
+            rows,
+            OrphanPolicy::KeepLastKnown,
+            segment_age_root,
+        ))
+    }
+
+    fn parse_full_summary(&self, path: &Path) -> Result<SessionSummary> {
+        parse_full_session_summary(path)
+    }
+
+    // 索引行只读到首行 session_meta 即停,成员 usage 只能经路径级缓存取
+    // 整文件解析结果;resume 段与子代理线程的消耗并入 family 统计。
+    fn family_usage(
+        &self,
+        engine: &ReaderEngine<Self>,
+        family: &CodexSessionFamily,
+    ) -> Result<Option<SessionTokenUsage>> {
+        let mut total = None;
+        for row in &family.members {
+            if let Some(usage) = engine.path_summary(&row.path)?.token_usage {
+                super::merge_token_usage(&mut total, usage);
+            }
+        }
+        Ok(total)
+    }
+
+    // 与 family_usage 同因:索引行只读首行,拿不到 turn_context 里的模型,
+    // 只能逐成员走 path_summary(命中摘要缓存)。子代理线程常换模型,合并
+    // 口径与 token 求和一致。
+    fn family_models(
+        &self,
+        engine: &ReaderEngine<Self>,
+        family: &CodexSessionFamily,
+    ) -> Result<Vec<SessionModel>> {
+        let mut tally = ModelTally::default();
+        for row in &family.members {
+            tally.absorb(&engine.path_summary(&row.path)?.models);
+        }
+        Ok(tally.into_models())
+    }
+
+    // 单次扫描产出双半,替代原先 messages/events 各扫一遍文件。
+    fn load_members(
+        &self,
+        _scan_root: &Path,
+        members: &[CodexSessionRow],
+    ) -> Result<Vec<MemberTimeline>> {
+        members
+            .iter()
+            .map(|row| {
+                let mut messages = Vec::new();
+                let mut events = Vec::new();
+                // provider 由 session_meta 声明(文件首行),模型由 turn_context
+                // 按轮声明:该轮之后的用户输入与助手输出都归它,直到下一次声明。
+                let mut provider: Option<String> = None;
+                let mut current_model: Option<SessionModel> = None;
+
+                for (index, line) in transcript::open_lines(&row.path)?.lines().enumerate() {
+                    let value = super::parse_json_line(&line?)?;
+                    match super::json_type(&value) {
+                        Some("session_meta") => {
+                            provider = super::json_string(&value["payload"], &["model_provider"]);
+                        }
+                        Some("turn_context") => {
+                            current_model = super::json_string(&value["payload"], &["model"])
+                                .map(|model| SessionModel::new(provider.as_deref(), &model));
+                        }
+                        _ => {}
+                    }
+                    match parse_timeline_record(index, &value) {
+                        Some(TimelineRecord::Message(mut message)) => {
+                            message.model = current_model.clone();
+                            messages.push(message);
+                        }
+                        Some(TimelineRecord::Event(event)) => events.push(event),
+                        None => {}
+                    }
+                }
+
+                Ok(MemberTimeline {
+                    messages: Arc::new(messages),
+                    events: Arc::new(events),
+                })
+            })
+            .collect()
+    }
+
+    fn agent_name(&self, row: &CodexSessionRow) -> String {
+        family_member_display_name(row)
+    }
+
+    fn marker(&self, member_id: &str, row: &CodexSessionRow) -> MarkerShape {
+        let extras = json!({
+            "agent_nickname": row.agent_nickname,
+            "agent_role": row.agent_role,
+            "parent_session_id": row.parent_session_id,
+            "transcript_path": row.path.display().to_string(),
+        });
+
+        MarkerShape::labeled("Codex", member_id).extras(extras.clone(), extras)
+    }
+
+    fn root_extra_events(&self, family: &CodexSessionFamily) -> Result<Vec<SessionEvent>> {
+        Ok(subagent_lifecycle_events(
+            &family.root.path,
+            &family.members,
+        ))
+    }
+
+    fn overview_counts(&self) -> OverviewCounts {
+        OverviewCounts::Omitted
+    }
+
+    fn agent_label(&self, family: &CodexSessionFamily, row: &CodexSessionRow) -> FamilyAgentLabel {
+        if row.summary.source_session_id == family.root.summary.source_session_id {
+            FamilyAgentLabel::Root
+        } else if row.forked_from_id.is_some() {
+            FamilyAgentLabel::Derived(family_member_display_name(row))
+        } else {
+            FamilyAgentLabel::Child(family_member_display_name(row))
+        }
+    }
+}
+
+pub(crate) static BACKEND: FamilyReader<CodexSpec> = FamilyReader::new(CodexSpec, root);
+
+/// codex 的两个转录根:活跃的 `sessions/` 与并列的 `archived_sessions/`。
+/// 归档会话仍属于用户的会话历史,列表与用量都按同一份发现规则收进来。
+fn transcript_roots(scan_root: &Path) -> [PathBuf; 2] {
+    [
+        scan_root.to_path_buf(),
+        scan_root.with_file_name(ARCHIVED_SESSIONS_SUBDIR),
+    ]
+}
+
+/// usage 采集用的转录发现(engine 的列表扫描走 list_rows 的同名枚举)。
+pub(crate) fn transcript_paths(scan_root: &Path) -> Result<Vec<PathBuf>> {
+    let mut files = Vec::new();
+    for root in transcript_roots(scan_root) {
+        files.extend(rollout_files_in(&root)?);
+    }
+    Ok(files)
+}
+
+/// 单个根下的 rollout 文件:明文与压缩形态都算转录。同目录同时存在明文与
+/// 压缩兄弟文件时只认明文——上游读取侧就是明文优先
+/// (`rollout/src/compression.rs` should_skip_compressed_sibling),否则同一
+/// 会话会出两条行。
+fn rollout_files_in(root: &Path) -> Result<Vec<PathBuf>> {
+    if !root.is_dir() {
+        return Ok(Vec::new());
+    }
+
+    let mut plain = Vec::new();
+    let mut compressed = Vec::new();
+
+    for entry in WalkDir::new(root)
+        .into_iter()
+        .filter_map(std::result::Result::ok)
+    {
+        if !entry.file_type().is_file() {
+            continue;
+        }
+        let path = entry.into_path();
+        let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+
+        if name.ends_with(".jsonl") {
+            plain.push(path);
+        } else if name.ends_with(transcript::CODEX_COMPRESSED_SUFFIX) {
+            compressed.push(path);
+        }
+    }
+
+    let plain_paths: HashSet<PathBuf> = plain.iter().cloned().collect();
+    for path in compressed {
+        let sibling_name = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .and_then(|name| name.strip_suffix(transcript::CODEX_COMPRESSED_SUFFIX))
+            .map(|stem| format!("{stem}.jsonl"));
+
+        let shadowed = sibling_name
+            .map(|name| plain_paths.contains(&path.with_file_name(name)))
+            .unwrap_or(false);
+        if !shadowed {
+            plain.push(path);
+        }
+    }
+
+    Ok(plain)
+}
+
+// 归档会话由文件所在目录标识(见 ARCHIVED_SESSIONS_SUBDIR)。
+fn is_archived_path(path: &Path) -> bool {
+    path.parent()
+        .and_then(Path::file_name)
+        .and_then(|name| name.to_str())
+        == Some(ARCHIVED_SESSIONS_SUBDIR)
+}
+
+// 测试直接按根构造引擎实例:完全脱离进程 env 与全局锁,可并行。
+#[cfg(test)]
+pub(crate) fn engine_at(root: PathBuf, store_dir: PathBuf) -> ReaderEngine<CodexSpec> {
+    ReaderEngine::new(CodexSpec, root, store_dir)
+}
+
+pub(crate) fn root() -> Result<PathBuf> {
+    super::spec_root(SourceApp::Codex)
+}
+
+pub(crate) fn delete_session(source_session_id: &str) -> Result<()> {
+    let family = BACKEND.engine()?.family_for_id(source_session_id)?;
+
+    for member in &family.members {
+        // 官方删除 root 会级联整条 family；已被级联删除的成员（state 库
+        // threads 行已不存在）直接跳过，避免 not found 让整个删除流程报错。
+        if !thread_exists(&member.summary.source_session_id)? {
+            continue;
+        }
+
+        run_official_cli(
+            &format!("codex delete {}", member.summary.source_session_id),
+            Command::new("codex")
+                .arg("delete")
+                .arg("--force")
+                .arg(&member.summary.source_session_id),
+        )?;
+    }
+
+    BACKEND.engine()?.clear()?;
+    Ok(())
+}
+
+// 预演逐 id 列出官方命令;执行侧"已不在 state 库则跳过"是命令层面的幂等
+// 细节,预演仍展示完整意图。
+pub(crate) fn delete_plan(input: &DeletePlanInput) -> Result<Vec<DeletePlanAction>> {
+    Ok(input
+        .session_ids()
+        .into_iter()
+        .map(|id| DeletePlanAction::RunCli {
+            program: "codex".to_string(),
+            args: vec!["delete".to_string(), "--force".to_string(), id],
+        })
+        .collect())
+}
+
+// codex delete --force 非交互执行且只认 UUID；会话存在性以 state 库 threads 行为准。
+fn thread_exists(session_id: &str) -> Result<bool> {
+    for state_db in state_dbs()? {
+        let connection = Connection::open(&state_db)
+            .with_context(|| format!("Failed to open {}", state_db.display()))?;
+        let exists: Option<i64> = connection
+            .query_row("SELECT 1 FROM threads WHERE id = ?1", [session_id], |row| {
+                row.get(0)
+            })
+            .map(Some)
+            .or_else(|error| match error {
+                rusqlite::Error::QueryReturnedNoRows => Ok(None),
+                other => Err(other),
+            })
+            .with_context(|| format!("Failed to check Codex thread {session_id}"))?;
+        if exists.is_some() {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn parse_session_index_row(path: &Path) -> Result<CodexSessionRow> {
+    let mut summary = SummaryAccumulator::default();
+    let mut parent_session_id = None;
+    let mut forked_from_id = None;
+    let mut agent_nickname = None;
+    let mut agent_role = None;
+    let mut is_resume_segment = false;
+
+    for line in transcript::open_lines(path)?.lines() {
+        let value = super::parse_json_line(&line?)?;
+
+        if super::json_type(&value) != Some("session_meta") {
+            continue;
+        }
+
+        let payload = &value["payload"];
+        summary.session_id = summary
+            .session_id
+            .or_else(|| super::json_string(payload, &["id"]));
+        summary.cwd = summary
+            .cwd
+            .or_else(|| super::json_string(payload, &["cwd"]));
+        summary.created_at = summary.created_at.or_else(|| {
+            super::json_string(payload, &["timestamp"])
+                .and_then(|value| crate::support::time::parse_timestamp(&value))
+        });
+        summary.git_branch = summary
+            .git_branch
+            .or_else(|| super::json_string(payload, &["git", "branch"]))
+            .or_else(|| super::json_string(payload, &["git_branch"]))
+            .or_else(|| super::json_string(payload, &["gitBranch"]));
+        forked_from_id =
+            forked_from_id.or_else(|| super::json_string(payload, &["forked_from_id"]));
+        is_resume_segment = is_resume_segment || !payload["history_base"].is_null();
+        parent_session_id = parent_session_id.or_else(|| {
+            super::json_string(
+                payload,
+                &["source", "subagent", "thread_spawn", "parent_thread_id"],
+            )
+        });
+        agent_nickname = agent_nickname
+            .or_else(|| super::json_string(payload, &["agent_nickname"]))
+            .or_else(|| {
+                super::json_string(
+                    payload,
+                    &["source", "subagent", "thread_spawn", "agent_nickname"],
+                )
+            });
+        agent_role = agent_role
+            .or_else(|| super::json_string(payload, &["agent_role"]))
+            .or_else(|| {
+                super::json_string(
+                    payload,
+                    &["source", "subagent", "thread_spawn", "agent_role"],
+                )
+            });
+        break;
+    }
+
+    // 状态位取自扫描到的物理文件:压缩是命名形态,归档是所在目录。读取路径
+    // 统一经 transcript::resolve 归一,压缩/解压切换后旧路径仍能读。
+    summary.archived = is_archived_path(path);
+    summary.compressed = transcript::is_compressed(path);
+
+    let mut summary = super::build_summary(SourceApp::Codex, path, summary)?;
+    summary.updated_at = Some(crate::support::time::file_modified_timestamp_millis(
+        &transcript::resolve(path),
+    )?);
+
+    Ok(CodexSessionRow {
+        path: path.to_path_buf(),
+        summary,
+        parent_session_id,
+        forked_from_id,
+        agent_nickname,
+        agent_role,
+        is_resume_segment,
+    })
+}
+
+fn parse_full_session_summary(path: &Path) -> Result<SessionSummary> {
+    let mut summary = SummaryAccumulator {
+        archived: is_archived_path(path),
+        compressed: transcript::is_compressed(path),
+        ..Default::default()
+    };
+    let mut provider: Option<String> = None;
+
+    for line in transcript::open_lines(path)?.lines() {
+        let value = super::parse_json_line(&line?)?;
+        super::update_summary_timestamp(&mut summary, &value);
+
+        match super::json_type(&value) {
+            Some("session_meta") => {
+                let payload = &value["payload"];
+                provider = super::json_string(payload, &["model_provider"]);
+                summary.session_id = summary
+                    .session_id
+                    .or_else(|| super::json_string(payload, &["id"]));
+                summary.cwd = summary
+                    .cwd
+                    .or_else(|| super::json_string(payload, &["cwd"]));
+                summary.created_at = summary.created_at.or_else(|| {
+                    super::json_string(payload, &["timestamp"])
+                        .and_then(|value| crate::support::time::parse_timestamp(&value))
+                });
+                summary.git_branch = summary
+                    .git_branch
+                    .or_else(|| super::json_string(payload, &["git", "branch"]))
+                    .or_else(|| super::json_string(payload, &["git_branch"]))
+                    .or_else(|| super::json_string(payload, &["gitBranch"]));
+            }
+            Some("response_item") => {
+                let payload = &value["payload"];
+
+                if super::json_string(payload, &["type"]).as_deref() == Some("message") {
+                    let role = super::json_string(payload, &["role"]).unwrap_or_default();
+
+                    if role == "user" && summary.title.is_none() {
+                        summary.title = extract_title(payload.get("content"));
+                    }
+                }
+            }
+            Some("turn_context") => {
+                let payload = &value["payload"];
+                summary.cwd = summary
+                    .cwd
+                    .or_else(|| super::json_string(payload, &["cwd"]));
+                // 每轮一次声明,按出现次数计;同一次会话里换模型能同时体现。
+                if let Some(model) = super::json_string(payload, &["model"]) {
+                    summary.models.record(provider.as_deref(), &model);
+                }
+            }
+            Some("event_msg") => {
+                let payload = &value["payload"];
+
+                if super::json_string(payload, &["type"]).as_deref() == Some("token_count") {
+                    // total_token_usage 是本文件开跑以来的累计值而非增量,
+                    // 只认最后一条,按增量求和会把同一消耗重复计入。
+                    if let Some(usage) = payload
+                        .get("info")
+                        .and_then(|info| info.get("total_token_usage"))
+                        .and_then(codex_cumulative_usage)
+                    {
+                        summary.token_usage = Some(usage);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    super::build_summary(SourceApp::Codex, path, summary)
+}
+
+// Codex 的 input_tokens 含缓存命中部分,扣除后与其他来源的"新输入"口径
+// 对齐;output_tokens 本身已含 reasoning。
+pub(crate) fn codex_cumulative_usage(usage: &Value) -> Option<SessionTokenUsage> {
+    let input = super::json_u64(usage, "input_tokens")?;
+    let cached = super::json_u64(usage, "cached_input_tokens").unwrap_or_default();
+
+    Some(SessionTokenUsage {
+        input_tokens: input.saturating_sub(cached),
+        output_tokens: super::json_u64(usage, "output_tokens").unwrap_or_default(),
+        cache_read_tokens: cached,
+        cache_write_tokens: super::json_u64(usage, "cache_write_input_tokens").unwrap_or_default(),
+    })
+}
+
+// 用量曲线的小时桶:token_count 的 total_token_usage 是本文件开跑以来的
+// 累计值,相邻事件差分得到增量,归到事件时间戳所在小时。首事件视作从 0 起
+// 步;累计回退(compact 等重置)时差分钳 0,宁可少计也不重复计。
+pub(crate) fn usage_hours(path: &Path) -> Result<UsageHourBuckets> {
+    let mut buckets = UsageHourBuckets::new();
+    let mut previous = SessionTokenUsage::default();
+    // turn_context 声明该 turn 使用的模型;token_count 事件归属最近一次
+    // 声明的模型,文件开头未声明时只进总量。
+    let mut current_model: Option<String> = None;
+
+    for line in transcript::open_lines(path)?.lines() {
+        let value = super::parse_json_line(&line?)?;
+        if super::json_type(&value) == Some("turn_context") {
+            current_model = super::json_string(&value["payload"], &["model"]);
+            continue;
+        }
+        if super::json_type(&value) != Some("event_msg") {
+            continue;
+        }
+
+        let payload = &value["payload"];
+        if super::json_string(payload, &["type"]).as_deref() != Some("token_count") {
+            continue;
+        }
+
+        let Some(current) = payload
+            .get("info")
+            .and_then(|info| info.get("total_token_usage"))
+            .and_then(codex_cumulative_usage)
+        else {
+            continue;
+        };
+
+        let timestamp = value
+            .get("timestamp")
+            .and_then(Value::as_str)
+            .and_then(crate::support::time::parse_timestamp);
+
+        super::merge_usage_event(
+            &mut buckets,
+            timestamp.and_then(super::hour_key),
+            current_model.as_deref(),
+            SessionTokenUsage {
+                input_tokens: current.input_tokens.saturating_sub(previous.input_tokens),
+                output_tokens: current.output_tokens.saturating_sub(previous.output_tokens),
+                cache_read_tokens: current
+                    .cache_read_tokens
+                    .saturating_sub(previous.cache_read_tokens),
+                cache_write_tokens: current
+                    .cache_write_tokens
+                    .saturating_sub(previous.cache_write_tokens),
+            },
+        );
+        previous = current;
+    }
+
+    Ok(buckets)
+}
+
+// codex 的 root 挑选:同一 session id 可能有多个 rollout 文件（resume
+// 续跑段），members 此时还是文件枚举顺序，不能直接 find/first：root
+// 选取必须是输入顺序无关的，否则标题/路径随枚举序漂移。优先选原始段
+// （无 history_base），其余按 created_at、路径取最小保证确定。
+fn segment_age_root(root_id: &str, members: &[CodexSessionRow]) -> Option<CodexSessionRow> {
+    let by_segment_age = |row: &CodexSessionRow| {
+        (
+            row.is_resume_segment,
+            row.summary.created_at.unwrap_or(i64::MAX),
+            row.path.display().to_string(),
+        )
+    };
+    members
+        .iter()
+        .filter(|row| row.summary.source_session_id == root_id)
+        .min_by_key(|row| by_segment_age(row))
+        .cloned()
+        .or_else(|| {
+            members
+                .iter()
+                .min_by_key(|row| by_segment_age(row))
+                .cloned()
+        })
+}
+
+fn family_member_display_name(row: &CodexSessionRow) -> String {
+    row.agent_nickname
+        .clone()
+        .or_else(|| row.agent_role.clone())
+        .unwrap_or_else(|| row.summary.title.clone())
+}
+
+fn subagent_lifecycle_events(root_path: &Path, members: &[CodexSessionRow]) -> Vec<SessionEvent> {
+    let by_id = members
+        .iter()
+        .map(|row| (row.summary.source_session_id.clone(), row))
+        .collect::<HashMap<_, _>>();
+    let mut events = Vec::new();
+    let Ok(reader) = transcript::open_lines(root_path) else {
+        return events;
+    };
+
+    for (index, line) in reader.lines().enumerate() {
+        let Ok(line) = line else {
+            continue;
+        };
+        let Ok(value) = super::parse_json_line(&line) else {
+            continue;
+        };
+        let timestamp = value
+            .get("timestamp")
+            .and_then(Value::as_str)
+            .and_then(crate::support::time::parse_timestamp);
+
+        match super::json_type(&value) {
+            Some("event_msg") => {
+                let payload = &value["payload"];
+                let event_type = super::json_string(payload, &["type"]).unwrap_or_default();
+
+                if event_type == "collab_agent_spawn_end" {
+                    if let Some(child_id) = super::json_string(payload, &["new_thread_id"]) {
+                        if let Some(row) = by_id.get(&child_id) {
+                            events.push(SessionEvent {
+                                id: format!("codex-subagent-spawn-{index}"),
+                                kind: "subagent_spawned".to_string(),
+                                timestamp,
+                                summary: format!(
+                                    "Sub-agent spawned: {}",
+                                    family_member_display_name(row)
+                                ),
+                                payload: Some(super::record_payload(&value)),
+                                session_id: Some(row.summary.source_session_id.clone()),
+                            });
+                        }
+                    }
+                }
+
+                if event_type == "collab_close_end" {
+                    if let Some(child_id) = super::json_string(payload, &["receiver_thread_id"]) {
+                        if let Some(row) = by_id.get(&child_id) {
+                            events.push(SessionEvent {
+                                id: format!("codex-subagent-close-{index}"),
+                                kind: "subagent_closed".to_string(),
+                                timestamp,
+                                summary: format!(
+                                    "Sub-agent closed: {}",
+                                    family_member_display_name(row)
+                                ),
+                                payload: Some(super::record_payload(&value)),
+                                session_id: Some(row.summary.source_session_id.clone()),
+                            });
+                        }
+                    }
+                }
+            }
+            Some("response_item") => {
+                let payload = &value["payload"];
+                if super::json_string(payload, &["type"]).as_deref() != Some("message") {
+                    continue;
+                }
+                if super::json_string(payload, &["role"]).as_deref() != Some("user") {
+                    continue;
+                }
+
+                let Some(Value::Array(content)) = payload.get("content") else {
+                    continue;
+                };
+
+                for block in content {
+                    let Some(text) = super::json_string(block, &["text"]) else {
+                        continue;
+                    };
+                    let trimmed = text.trim();
+                    if !trimmed.starts_with("<subagent_notification>") {
+                        continue;
+                    }
+
+                    let Some(json_start) = trimmed.find('{') else {
+                        continue;
+                    };
+                    let Some(json_end) = trimmed.rfind('}') else {
+                        continue;
+                    };
+
+                    let Ok(notification) =
+                        serde_json::from_str::<Value>(&trimmed[json_start..=json_end])
+                    else {
+                        continue;
+                    };
+                    let Some(child_id) = super::json_string(&notification, &["agent_path"]) else {
+                        continue;
+                    };
+                    let Some(row) = by_id.get(&child_id) else {
+                        continue;
+                    };
+
+                    events.push(SessionEvent {
+                        id: format!("codex-subagent-notification-{index}"),
+                        kind: "subagent_notification".to_string(),
+                        timestamp,
+                        summary: format!(
+                            "Sub-agent notification: {}",
+                            family_member_display_name(row)
+                        ),
+                        payload: Some(super::record_payload(&value)),
+                        session_id: Some(row.summary.source_session_id.clone()),
+                    });
+                }
+            }
+            _ => {}
+        }
+    }
+
+    events
+}
+
+// raw 页展示的是原始记录：事件的 payload 一律给整条记录，摘要仍按内层字段生成。
+fn parse_timeline_record(index: usize, value: &Value) -> Option<TimelineRecord> {
+    let timestamp = value
+        .get("timestamp")
+        .and_then(Value::as_str)
+        .and_then(crate::support::time::parse_timestamp);
+
+    match super::json_type(value) {
+        Some("response_item") => {
+            let payload = &value["payload"];
+            let payload_type = super::json_string(payload, &["type"]).unwrap_or_default();
+
+            if payload_type == "message" {
+                let role =
+                    super::json_string(payload, &["role"]).unwrap_or_else(|| "unknown".to_string());
+                let mut blocks = parse_message_blocks(payload.get("content"), &role);
+
+                if role == "user" {
+                    blocks = super::sanitize_user_blocks(blocks);
+                }
+
+                if role == "developer" {
+                    return Some(TimelineRecord::Event(SessionEvent {
+                        id: format!("codex-event-{index}"),
+                        kind: "developer_message".to_string(),
+                        timestamp,
+                        summary: super::summarize_event("developer_message", payload),
+                        payload: Some(super::record_payload(value)),
+                        session_id: super::json_string(value, &["session_id"]),
+                    }));
+                }
+
+                if blocks.is_empty() {
+                    // 整条消息都是宿主注入的上下文（AGENTS.md 指令、environment_context）
+                    // 时保留原文：这类消息没有对话内容，但内容本身要能看；其余空消息
+                    // 仍退化成一行原始报文诊断块。
+                    blocks.push(
+                        super::injected_context_block(payload.get("content"), payload)
+                            .unwrap_or_else(|| {
+                                super::empty_message_block(
+                                    "Codex",
+                                    "content was empty after sanitization",
+                                    Some(payload.clone()),
+                                )
+                            }),
+                    );
+                }
+
+                return Some(TimelineRecord::Message(SessionMessage {
+                    id: format!("codex-message-{index}"),
+                    role,
+                    timestamp,
+                    blocks,
+                    model: None,
+                    session_id: super::json_string(value, &["session_id"]),
+                }));
+            } else if payload_type == "function_call" || payload_type == "function_call_output" {
+                return Some(TimelineRecord::Message(SessionMessage {
+                    id: format!("codex-tool-{index}"),
+                    role: "tool".to_string(),
+                    timestamp,
+                    model: None,
+                    blocks: vec![ContentBlock {
+                        kind: payload_type,
+                        text: super::tool_text(payload),
+                        tool_name: super::json_string(payload, &["name"]),
+                        tool_call_id: super::json_string(payload, &["call_id"])
+                            .or_else(|| super::json_string(payload, &["callId"])),
+                        is_error: None,
+                        payload: Some(payload.clone()),
+                    }],
+                    session_id: super::json_string(value, &["session_id"]),
+                }));
+            } else {
+                return Some(TimelineRecord::Event(SessionEvent {
+                    id: format!("codex-event-{index}"),
+                    kind: payload_type.clone(),
+                    timestamp,
+                    summary: super::summarize_event(payload_type.as_str(), payload),
+                    payload: Some(super::record_payload(value)),
+                    session_id: super::json_string(value, &["session_id"]),
+                }));
+            }
+        }
+        Some("event_msg") => {
+            let payload = &value["payload"];
+            let event_kind =
+                super::json_string(payload, &["type"]).unwrap_or_else(|| "event_msg".to_string());
+            return Some(TimelineRecord::Event(SessionEvent {
+                id: format!("codex-event-{index}"),
+                kind: event_kind.clone(),
+                timestamp,
+                summary: super::summarize_event(event_kind.as_str(), payload),
+                payload: Some(super::record_payload(value)),
+                session_id: super::json_string(value, &["session_id"]),
+            }));
+        }
+        Some("turn_context") | Some("session_meta") => {
+            let kind = super::json_type(value).unwrap_or("unknown").to_string();
+            return Some(TimelineRecord::Event(SessionEvent {
+                id: format!("codex-event-{index}"),
+                kind: kind.clone(),
+                timestamp,
+                summary: super::summarize_event(kind.as_str(), value),
+                payload: Some(super::record_payload(value)),
+                session_id: super::json_string(value, &["session_id"]),
+            }));
+        }
+        Some("task_complete") | Some("turn_aborted") | Some("task_started") => {
+            let kind = super::json_type(value).unwrap_or("unknown").to_string();
+            return Some(TimelineRecord::Event(SessionEvent {
+                id: format!("codex-event-{index}"),
+                kind: kind.clone(),
+                timestamp,
+                summary: super::summarize_event(kind.as_str(), value),
+                payload: Some(super::record_payload(value)),
+                session_id: super::json_string(value, &["session_id"]),
+            }));
+        }
+        _ => {
+            let kind = super::json_type(value).unwrap_or("unknown").to_string();
+            return Some(TimelineRecord::Event(SessionEvent {
+                id: format!("codex-event-{index}"),
+                kind,
+                timestamp,
+                summary: super::summarize_event("unknown", value),
+                payload: Some(super::record_payload(value)),
+                session_id: super::json_string(value, &["session_id"]),
+            }));
+        }
+    }
+}
+
+fn parse_message_blocks(content: Option<&Value>, role: &str) -> Vec<ContentBlock> {
+    match content {
+        Some(Value::Array(items)) => items
+            .iter()
+            .filter_map(|item| {
+                let kind =
+                    super::json_string(item, &["type"]).unwrap_or_else(|| "unknown".to_string());
+                let text = super::json_string(item, &["text"])
+                    .or_else(|| super::json_string(item, &["content"]))
+                    .or_else(|| super::json_string(item, &["thinking"]));
+
+                if role == "user" && text.as_deref().is_some_and(super::is_transport_message) {
+                    return None;
+                }
+
+                // 粘贴进来的图片（input_image / image）没有文本字段：把引用提成正文，
+                // 否则会被当成未支持块，只能看 JSON
+                if matches!(kind.as_str(), "input_image" | "image") {
+                    if let Some(reference) = super::image_reference(item) {
+                        return Some(ContentBlock {
+                            kind: "image".to_string(),
+                            text: Some(reference),
+                            tool_name: None,
+                            tool_call_id: None,
+                            is_error: None,
+                            payload: Some(item.clone()),
+                        });
+                    }
+                }
+
+                if text.is_none() && !matches!(kind.as_str(), "tool_use" | "tool_result") {
+                    return Some(super::unsupported_block("Codex", item));
+                }
+
+                Some(ContentBlock {
+                    kind,
+                    text,
+                    tool_name: super::json_string(item, &["name"]),
+                    tool_call_id: super::json_string(item, &["id"])
+                        .or_else(|| super::json_string(item, &["tool_use_id"])),
+                    is_error: None,
+                    payload: Some(item.clone()),
+                })
+            })
+            .collect(),
+        value => vec![super::unsupported_content_block("Codex", value)],
+    }
+}
+
+fn extract_title(content: Option<&Value>) -> Option<String> {
+    parse_message_blocks(content, "user")
+        .into_iter()
+        .filter(|block| block.kind != "unsupported_content" && block.kind != "unsupported_block")
+        .filter_map(|block| block.text)
+        .find_map(|text| super::title_candidate_from_text(&text))
+}
+
+fn state_dbs() -> Result<Vec<PathBuf>> {
+    let mut candidates = fs::read_dir(root()?)?
+        .filter_map(|entry| entry.ok())
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with("state_") && name.ends_with(".sqlite"))
+        })
+        .collect::<Vec<_>>();
+
+    candidates.sort();
+    Ok(candidates)
+}

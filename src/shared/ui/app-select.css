@@ -1,0 +1,111 @@
+.app-select {
+  position: relative;
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.app-select__label {
+  position: absolute;
+  top: 3px;
+  left: 10px;
+  /* floating 变体下 label 与 __control 都为定位元素，靠 z-index 保证文字不被
+     select 背景盖住；stacked 的 static label 不受影响。 */
+  z-index: 1;
+  color: var(--color-muted);
+  font-size: var(--font-size-xs);
+  font-weight: 600;
+  line-height: 1;
+  /* 标签混排中英文(如「会话来源」「Agent」),不转大写,保持原文 */
+  letter-spacing: 0.02em;
+  pointer-events: none;
+}
+
+.app-select select {
+  height: var(--control-height);
+  width: 100%;
+  padding: 14px 32px 2px 10px;
+  border: 1px solid var(--color-hairline);
+  border-radius: var(--radius-control);
+  /* 下拉箭头画在 select 自身背景上：跟随边框盒，不会因控件实际
+     渲染宽度不满容器而游离到输入框外。 */
+  background: var(--color-canvas)
+    url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath d='M2.5 4.5 6 8l3.5-3.5' fill='none' stroke='%237c828a' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E")
+    no-repeat right 14px center;
+  color: var(--color-ink);
+  font-size: var(--font-size-lg);
+  font-weight: 600;
+  line-height: 1.15;
+  box-shadow: none;
+  appearance: none;
+  transition:
+    border-color 0.18s ease,
+    box-shadow 0.18s ease,
+    transform 0.18s ease;
+  -webkit-appearance: none;
+}
+
+.app-select__control {
+  position: relative;
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.app-select select:focus {
+  outline: 2px solid var(--color-focus-ring);
+  outline-offset: 1px;
+  border-color: var(--color-primary);
+  box-shadow: none;
+}
+
+.app-select select:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.app-select--stacked {
+  flex-direction: column;
+  gap: 8px;
+}
+
+.app-select--stacked .app-select__label {
+  position: static;
+  color: var(--color-body);
+  font-size: var(--font-size-md);
+  font-weight: 400;
+  /* 覆盖基础规则的 line-height: 1：stacked 的 label 是普通字段标签，行盒高度须与并排字段的标签一致 */
+  line-height: inherit;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.app-select--stacked select {
+  height: var(--control-height);
+  padding: 0 32px 0 10px;
+  border: 1px solid var(--color-hairline);
+  border-radius: var(--radius-control);
+  /* 只覆盖颜色，保留基础规则画在背景上的下拉箭头。 */
+  background-color: var(--color-canvas);
+  color: var(--color-ink);
+  font-size: var(--font-size-lg);
+  font-weight: 400;
+  line-height: 1.2;
+  box-shadow: none;
+}
+
+.app-select--stacked select:focus {
+  outline: 2px solid var(--color-focus-ring);
+  outline-offset: 1px;
+  border-color: var(--color-primary);
+  box-shadow: none;
+}
+
+.app-select--stacked.app-select--sm select {
+  height: var(--control-height);
+}
+
+.app-select--plain select {
+  background-color: var(--color-canvas);
+}
+

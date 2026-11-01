@@ -1,0 +1,269 @@
+:root {
+  color-scheme: light;
+  /* 品牌主色是全站唯一的「动作色」:主按钮、链接、勾选、进行中指示。
+     导航/页签/分段控件的选中态一律用淡蓝 tint,实心蓝只留给真正的
+     主按钮——选中态也用实心蓝时,整屏会变成蓝块拼图。 */
+  --color-primary: #0052ff;
+  --color-primary-active: #0043d6;
+  --color-primary-disabled: #a8b8cc;
+  --color-primary-tint: rgba(0, 82, 255, 0.07);
+  --color-primary-tint-strong: rgba(0, 82, 255, 0.12);
+  --color-primary-line: rgba(0, 82, 255, 0.2);
+  /* 键盘焦点环:所有 :focus-visible 共用同一颜色 */
+  --color-focus-ring: rgba(0, 82, 255, 0.28);
+
+  --color-canvas: #ffffff;
+  /* 导航栏、卡片条带等「结构件」的底色:与内容白拉开一档,靠色带而不是
+     边框阴影区分区域 */
+  --color-surface-soft: #f6f7f9;
+  --color-surface-strong: #eceef2;
+  --color-surface-dark: #0a0b0d;
+  --color-surface-dark-elevated: #16181c;
+  --color-hairline: #e2e5ea;
+  --color-hairline-soft: #edeff2;
+  --color-scrollbar-thumb: #d3d7de;
+
+  /* 文本阶梯:标题近黑带冷灰,正文往下逐级变淡;机器值(URL、模型名、
+     路径)一律等宽字体,与人的语言区分开 */
+  --color-ink: #14161d;
+  --color-body: #4f5765;
+  --color-muted: #7c828a;
+  --color-muted-soft: #a9adb5;
+  --color-on-primary: #ffffff;
+
+  --color-danger: #cf202f;
+  --color-danger-tint: rgba(207, 32, 47, 0.07);
+  --color-danger-line: rgba(207, 32, 47, 0.24);
+  /* 警告分两档:实底/强调用 warning 本色,浅底上的文字用更深的 warning-ink,
+     否则琥珀色在白底上读不清 */
+  --color-warning: #ea8a1f;
+  --color-warning-ink: #b45309;
+  --color-warning-tint: rgba(234, 138, 31, 0.14);
+  --color-warning-line: rgba(234, 138, 31, 0.45);
+  --color-on-warning: #ffffff;
+  --color-success: #0e8a57;
+  --color-success-tint: rgba(5, 177, 105, 0.1);
+  --color-success-line: rgba(5, 177, 105, 0.28);
+
+  /* 圆角刻度:控件 8、卡片 12、弹窗 16;pill 只留给状态徽标与骨架线,
+     页签/分段控件不再做成胶囊 */
+  --radius-sm: 6px;
+  --radius-md: 12px;
+  --radius-xl: 16px;
+  --radius-pill: 100px;
+  --radius-control: 8px;
+  --radius-button: 8px;
+  --control-height: 36px;
+  /* 按钮只有三档:页面级动作 36、标签/分段控件 32、行内小动作 28。
+     新增按钮请复用档位,不要再引入 22/24/26/30 这类一次性尺寸。 */
+  --button-height: 36px;
+  --tab-height: 32px;
+  --button-height-compact: 28px;
+  /* 按钮文字同样只有两套:动作按钮(md/600)与标签、紧凑按钮(md 或 sm/500),
+     不按按钮各写一个字号字重。 */
+  --button-font-size: var(--font-size-md);
+  --button-font-size-compact: var(--font-size-sm);
+  --button-font-weight: 500;
+  --button-font-weight-strong: 600;
+
+  /* 阴影只表达「浮在内容之上」,不参与页面内结构:结构分隔用 hairline
+     与色带,卡片保持平面 */
+  --shadow-pop: 0 8px 24px rgba(15, 18, 26, 0.12);
+  --shadow-overlay:
+    0 2px 8px rgba(15, 18, 26, 0.06),
+    0 24px 64px rgba(15, 18, 26, 0.2);
+
+  --z-dialog: 100;
+  /* 气泡挂在 body 上，需要盖过弹窗 */
+  --z-tooltip: 1000;
+  color: var(--color-ink);
+  background: var(--color-canvas);
+  font-family: var(--font-base);
+  font-synthesis: none;
+  line-height: 1.5;
+  font-weight: 400;
+}
+
+:root {
+  /* 字号刻度：xs 徽标/标签、sm 次要文本与按钮、md 正文、lg 卡片与分组标题、
+     xl 区块标题、2xl 页面级标题 */
+  --font-size-xs: 11px;
+  --font-size-sm: 12px;
+  --font-size-md: 13px;
+  --font-size-lg: 14px;
+  --font-size-xl: 16px;
+  --font-size-2xl: 20px;
+  --font-base: system-ui, sans-serif;
+  --font-mono:
+    ui-monospace,
+    monospace;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  overflow: hidden;
+  background: inherit;
+}
+
+button,
+select {
+  font: inherit;
+}
+
+button {
+  border: 1px solid var(--color-hairline);
+}
+
+/* 组件各自定义了 focus 样式的会覆盖它;这里是兜底,保证任何可聚焦元素
+   都有统一可见的键盘焦点 */
+:focus-visible {
+  outline: 2px solid var(--color-focus-ring);
+  outline-offset: 1px;
+}
+
+::selection {
+  background: var(--color-primary-tint-strong);
+}
+
+/* 全局细滚动条：webkit 前缀覆盖 WKWebView / WebView2 / WebKitGTK */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track,
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: var(--color-scrollbar-thumb);
+}
+
+@media (hover: hover) {
+  ::-webkit-scrollbar-thumb:hover {
+    background: var(--color-muted-soft);
+  }
+}
+
+pre {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family:
+    var(--font-mono);
+}
+
+#root {
+  min-height: 100vh;
+  height: 100vh;
+}
+
+.muted-text {
+  color: var(--color-body);
+}
+
+.error-text {
+  margin: 0;
+  color: var(--color-danger);
+}
+
+.panel-shell {
+  position: relative;
+}
+
+.skeleton-card {
+  pointer-events: none;
+}
+
+.skeleton-line {
+  display: block;
+  height: 11px;
+  border-radius: 999px;
+  background:
+    linear-gradient(
+      90deg,
+      rgba(169, 173, 181, 0.14) 0%,
+      rgba(169, 173, 181, 0.28) 50%,
+      rgba(169, 173, 181, 0.14) 100%
+    );
+  background-size: 220% 100%;
+}
+
+/* 骨架屏微动效:减弱动效偏好下退化为静态渐变底色 */
+@media (prefers-reduced-motion: no-preference) {
+  .skeleton-line {
+    animation: shimmer 1.35s linear infinite;
+  }
+}
+
+.skeleton-title {
+  width: 68%;
+  height: 15px;
+}
+
+.skeleton-short {
+  width: 42%;
+}
+
+.skeleton-meta {
+  width: 96px;
+}
+
+.panel-loading-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 14px;
+  background: linear-gradient(
+    180deg,
+    rgba(255, 255, 255, 0.84) 0%,
+    rgba(255, 255, 255, 0.28) 22%,
+    rgba(255, 255, 255, 0) 100%
+  );
+  pointer-events: none;
+}
+
+.loading-pill,
+.empty-state,
+.detail-empty {
+  display: grid;
+  place-items: center;
+}
+
+.loading-pill {
+  padding: 8px 12px;
+  border: 1px solid var(--color-hairline);
+  border-radius: var(--radius-pill);
+  background: var(--color-surface-soft);
+  color: var(--color-body);
+  font-size: var(--font-size-md);
+}
+
+.empty-state,
+.detail-empty {
+  width: 100%;
+  min-height: 140px;
+  padding: 24px 12px;
+  color: var(--color-muted);
+  font-size: var(--font-size-md);
+  text-align: center;
+}
+
+@keyframes shimmer {
+  from {
+    background-position: 200% 0;
+  }
+
+  to {
+    background-position: -20% 0;
+  }
+}

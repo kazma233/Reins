@@ -1,0 +1,192 @@
+.session-list-shell {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.session-list-refresh-status {
+  flex: 0 0 auto;
+  padding: 4px 2px;
+  color: var(--color-muted);
+  font-size: var(--font-size-sm);
+}
+
+/* 耗时数字用等宽字型,跳动时不带动整行文案抖动。 */
+.session-list-refresh-elapsed {
+  margin-left: 6px;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.session-list {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  flex-direction: column;
+  gap: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.session-card {
+  /* 标题整行铺开,附加信息在它下一行;窄窗口只换行不截断 */
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+  padding: 14px 12px;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  border: 0;
+  border-left: 3px solid transparent;
+  border-radius: 0;
+  border-bottom: 1px solid var(--color-hairline-soft);
+  background: transparent;
+  /* 行悬停是高频操作:只做瞬时底色反馈 */
+  transition: background 0.12s ease;
+}
+
+@media (hover: hover) {
+  .session-card:hover {
+    background: var(--color-surface-soft);
+  }
+
+  /* 选中卡的底色不被悬停反馈冲掉:悬停时保持选中 tint */
+  .session-card.active:hover {
+    background: var(--color-primary-tint);
+  }
+}
+
+.session-card-title,
+.session-card span,
+.session-card small {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.session-card-title {
+  /* 标题按字符数不再截断,整行换行展示全文;行数上限只为挡住把整段粘贴内容
+     当标题的会话(实测有个 1.1 万字符的 HTTP 报文标题),普通标题远不到 4 行。
+     完整标题始终在条目 tooltip 上。 */
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 4;
+  overflow: hidden;
+  min-width: 0;
+  font-size: var(--font-size-lg);
+  font-weight: 400;
+  line-height: 1.4;
+}
+
+.session-card.active {
+  border-left-color: var(--color-primary);
+  background: var(--color-primary-tint);
+}
+
+/* 附加信息一行 flex:时间 / 模型 / 状态角标 / 使用量,放不下整项换行,
+   不拆散单个角标里的文字。 */
+.session-meta-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+}
+
+.session-meta-row small {
+  color: var(--color-muted);
+}
+
+/* 覆盖 .session-card small 的逐字断行:时间戳与 token 指标都是不可拆单元,
+   窄侧栏放不下时整组换到下一行,而不是把时间戳压成竖排。 */
+.session-meta-row small {
+  flex-shrink: 0;
+  white-space: nowrap;
+  overflow-wrap: normal;
+  word-break: normal;
+}
+
+/* token 指标靠右,放不下时按指标逐个换行;等宽数字避免缩写跳动。 */
+.session-token-usage {
+  display: inline-flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 2px 10px;
+  font-variant-numeric: tabular-nums;
+}
+
+.session-state-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 0 8px;
+  border-radius: var(--radius-pill);
+  background: var(--color-surface-strong);
+  color: var(--color-muted);
+  font-size: var(--font-size-xs);
+  font-weight: 600;
+  line-height: 18px;
+}
+
+.session-state-chip--archived {
+  background: var(--color-warning-tint);
+  color: var(--color-warning-ink);
+}
+
+/* 模型是元数据不是状态,不做角标:与详情页会话 id 同一套等宽弱化文本。
+   模型名完整展示不截断,过长沿 meta 行自然换行。 */
+.session-meta-model {
+  color: var(--color-body);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xs);
+  line-height: 18px;
+  font-variant-numeric: tabular-nums;
+}
+
+.session-list-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 2px 6px;
+  color: var(--color-muted);
+  font-size: var(--font-size-sm);
+  letter-spacing: 0.02em;
+}
+
+.session-list-footer.complete {
+  justify-content: flex-end;
+}
+
+.session-list-hint {
+  color: var(--color-muted);
+}
+
+/* 加载更多失败：错误文案常驻列表底部，重试入口就地给出。 */
+.session-list-error {
+  color: var(--color-danger);
+}
+
+.session-list-error-retry {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--color-primary);
+  font-size: var(--font-size-sm);
+  cursor: pointer;
+}
+
+@media (hover: hover) {
+  .session-list-error-retry:hover {
+    color: var(--color-primary-active);
+  }
+}
+
+.session-list-empty {
+  width: 100%;
+  margin-right: -6px;
+}
+

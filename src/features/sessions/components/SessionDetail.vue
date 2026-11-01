@@ -1,0 +1,500 @@
+<script setup lang="ts">
+import { computed, inject, ref, toRef, watch, type Ref } from "vue";
+import { refDebounced } from "@vueuse/core";
+import { getSessionAgentMessages } from "../api";
+import { useKeepAliveScroll } from "../composables/useKeepAliveScroll";
+import { useSessionDetailActions } from "../composables/useSessionDetailActions";
+import { useSessionTimeline } from "../composables/useSessionTimeline";
+import {
+  agentDisplayLabel,
+  emptyEventText,
+  emptyMessageText,
+  formatVisibleEventLabel,
+  formatVisibleMessageLabel,
+  normalizeFilterValue,
+  prepareTimelineEvent
+} from "../composables/session-detail-helpers";
+import {
+  buildTimelineItems,
+  groupProcessItems,
+  itemSearchText,
+  type TimelineItem
+} from "../timeline-group";
+import { extractErrorMessage } from "@shared/lib/errors";
+import { createRequestGuard } from "@shared/lib/request-guard";
+import { formatTimestamp, formatTokenCount } from "@shared/lib/format";
+import { formatSourceAppName } from "../source-app";
+import { formatSessionModels } from "../session-models";
+import { cacheHitRate, formatCacheHitRate } from "../token-usage";
+import SessionDetailDialogs from "./SessionDetailDialogs.vue";
+import MessageTimeline from "./MessageTimeline.vue";
+import EventTimeline from "./EventTimeline.vue";
+import type {
+  DeletePlan,
+  SessionAgent,
+  SessionOverview
+} from "../types";
+import SubagentGroupDialog from "./SubagentGroupDialog.vue";
+import "./session-detail.css";
+
+type SessionDetailProps = {
+  overview: SessionOverview | null;
+  deletePlan: DeletePlan | null;
+  loading: boolean;
+};
+
+const props = defineProps<SessionDetailProps>();
+
+const emit = defineEmits<{
+  deleted: [sessionKey: string | null];
+}>();
+
+// 详情页 token 数用缩写+千分位精确值并列,与列表缩写口径一致。
+function exactTokens(value: number): string {
+  return value.toLocaleString("zh-CN");
+}
+
+// The scroll container ref is provided by SessionWorkspace so we can attach
+// passive scroll listeners for infinite-load behaviour.
+const scrollContainer = inject<Ref<HTMLElement | null>>(
+  "sessionScrollContainer",
+  ref(null)
+);
+
+// --- local state ---
+
+const timelineTab = ref<"messages" | "events">("messages");
+const timelineFilter = ref("");
+const deferredTimelineFilter = refDebounced(timelineFilter, 300);
+// 只看对话:把连续的过程行(思考/工具/错误)收成一行摘要,点开仍是原有的过程行。
+// 过程行默认本就收起,不分组的话这个开关没有任何可见效果。
+const conversationOnly = ref(false);
+
+// 同 SessionList:模式切换后回到这条会话,阅读位置还在。
+useKeepAliveScroll("sessions-detail", () => scrollContainer.value);
+
+// --- timeline ---
+
+const overviewRef = toRef(props, "overview");
+const deletePlanRef = toRef(props, "deletePlan");
+const { detailKey, messagesLoader, eventsLoader } = useSessionTimeline(overviewRef);
+
+// ref 解构不丢响应性,沿用原有变量名
+const {
+  items: messages,
+  loading: messagesLoading,
+  error: messageError
+} = messagesLoader;
+const {
+  items: events,
+  loading: eventsLoading,
+  error: eventError
+} = eventsLoader;
+
+// --- delete flow ---
+
+const {
+  deleteError,
+  deleteLoading,
+  deleteDialogOpen,
+  openDeleteDialog,
+  closeDeleteDialog,
+  handleDelete
+} = useSessionDetailActions(overviewRef, detailKey, deletePlanRef, () =>
+  // 此时 overview 还没被清掉,detailKey 就是刚删掉的这条会话的复合键
+  emit("deleted", detailKey.value)
+);
+
+// Reset UI toggles when the overview changes (dialog state resets inside
+// useSessionDetailActions).
+watch(overviewRef, () => {
+  timelineFilter.value = "";
+  closeSubagentDialog();
+});
+
+// --- derived state ---
+
+const activeDetail = computed(() => props.overview);
+const normalizedTimelineFilter = computed(() =>
+  normalizeFilterValue(deferredTimelineFilter.value)
+);
+
+const agentOptions = computed(() => {
+  const detail = activeDetail.value;
+  if (!detail) {
+    return [];
+  }
+  // 子代理 tab 只是打开对应过程弹窗的入口,不做时间线筛选;
+  // 根会话消息始终展示(Pi 等单 agent 来源过滤后为空,tab 栏整体隐藏)
+  return detail.agents.filter((agent) => !agent.isRoot);
+});
+
+const filteredMessages = computed(() => messages.value);
+
+const preparedEvents = computed(() => events.value.map(prepareTimelineEvent));
+
+// 文档流时间线：消息 → 渲染单元（文本段/工具行/思考行/子代理入口）
+const timelineItems = computed(() => buildTimelineItems(filteredMessages.value));
+
+const visibleItems = computed(() => {
+  let list = timelineItems.value;
+  const filter = normalizedTimelineFilter.value;
+  if (filter.length > 0) {
+    list = list.filter((item) => itemSearchText(item).includes(filter));
+  }
+  return list;
+});
+
+// 渲染用序列：「只看对话」把连续的过程行收成组；筛选时不分组，命中项必须直接
+// 可见。标签计数仍用未分组的 visibleItems，否则分组会把"已显示 N 条消息"改小。
+const displayItems = computed(() =>
+  conversationOnly.value && normalizedTimelineFilter.value.length === 0
+    ? groupProcessItems(visibleItems.value)
+    : visibleItems.value
+);
+
+const filteredEvents = computed(() => {
+  const filter = normalizedTimelineFilter.value;
+  if (filter.length === 0) {
+    return preparedEvents.value;
+  }
+  return preparedEvents.value.filter((event) =>
+    event.searchText.includes(filter)
+  );
+});
+
+const visibleMessageLabel = computed(() => {
+  if (!activeDetail.value) {
+    return "";
+  }
+  return formatVisibleMessageLabel(
+    visibleItems.value.length,
+    timelineItems.value.length,
+    deferredTimelineFilter.value.trim()
+  );
+});
+
+const visibleEventLabel = computed(() => {
+  if (!activeDetail.value) {
+    return "";
+  }
+  return formatVisibleEventLabel(
+    filteredEvents.value.length,
+    deferredTimelineFilter.value.trim()
+  );
+});
+
+const emptyVisibleMessageText = computed(() =>
+  emptyMessageText(deferredTimelineFilter.value.trim())
+);
+
+const emptyVisibleEventText = computed(() =>
+  emptyEventText(deferredTimelineFilter.value.trim())
+);
+
+const rootSessionId = computed(
+  () => activeDetail.value?.summary.sourceSessionId ?? ""
+);
+
+// 子代理过程弹窗：入口行与顶部 tab 共用同一实例。
+// 内容按需从后端取该 agent 的完整消息，不依赖时间线分页已加载范围。
+type SubagentDialogState = {
+  sessionId: string;
+  label: string;
+  loading: boolean;
+  error: string | null;
+  items: TimelineItem[];
+};
+
+const subagentDialog = ref<SubagentDialogState | null>(null);
+const subagentRequestGuard = createRequestGuard();
+
+async function openSubagentDialog(sessionId: string, label: string) {
+  const detail = activeDetail.value;
+  if (!detail) {
+    return;
+  }
+
+  const requestId = subagentRequestGuard.next();
+  subagentDialog.value = { sessionId, label, loading: true, error: null, items: [] };
+
+  try {
+    const agentMessages = await getSessionAgentMessages(
+      detail.summary.sourceApp,
+      detail.summary.sourceSessionId,
+      sessionId
+    );
+
+    if (!subagentRequestGuard.isLatest(requestId)) {
+      return;
+    }
+
+    // 子代理消息里带上标记消息,分组后只剩入口项;取其内部条目作为弹窗内容
+    const group = buildTimelineItems(agentMessages).find(
+      (item) => item.kind === "subagent-group"
+    );
+    subagentDialog.value = {
+      sessionId,
+      label,
+      loading: false,
+      error: null,
+      items: group && group.kind === "subagent-group" ? group.items : []
+    };
+  } catch (error) {
+    if (!subagentRequestGuard.isLatest(requestId)) {
+      return;
+    }
+    subagentDialog.value = {
+      sessionId,
+      label,
+      loading: false,
+      error: extractErrorMessage(error, "加载子代理内容失败。"),
+      items: []
+    };
+  }
+}
+
+function closeSubagentDialog() {
+  subagentRequestGuard.invalidate();
+  subagentDialog.value = null;
+}
+
+function handleAgentTabClick(agent: SessionAgent) {
+  // tab 只是弹窗入口:不改变下方时间线的内容,时间线始终展示全部消息
+  void openSubagentDialog(agent.sessionId, agent.label);
+}
+
+const timelineFilterPlaceholder = computed(() =>
+  timelineTab.value === "messages"
+    ? "按消息内容、工具名、块类型筛选"
+    : "按记录类型、摘要、载荷筛选"
+);
+
+</script>
+
+<template>
+  <!-- Skeleton while loading without overview -->
+  <div v-if="!overview && loading" class="detail-panel">
+    <section class="detail-section skeleton-card">
+      <span class="skeleton-line skeleton-title" />
+      <span class="skeleton-line" />
+      <div class="summary-grid">
+        <div v-for="(_, index) in 4" :key="index">
+          <span class="skeleton-line skeleton-meta" />
+          <span class="skeleton-line" />
+        </div>
+        <div
+          v-for="(_, index) in 2"
+          :key="`wide-${index}`"
+          class="summary-grid__wide"
+        >
+          <span class="skeleton-line skeleton-meta" />
+          <span class="skeleton-line" />
+        </div>
+      </div>
+    </section>
+    <section class="detail-section skeleton-card">
+      <span class="skeleton-line skeleton-title" />
+      <span class="skeleton-line" />
+      <span class="skeleton-line skeleton-short" />
+    </section>
+    <section class="detail-section skeleton-card">
+      <span class="skeleton-line skeleton-title" />
+      <span class="skeleton-line" />
+      <span class="skeleton-line" />
+      <span class="skeleton-line skeleton-short" />
+    </section>
+  </div>
+
+  <!-- Empty state -->
+  <div v-else-if="!overview" class="detail-empty">
+    请选择一个会话以查看其转录内容和元数据。
+  </div>
+
+  <!-- Detail panel -->
+  <div v-else class="detail-panel panel-shell" :aria-busy="loading">
+    <section class="detail-section">
+      <div class="detail-header">
+        <div class="detail-header-info">
+          <h2 :title="overview.summary.title">{{ overview.summary.title }}</h2>
+          <p :title="overview.summary.sourceSessionId">
+            {{ overview.summary.sourceSessionId }}
+          </p>
+        </div>
+        <div class="detail-header-actions">
+          <button
+            v-if="deletePlan?.supported"
+            class="danger-button"
+            :disabled="deleteLoading"
+            type="button"
+            @click="openDeleteDialog"
+          >
+            {{ deleteLoading ? "删除中..." : "删除会话" }}
+          </button>
+        </div>
+      </div>
+      <div v-if="deleteError" class="error-box">
+        <strong>删除失败</strong>
+        <pre class="error-text">{{ deleteError }}</pre>
+      </div>
+      <dl class="summary-grid">
+        <div>
+          <dt>来源</dt>
+          <dd>{{ formatSourceAppName(overview.summary.sourceApp) }}</dd>
+        </div>
+        <div>
+          <dt>分支</dt>
+          <dd>{{ overview.summary.gitBranch ?? "未知" }}</dd>
+        </div>
+        <div>
+          <dt>创建时间</dt>
+          <dd>{{ formatTimestamp(overview.summary.createdAt) }}</dd>
+        </div>
+        <div>
+          <dt>更新时间</dt>
+          <dd>{{ formatTimestamp(overview.summary.updatedAt) }}</dd>
+        </div>
+        <div class="summary-grid__wide">
+          <dt>工作目录</dt>
+          <dd>{{ overview.summary.cwd ?? "未知" }}</dd>
+        </div>
+        <div v-if="overview.summary.models.length > 0" class="summary-grid__wide">
+          <dt>模型</dt>
+          <dd>{{ formatSessionModels(overview.summary.models) }}</dd>
+        </div>
+        <div v-if="overview.summary.tokenUsage" class="summary-grid__wide">
+          <dt>Token 消耗</dt>
+          <dd class="token-usage-detail">
+            <span>命中率 {{ formatCacheHitRate(cacheHitRate(overview.summary.tokenUsage)) }}</span>
+            <span>
+              输入
+              {{ formatTokenCount(overview.summary.tokenUsage.inputTokens) }}
+              ({{ exactTokens(overview.summary.tokenUsage.inputTokens) }})
+            </span>
+            <span>
+              输出
+              {{ formatTokenCount(overview.summary.tokenUsage.outputTokens) }}
+              ({{ exactTokens(overview.summary.tokenUsage.outputTokens) }})
+            </span>
+            <span>
+              缓存读
+              {{ formatTokenCount(overview.summary.tokenUsage.cacheReadTokens) }}
+              ({{ exactTokens(overview.summary.tokenUsage.cacheReadTokens) }})
+            </span>
+            <span>
+              缓存写
+              {{ formatTokenCount(overview.summary.tokenUsage.cacheWriteTokens) }}
+              ({{ exactTokens(overview.summary.tokenUsage.cacheWriteTokens) }})
+            </span>
+          </dd>
+        </div>
+        <div class="summary-grid__wide">
+          <dt>转录文件</dt>
+          <dd>{{ overview.summary.transcriptPath }}</dd>
+        </div>
+      </dl>
+    </section>
+
+    <section class="detail-section">
+      <div class="timeline-controls">
+        <div class="timeline-tab-bar">
+          <button
+            :class="`timeline-tab${timelineTab === 'messages' ? ' active' : ''}`"
+            type="button"
+            @click="timelineTab = 'messages'"
+          >
+            消息
+          </button>
+          <button
+            :class="`timeline-tab${timelineTab === 'events' ? ' active' : ''}`"
+            type="button"
+            @click="timelineTab = 'events'"
+          >
+            raw
+          </button>
+          <input
+            v-model="timelineFilter"
+            class="timeline-search-input"
+            :placeholder="timelineFilterPlaceholder"
+            type="search"
+          />
+          <!-- 勾选开关而不是标签页:它不切换视图,只是把过程行收进组行。
+               只属于消息页,raw 页没有过程行可收,放在那里会点了没反应。 -->
+          <label
+            v-if="timelineTab === 'messages'"
+            :class="
+              `timeline-toggle-control conversation-toggle${conversationOnly ? ' active' : ''}`
+            "
+            :title="
+              conversationOnly
+                ? '取消只看对话，恢复逐条过程行'
+                : '只看对话：把思考与工具过程收成一行摘要，点开仍可逐条查看'
+            "
+          >
+            <input v-model="conversationOnly" type="checkbox" />
+            <span>只看对话</span>
+          </label>
+        </div>
+        <div v-if="agentOptions.length > 0" class="agent-tab-group">
+          <button
+            v-for="agent in agentOptions"
+            :key="agent.sessionId"
+            class="timeline-tab"
+            type="button"
+            @click="handleAgentTabClick(agent)"
+          >
+            {{ agentDisplayLabel(agent.sessionId, agentOptions) }}
+          </button>
+        </div>
+      </div>
+
+      <MessageTimeline
+        v-if="timelineTab === 'messages'"
+        :active-detail="overview"
+        :conversation-only="conversationOnly"
+        :empty-text="emptyVisibleMessageText"
+        :items="displayItems"
+        :message-error="messageError"
+        :messages-loading="messagesLoading"
+        :visible-message-label="visibleMessageLabel"
+        @open-subagent="
+          (sessionId: string, label: string) => openSubagentDialog(sessionId, label)
+        "
+      />
+      <EventTimeline
+        v-else
+        :agent-options="agentOptions"
+        :empty-text="emptyVisibleEventText"
+        :event-error="eventError"
+        :events="events"
+        :events-loading="eventsLoading"
+        :filtered-events="filteredEvents"
+        :root-session-id="rootSessionId"
+        :visible-event-label="visibleEventLabel"
+      />
+    </section>
+
+    <SubagentGroupDialog
+      :open="subagentDialog !== null"
+      :label="subagentDialog?.label ?? ''"
+      :loading="subagentDialog?.loading ?? false"
+      :error="subagentDialog?.error ?? null"
+      :items="subagentDialog?.items ?? []"
+      @close="closeSubagentDialog"
+    />
+
+    <SessionDetailDialogs
+      v-if="deletePlan?.supported"
+      :delete-plan="deletePlan"
+      :overview="overview"
+      :delete-dialog-open="deleteDialogOpen"
+      :delete-loading="deleteLoading"
+      @close-delete-dialog="closeDeleteDialog"
+      @confirm-delete="handleDelete"
+    />
+
+    <div v-if="loading" class="panel-loading-overlay">
+      <div class="loading-pill">正在加载会话详情...</div>
+    </div>
+  </div>
+</template>

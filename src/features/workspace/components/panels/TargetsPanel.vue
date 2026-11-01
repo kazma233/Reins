@@ -1,0 +1,301 @@
+<script setup lang="ts">
+import { computed, toRefs } from "vue";
+import ConfirmDialog from "@shared/ui/ConfirmDialog.vue";
+import AppCard from "@shared/ui/AppCard.vue";
+import AppLoadError from "@shared/ui/AppLoadError.vue";
+import AppResultBadge from "@shared/ui/AppResultBadge.vue";
+import ProjectCreateDialog from "../dialogs/ProjectCreateDialog.vue";
+import TargetCreateDialog from "../dialogs/TargetCreateDialog.vue";
+import { useProjectMutations } from "../../composables/useProjectMutations";
+import { useTargetMutations } from "../../composables/useTargetMutations";
+import type { WorkspaceStateContext } from "../../composables/useWorkspaceState";
+import { formatTargetId, formatTargetLabel } from "../../model";
+import { useSkillDirLinks } from "../../skillDirLink";
+import type { WorkspaceConfigDocument, WorkspaceInspection } from "../../types";
+
+type TargetsPanelProps = {
+  configDocument: WorkspaceConfigDocument | null;
+  inspection: WorkspaceInspection | null;
+  loadingInspection: boolean;
+  runningAction: boolean;
+  loadError: string | null;
+  workspace: WorkspaceStateContext;
+};
+
+const props = defineProps<TargetsPanelProps>();
+
+const { configDocument, loadingInspection, runningAction, loadError } = toRefs(props);
+const { retryWorkspaceState } = props.workspace;
+
+const {
+  targetCreateDialog,
+  targetDeleteDialog,
+  openTargetCreateDialog,
+  openTargetEditDialog,
+  closeTargetCreateDialog,
+  clearTargetFormError,
+  loadTargetPresets,
+  handleApplyBuiltinTargetPreset,
+  openTargetDeleteDialog,
+  closeTargetDeleteDialog,
+  handlePickTargetSkillDirectory,
+  handlePickTargetMcpConfigFile,
+  handleSubmitTarget,
+  handleConfirmDeleteTarget,
+} = useTargetMutations(props.workspace);
+
+const {
+  projectCreateDialog,
+  projectDeleteDialog,
+  openProjectCreateDialog,
+  openProjectEditDialog,
+  closeProjectCreateDialog,
+  clearProjectFormError,
+  handlePickProjectPath,
+  handleSubmitProject,
+  openProjectDeleteDialog,
+  closeProjectDeleteDialog,
+  handleConfirmDeleteProject,
+} = useProjectMutations(props.workspace);
+
+// 落点归属来自 inspection（探测结果），config 只回显配置：两者按 id 对齐，
+// 全局用 agent id、项目级用 `project:agent`。
+const skillDirLink = useSkillDirLinks(() => props.inspection);
+
+const configTargets = computed(() => configDocument.value?.config?.targets ?? []);
+const configProjects = computed(() => configDocument.value?.config?.projects ?? []);
+
+</script>
+
+<template>
+  <section class="manager-stack manager-stack--stretch">
+    <Teleport defer to="#workspace-panel-actions">
+      <button
+        class="secondary-button"
+        :disabled="runningAction"
+        type="button"
+        @click="openTargetCreateDialog"
+      >
+        新增全局 Target
+      </button>
+      <button
+        class="secondary-button"
+        :disabled="runningAction"
+        type="button"
+        @click="openProjectCreateDialog"
+      >
+        新增项目 Target
+      </button>
+    </Teleport>
+    <article class="manager-panel manager-panel--fill">
+      <!-- 读取失败时错误条压在内容之上，重试入口就在出错的地方 -->
+      <AppLoadError
+        v-if="loadError"
+        :message="loadError"
+        :retrying="loadingInspection"
+        @retry="retryWorkspaceState"
+      />
+      <div v-if="loadingInspection" class="loading-pill">正在检查状态...</div>
+
+      <div class="manager-panel-section manager-panel-section--fill">
+        <div class="manager-scroll-region">
+          <div class="manager-target-list">
+            <div class="manager-target-group">
+              <div class="manager-target-group__header">
+                <span>全局 targets · {{ configTargets.length }} 项</span>
+              </div>
+              <template v-if="configTargets.length">
+                <AppCard
+                  v-for="target in configTargets"
+                  :key="target.id"
+                >
+                  <template #header>
+                    <span class="manager-target-row__name-text">{{ formatTargetLabel(target.id) }}</span>
+                  </template>
+                  <template #ext>
+                    <div class="manager-target-row__actions">
+                      <button
+                        class="secondary-button"
+                        :disabled="runningAction"
+                        type="button"
+                        @click="openTargetEditDialog(target)"
+                      >
+                        编辑
+                      </button>
+                      <button
+                        class="danger-button"
+                        :disabled="runningAction"
+                        type="button"
+                        @click="openTargetDeleteDialog(target.id)"
+                      >
+                        删除
+                      </button>
+                    </div>
+                  </template>
+
+                  <div class="manager-target-row__meta manager-target-row__meta--paths">
+                    <span>
+                      <strong>skill</strong>
+                      <span>{{ target.skillDir }}</span>
+                      <!-- 落点不在盘上：可能是待安装，也可能是路径写错，中性提示。 -->
+                      <span
+                        v-if="skillDirLink(target.id)?.exists === false"
+                        class="manager-target-row__pill pill--note"
+                      >目录不存在</span>
+                    </span>
+                    <!-- 落点是软链接：这个目录不归它，内容在别处。 -->
+                    <span v-if="skillDirLink(target.id)?.place" class="manager-target-row__link">
+                      <span class="manager-target-row__pill pill--info">软链接</span>
+                      <span class="manager-target-row__place">{{ skillDirLink(target.id)?.place }}</span>
+                    </span>
+                    <span v-if="target.configPath"><strong>mcp</strong><span>{{ target.configPath }} ({{ target.mcpConfigPrefix }})</span></span>
+                  </div>
+                </AppCard>
+              </template>
+              <div v-else class="empty-state">当前没有全局 target。</div>
+            </div>
+
+            <div class="manager-target-group">
+              <div class="manager-target-group__header">
+                <span>项目 targets · {{ configProjects.length }} 项</span>
+              </div>
+              <template v-if="configProjects.length">
+                <AppCard
+                  v-for="project in configProjects"
+                  :key="project.id"
+                >
+                  <template #header>
+                    <span class="manager-target-row__name-text">{{ project.id }}</span>
+                  </template>
+                  <template #headerMeta>
+                    <span class="manager-header-path"><strong>路径</strong>{{ project.path }}</span>
+                  </template>
+                  <template #ext>
+                    <div class="manager-target-row__actions">
+                      <button
+                        class="secondary-button"
+                        :disabled="runningAction"
+                        type="button"
+                        @click="openProjectEditDialog(project)"
+                      >
+                        编辑
+                      </button>
+                      <button
+                        class="danger-button"
+                        :disabled="runningAction"
+                        type="button"
+                        @click="openProjectDeleteDialog(project.id)"
+                      >
+                        删除
+                      </button>
+                    </div>
+                  </template>
+
+                  <div class="manager-project-target-paths">
+                    <div
+                      v-for="target in project.agents"
+                      :key="target.id"
+                      class="manager-project-target-path"
+                    >
+                      <div class="manager-project-target-path__headline">
+                        <span class="manager-project-target-path__name">
+                          {{ formatTargetLabel(target.id) }}
+                        </span>
+                      </div>
+                      <div class="manager-project-target-path__items">
+                        <span>
+                          <strong>skill</strong>
+                          <span>{{ target.skillDir }}</span>
+                          <!-- 落点不在盘上：可能是待安装，也可能是路径写错，中性提示。 -->
+                          <span
+                            v-if="skillDirLink(formatTargetId(project.id, target.id))?.exists === false"
+                            class="manager-target-row__pill pill--note"
+                          >目录不存在</span>
+                        </span>
+                        <span
+                          v-if="skillDirLink(formatTargetId(project.id, target.id))?.place"
+                          class="manager-target-row__link"
+                        >
+                          <span class="manager-target-row__pill pill--info">软链接</span>
+                          <span class="manager-target-row__place">
+                            {{ skillDirLink(formatTargetId(project.id, target.id))?.place }}
+                          </span>
+                        </span>
+                        <span v-if="target.configPath"><strong>mcp</strong><span>{{ target.configPath }} ({{ target.mcpConfigPrefix }})</span></span>
+                      </div>
+                    </div>
+                  </div>
+                </AppCard>
+              </template>
+              <div v-else class="empty-state">当前还没有项目 targets。</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </article>
+  </section>
+
+  <!-- --- target create / delete --- -->
+
+  <TargetCreateDialog
+    :form="targetCreateDialog.form"
+    :open="targetCreateDialog.open"
+    :loading="targetCreateDialog.loading || runningAction"
+    :error="targetCreateDialog.error"
+    :presets="targetCreateDialog.presets"
+    :presets-loading="targetCreateDialog.presetsLoading"
+    :presets-error="targetCreateDialog.presetsError"
+    :mcp-format-description="targetCreateDialog.mcpFormatDescription"
+    :mcp-format-examples="targetCreateDialog.mcpFormatExamples"
+    @close="closeTargetCreateDialog"
+    @confirm="handleSubmitTarget"
+    @clear-field-error="clearTargetFormError"
+    @apply-builtin-preset="handleApplyBuiltinTargetPreset"
+    @retry-load-presets="loadTargetPresets"
+    @pick-mcp-config-file="handlePickTargetMcpConfigFile"
+    @pick-skill-directory="handlePickTargetSkillDirectory"
+  />
+
+  <ConfirmDialog
+    :open="targetDeleteDialog.open"
+    dialog-class-name="manager-import-dialog"
+    eyebrow="Target"
+    :title="`删除 target: ${targetDeleteDialog.targetId ?? ''}`"
+    title-id="target-delete-dialog-title"
+    confirm-button-class-name="danger-button"
+    :confirm-label="runningAction ? '删除中...' : '确认删除'"
+    :loading="runningAction"
+    :error="targetDeleteDialog.error"
+    description="删除后该 target 的 skills 目录与 mcp 配置路径不会被清理，但不再参与后续同步。"
+    @close="closeTargetDeleteDialog"
+    @confirm="handleConfirmDeleteTarget"
+  />
+
+  <!-- --- project create / delete --- -->
+
+  <ProjectCreateDialog
+    :form="projectCreateDialog.form"
+    :open="projectCreateDialog.open"
+    :loading="projectCreateDialog.loading || runningAction"
+    :error="projectCreateDialog.error"
+    @close="closeProjectCreateDialog"
+    @confirm="handleSubmitProject"
+    @clear-field-error="clearProjectFormError"
+    @pick-project-path="handlePickProjectPath"
+  />
+
+  <ConfirmDialog
+    :open="projectDeleteDialog.open"
+    dialog-class-name="manager-import-dialog"
+    eyebrow="Project"
+    :title="`删除项目: ${projectDeleteDialog.projectId ?? ''}`"
+    title-id="project-delete-dialog-title"
+    confirm-button-class-name="danger-button"
+    :confirm-label="runningAction ? '删除中...' : '确认删除'"
+    :loading="runningAction"
+    :error="projectDeleteDialog.error"
+    description="删除后该项目的 agent 配置会从工作区移除，已分发的软链接和配置不会自动回滚。"
+    @close="closeProjectDeleteDialog"
+    @confirm="handleConfirmDeleteProject"
+  />
+</template>

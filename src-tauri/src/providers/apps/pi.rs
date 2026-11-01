@@ -1,0 +1,329 @@
+// Pi：$PI_CODING_AGENT_DIR/models.json + settings.json（默认 ~/.pi/agent）。
+// 多 Provider 并存：新增 reins- 条目；默认值写 settings.json。
+
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
+
+use anyhow::{Result, bail};
+use serde_json::{Map as JsonMap, Value as JsonValue};
+
+use super::dialect::{PI_AI_PROTOCOL, PI_AI_REASONING};
+use super::{
+    AppAdapter, AppCapability, Environment, display_path, ensure_protocol_supported,
+    entry_not_found_error, external_entry, modified_entry_error, pi_models_path, pi_settings_path,
+    read_json_object, registration_key, serialize_json, unrecognized_entry_error,
+};
+use crate::providers::types::{
+    ApplyProviderInput, ProviderAppId, ProviderAppState, ProviderProtocol, ReasoningLevel,
+    ResolvedProvider,
+};
+
+pub(crate) struct PiAdapter;
+
+// 默认 Provider/Model/ThinkingLevel 三元组随删除清空;只有 settings 真正
+// 被修改时才写回,避免凭空创建 settings.json。reins- 条目与外部条目两条
+// 删除路径共用。
+fn clear_default_refs(
+    settings: &mut JsonMap<String, JsonValue>,
+    settings_path: &Path,
+    entry_key: &str,
+    files: &mut Vec<(PathBuf, String)>,
+) -> Result<()> {
+    if settings.get("defaultProvider").and_then(JsonValue::as_str) == Some(entry_key) {
+        settings.remove("defaultProvider");
+        settings.remove("defaultModel");
+        settings.remove("defaultThinkingLevel");
+        files.push((settings_path.to_path_buf(), serialize_json(settings)?));
+    }
+    Ok(())
+}
+
+// Pi 的思考等级选择器只对 thinkingLevelMap 里显式声明的模型开放
+// xhigh/max 档（pi getSupportedThinkingLevels：值 null 禁用该档，
+// xhigh/max 缺键即不可选），因此模型的 reasoning_levels 必须逐档下发，
+// 否则 Reins 应用的推理模型在 Pi 里最高只能选到 high。键是 Pi 档位名
+// （reasoning_dialect 的拼写），值是该档实际发给 API 的 effort（off 档
+// 为 none，Pi 各协议的缺省值）——值侧是独立于方言表的第二套拼写，
+// 不得「顺手统一」成 dialect.spell。
+fn thinking_level_map(levels: &[ReasoningLevel]) -> JsonValue {
+    let mut map = JsonMap::new();
+    for level in ReasoningLevel::all() {
+        let value = if levels.contains(level) {
+            JsonValue::String(level.as_str().to_string())
+        } else {
+            JsonValue::Null
+        };
+        map.insert(PI_AI_REASONING.spell(*level).to_string(), value);
+    }
+    JsonValue::Object(map)
+}
+
+impl AppAdapter for PiAdapter {
+    fn id(&self) -> ProviderAppId {
+        ProviderAppId::Pi
+    }
+
+    fn config_paths(&self, env: &Environment) -> Result<Vec<PathBuf>> {
+        Ok(vec![pi_models_path(env)?, pi_settings_path(env)?])
+    }
+
+    fn capability(&self) -> AppCapability {
+        AppCapability {
+            supported_protocols: ProviderProtocol::all(),
+            additive: true,
+            required_model_fields: &[],
+            // Pi 的 models.json 逐模型写 reasoning/contextWindow/maxTokens/input。
+            unwritten_model_fields: &[],
+            supported_reasoning_levels: ReasoningLevel::all(),
+            behavior_notes: &[
+                "默认 Provider、模型与思考档写在 settings.json；移除平台时这三项随删清空。",
+            ],
+        }
+    }
+
+    fn reasoning_dialect(&self) -> &'static super::dialect::ReasoningDialect {
+        &PI_AI_REASONING
+    }
+
+    fn protocol_dialect(&self) -> Option<&'static super::dialect::ProtocolDialect> {
+        Some(&super::dialect::PI_AI_PROTOCOL)
+    }
+
+    fn inspect(
+        &self,
+        env: &Environment,
+        providers: &BTreeMap<String, ResolvedProvider>,
+    ) -> Result<ProviderAppState> {
+        let models_path = pi_models_path(env)?;
+        let settings_path = pi_settings_path(env)?;
+        let mut state = super::empty_state(
+            ProviderAppId::Pi,
+            vec![models_path.clone(), settings_path.clone()],
+        );
+        if !models_path.exists() && !settings_path.exists() {
+            return Ok(state);
+        }
+        state.config_exists = true;
+        let settings = read_json_object(&settings_path)?;
+        // 应用弹窗据此预选；反读值只用于回显，不参与漂移判定。
+        state.default_reasoning_level = settings
+            .get("defaultThinkingLevel")
+            .and_then(JsonValue::as_str)
+            .and_then(|value| self.reasoning_dialect().parse(value));
+        let default_provider = settings
+            .get("defaultProvider")
+            .and_then(JsonValue::as_str)
+            .map(str::to_string);
+        let default_model = settings
+            .get("defaultModel")
+            .and_then(JsonValue::as_str)
+            .map(str::to_string);
+
+        let root = read_json_object(&models_path)?;
+        if let Some(table) = root.get("providers").and_then(JsonValue::as_object) {
+            for (key, value) in table {
+                let base_url = value.get("baseUrl").and_then(JsonValue::as_str);
+                let protocol = value
+                    .get("api")
+                    .and_then(JsonValue::as_str)
+                    .and_then(|api| PI_AI_PROTOCOL.parse(api));
+                let entry = if key.starts_with(super::REINS_PREFIX) {
+                    let mut entry = super::classify_reins_entry(key, base_url, protocol, providers);
+                    if let Some(models) = value.get("models").and_then(JsonValue::as_array) {
+                        entry.model_ids = models
+                            .iter()
+                            .filter_map(|model| model.get("id").and_then(JsonValue::as_str))
+                            .map(str::to_string)
+                            .collect();
+                    }
+                    if default_provider.as_deref() == Some(key.as_str()) {
+                        entry.default_model_id = default_model.clone();
+                    }
+                    entry
+                } else {
+                    external_entry(
+                        key.clone(),
+                        base_url.map(str::to_string),
+                        vec!["外部 Provider。".to_string()],
+                        protocol,
+                    )
+                };
+                state.entries.push(entry);
+            }
+        }
+
+        Ok(state)
+    }
+
+    fn apply(
+        &self,
+        env: &Environment,
+        provider: &ResolvedProvider,
+        plan: &ApplyProviderInput,
+        api_key: &str,
+    ) -> Result<Vec<(PathBuf, String)>> {
+        ensure_protocol_supported(self, provider)?;
+        let models_path = pi_models_path(env)?;
+        let settings_path = pi_settings_path(env)?;
+        let registration = registration_key(&provider.id);
+
+        let mut root = read_json_object(&models_path)?;
+        // Pi 的 models.json schema 要求 models 是数组，元素带 id 字段
+        //（真实文件验证：id/name/reasoning/contextWindow/maxTokens/input）。
+        let mut models = Vec::new();
+        for model_id in &plan.model_ids {
+            let model = provider
+                .models
+                .iter()
+                .find(|m| &m.id == model_id)
+                .expect("validated by validate_plan");
+            let mut model_entry = serde_json::Map::new();
+            model_entry.insert("id".to_string(), JsonValue::String(model.id.clone()));
+            model_entry.insert("name".to_string(), JsonValue::String(model.label.clone()));
+            if let Some(reasoning) = model.reasoning {
+                model_entry.insert("reasoning".to_string(), JsonValue::Bool(reasoning));
+            }
+            // 未填等级时不写 map：Pi 对无 map 的模型默认开放 off～high，
+            // 与空档位集的语义一致；写全 null 反而连 off 档都会消失。
+            if let Some(levels) = model
+                .reasoning_levels
+                .as_deref()
+                .filter(|levels| !levels.is_empty())
+            {
+                model_entry.insert("thinkingLevelMap".to_string(), thinking_level_map(levels));
+            }
+            if let Some(context_window) = model.context_window {
+                model_entry.insert("contextWindow".to_string(), JsonValue::from(context_window));
+            }
+            if let Some(max_tokens) = model.max_output_tokens {
+                model_entry.insert("maxTokens".to_string(), JsonValue::from(max_tokens));
+            }
+            if let Some(supports_images) = model.supports_images {
+                let input = if supports_images {
+                    vec![
+                        JsonValue::String("text".to_string()),
+                        JsonValue::String("image".to_string()),
+                    ]
+                } else {
+                    vec![JsonValue::String("text".to_string())]
+                };
+                model_entry.insert("input".to_string(), JsonValue::Array(input));
+            }
+            models.push(JsonValue::Object(model_entry));
+        }
+
+        let mut provider_entry = JsonMap::new();
+        provider_entry.insert(
+            "baseUrl".to_string(),
+            JsonValue::String(provider.base_url.clone()),
+        );
+        provider_entry.insert(
+            "api".to_string(),
+            JsonValue::String(PI_AI_PROTOCOL.spell(provider.protocol).to_string()),
+        );
+        provider_entry.insert("apiKey".to_string(), JsonValue::String(api_key.to_string()));
+        provider_entry.insert("models".to_string(), JsonValue::Array(models));
+
+        if !root
+            .entry("providers")
+            .or_insert_with(|| JsonValue::Object(JsonMap::new()))
+            .is_object()
+        {
+            bail!("providers 段不是对象：{}", models_path.display());
+        }
+        root.get_mut("providers")
+            .and_then(JsonValue::as_object_mut)
+            .expect("checked above")
+            .insert(registration.clone(), JsonValue::Object(provider_entry));
+
+        let mut settings = read_json_object(&settings_path)?;
+        settings.insert(
+            "defaultProvider".to_string(),
+            JsonValue::String(registration),
+        );
+        settings.insert(
+            "defaultModel".to_string(),
+            JsonValue::String(plan.default_model_id.clone()),
+        );
+        if let Some(level) = plan.default_reasoning_level {
+            settings.insert(
+                "defaultThinkingLevel".to_string(),
+                JsonValue::String(PI_AI_REASONING.spell(level).to_string()),
+            );
+        }
+
+        Ok(vec![
+            (models_path, serialize_json(&root)?),
+            (settings_path, serialize_json(&settings)?),
+        ])
+    }
+    fn remove(
+        &self,
+        env: &Environment,
+        provider_id: &str,
+        provider: Option<&ResolvedProvider>,
+    ) -> Result<Vec<(PathBuf, String)>> {
+        let _ = provider;
+        let models_path = pi_models_path(env)?;
+        let settings_path = pi_settings_path(env)?;
+        if !models_path.exists() {
+            bail!("Pi models.json 不存在：{}", display_path(&models_path));
+        }
+        let mut root = read_json_object(&models_path)?;
+        let registration = registration_key(provider_id);
+
+        let mut settings = read_json_object(&settings_path)?;
+        let mut files: Vec<(PathBuf, String)> = Vec::new();
+        clear_default_refs(&mut settings, &settings_path, &registration, &mut files)?;
+
+        let Some(providers_table) = root.get_mut("providers").and_then(JsonValue::as_object_mut)
+        else {
+            return Err(unrecognized_entry_error("Pi", &registration));
+        };
+        let entry = providers_table.get(&registration);
+        let Some(entry) = entry else {
+            return Err(unrecognized_entry_error("Pi", &registration));
+        };
+        if entry.get("baseUrl").and_then(JsonValue::as_str).is_none() {
+            return Err(modified_entry_error(&registration));
+        }
+        providers_table.remove(&registration);
+        if providers_table.is_empty() {
+            root.remove("providers");
+        }
+
+        files.push((models_path, serialize_json(&root)?));
+        Ok(files)
+    }
+
+    fn remove_external(
+        &self,
+        env: &Environment,
+        entry_key: &str,
+    ) -> Result<Vec<(PathBuf, String)>> {
+        let models_path = pi_models_path(env)?;
+        let settings_path = pi_settings_path(env)?;
+        if !models_path.exists() {
+            bail!("Pi models.json 不存在：{}", display_path(&models_path));
+        }
+        let mut root = read_json_object(&models_path)?;
+
+        let mut settings = read_json_object(&settings_path)?;
+        let mut files: Vec<(PathBuf, String)> = Vec::new();
+        clear_default_refs(&mut settings, &settings_path, entry_key, &mut files)?;
+
+        let Some(providers_table) = root.get_mut("providers").and_then(JsonValue::as_object_mut)
+        else {
+            return Err(entry_not_found_error("Pi", entry_key));
+        };
+        if providers_table.remove(entry_key).is_none() {
+            return Err(entry_not_found_error("Pi", entry_key));
+        }
+        if providers_table.is_empty() {
+            root.remove("providers");
+        }
+
+        files.push((models_path, serialize_json(&root)?));
+        Ok(files)
+    }
+}

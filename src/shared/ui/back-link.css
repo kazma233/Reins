@@ -1,0 +1,26 @@
+/* 子页返回入口:轻量文本按钮,压在标题之上,不抢标题层级 */
+.back-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--color-body);
+  font-size: var(--button-font-size-compact);
+  cursor: pointer;
+  font-weight: var(--button-font-weight);
+}
+
+@media (hover: hover) {
+  .back-link:hover {
+    color: var(--color-primary);
+  }
+}
+
+.back-link:focus-visible {
+  outline: 2px solid var(--color-focus-ring);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}

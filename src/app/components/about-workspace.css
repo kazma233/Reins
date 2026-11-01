@@ -1,0 +1,78 @@
+/* 关于页:整屏一列,内容按阅读宽度居中,与其它整屏页一致 */
+.about-workspace {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  background: var(--color-canvas);
+}
+
+.about-header {
+  flex: 0 0 auto;
+  width: 100%;
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 18px 24px 0;
+}
+
+.about-header__title {
+  margin: 0;
+  font-size: var(--font-size-2xl);
+  font-weight: 600;
+  color: var(--color-ink);
+}
+
+.about-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: 100%;
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 16px 24px 40px;
+}
+
+.about-body__version {
+  margin: 0;
+  color: var(--color-body);
+  font-size: var(--font-size-md);
+  font-variant-numeric: tabular-nums;
+}
+
+.about-body__desc {
+  margin: 0;
+  color: var(--color-body);
+  font-size: var(--font-size-md);
+  line-height: 1.6;
+}
+
+.about-body__tools {
+  margin: 0;
+  color: var(--color-muted);
+  font-size: var(--font-size-sm);
+}
+
+/* 缓存清空小节:说明 + 入口按钮,放在页面末尾保持安静。 */
+.about-cache {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10px;
+  margin-top: 12px;
+  padding-top: 16px;
+  border-top: 1px solid var(--color-hairline);
+}
+
+.about-cache__hint {
+  margin: 0;
+  color: var(--color-muted);
+  font-size: var(--font-size-sm);
+  line-height: 1.6;
+}
+
+.about-cache__done {
+  margin: 0;
+  color: var(--color-body);
+  font-size: var(--font-size-sm);
+}

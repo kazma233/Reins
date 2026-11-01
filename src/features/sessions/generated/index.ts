@@ -1,0 +1,18 @@
+// Hand-maintained barrel: ts-rs emits one file per type, so this index lists
+// the generated contract types for `export *` consumers. Extend it when a new
+// #[ts(export)] type is added in src-tauri/src/session/model.rs.
+export * from "./ContentBlock";
+export * from "./DeletePlan";
+export * from "./DeletePlanAction";
+export * from "./DeleteSessionResult";
+export * from "./SessionAgent";
+export * from "./SessionEvent";
+export * from "./SessionMessage";
+export * from "./SessionModel";
+export * from "./SessionOverview";
+export * from "./SessionPage";
+export * from "./SessionRefreshResult";
+export * from "./SessionSummary";
+export * from "./SessionTokenUsage";
+export * from "./SourceApp";
+export * from "./SourceStatus";

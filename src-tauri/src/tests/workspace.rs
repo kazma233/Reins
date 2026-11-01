@@ -1,0 +1,1935 @@
+use super::*;
+use crate::test_support::{TestDir, TestEnvGuard};
+use crate::workspace::addressing::TargetRef;
+use crate::workspace::targets::target_presets_inner;
+use std::time::{Duration, UNIX_EPOCH};
+
+#[path = "workspace_grokbuild.rs"]
+mod grokbuild;
+
+fn write_skill(root: &Path, relative_path: &str, body: &str) -> Result<()> {
+    let skill_dir = root.join(relative_path);
+    fs::create_dir_all(&skill_dir)?;
+    fs::write(skill_dir.join("SKILL.md"), body)?;
+    Ok(())
+}
+
+fn resolved_target(id: &str, skill_dir: PathBuf) -> ResolvedTargetConfig {
+    ResolvedTargetConfig {
+        id: AgentTargetId(id.to_string()),
+        is_project: false,
+        skill_dir,
+        config_path: None,
+        mcp_config_prefix: String::new(),
+        mcp_config_type: McpConfigType::Common,
+    }
+}
+
+fn resolved_config(targets: Vec<ResolvedTargetConfig>) -> ResolvedManagerConfig {
+    let targets = targets
+        .into_iter()
+        .map(|target| (target.id.clone(), target))
+        .collect();
+
+    ResolvedManagerConfig {
+        targets,
+        projects: BTreeMap::new(),
+        skill_sources: BTreeMap::new(),
+        mcps: Vec::new(),
+    }
+}
+
+fn link_source(id: &str, root_path: PathBuf, include_name_patterns: &[&str]) -> SkillLinkSource {
+    SkillLinkSource {
+        id: id.to_string(),
+        root_path: root_path.canonicalize().unwrap_or(root_path),
+        include_name_patterns: include_name_patterns
+            .iter()
+            .map(|pattern| (*pattern).to_string())
+            .collect(),
+        include_path_patterns: Vec::new(),
+    }
+}
+
+#[test]
+fn sync_target_options_report_all_link_states() -> Result<()> {
+    let root = TestDir::new("sync-target-link-states")?;
+    let source_root = root.path().join("source");
+    let target_skill_dir = root.path().join("target").join("skills");
+    let unmanaged_root = root.path().join("unmanaged");
+
+    write_skill(&source_root, "linked", "linked")?;
+    write_skill(&source_root, "excluded", "excluded")?;
+    write_skill(&source_root, "removed", "removed")?;
+    write_skill(&unmanaged_root, "external", "external")?;
+    fs::create_dir_all(&target_skill_dir)?;
+
+    create_directory_symlink(
+        &source_root.join("linked"),
+        &target_skill_dir.join("linked"),
+    )?;
+    create_directory_symlink(
+        &source_root.join("excluded"),
+        &target_skill_dir.join("excluded"),
+    )?;
+    create_directory_symlink(
+        &source_root.join("removed"),
+        &target_skill_dir.join("removed"),
+    )?;
+    create_directory_symlink(
+        &unmanaged_root.join("external"),
+        &target_skill_dir.join("external"),
+    )?;
+    fs::remove_dir_all(source_root.join("removed"))?;
+
+    let config = resolved_config(vec![resolved_target("codex", target_skill_dir)]);
+    let sources = vec![link_source("local", source_root, &["linked"])];
+    let options = build_sync_target_options_with_sources(&config, &sources)?;
+    let links = &options[0].links;
+
+    assert_eq!(links.len(), 4, "所有目录链接都应展示");
+    assert_eq!(links[0].skill_name, "excluded");
+    assert_eq!(links[0].state, SkillLinkState::Excluded);
+    assert_eq!(links[0].matched_source_ids, vec!["local"]);
+    assert_eq!(links[1].skill_name, "external");
+    assert_eq!(links[1].state, SkillLinkState::Unmanaged);
+    assert!(links[1].matched_source_ids.is_empty());
+    assert_eq!(links[2].skill_name, "linked");
+    assert_eq!(links[2].state, SkillLinkState::Linked);
+    assert_eq!(links[3].skill_name, "removed");
+    assert_eq!(links[3].state, SkillLinkState::SourceMissing);
+
+    Ok(())
+}
+
+#[test]
+fn sync_target_options_keep_missing_skill_when_source_root_is_linked() -> Result<()> {
+    let root = TestDir::new("missing-skill-through-linked-source-root")?;
+    let source_root = root.path().join("source");
+    let linked_source_root = root.path().join("linked-source");
+    let target_skill_dir = root.path().join("target").join("skills");
+
+    write_skill(&source_root, "removed", "removed")?;
+    fs::create_dir_all(&target_skill_dir)?;
+    create_directory_symlink(&source_root, &linked_source_root)?;
+    create_directory_symlink(
+        &linked_source_root.join("removed"),
+        &target_skill_dir.join("removed"),
+    )?;
+    fs::remove_dir_all(source_root.join("removed"))?;
+
+    let config = resolved_config(vec![resolved_target("codex", target_skill_dir)]);
+    let sources = vec![link_source("local", linked_source_root, &[])];
+    let options = build_sync_target_options_with_sources(&config, &sources)?;
+    let link = options[0]
+        .links
+        .first()
+        .expect("missing skill link should be found");
+
+    assert_eq!(link.state, SkillLinkState::SourceMissing);
+    assert_eq!(link.matched_source_ids, vec!["local"]);
+
+    Ok(())
+}
+
+#[test]
+fn sync_target_options_keep_all_overlapping_source_matches() -> Result<()> {
+    let root = TestDir::new("sync-target-overlapping-sources")?;
+    let outer_root = root.path().join("sources");
+    let inner_root = outer_root.join("nested");
+    let target_skill_dir = root.path().join("target").join("skills");
+
+    write_skill(&inner_root, "alpha", "alpha")?;
+    fs::create_dir_all(&target_skill_dir)?;
+    create_directory_symlink(&inner_root.join("alpha"), &target_skill_dir.join("alpha"))?;
+
+    let config = resolved_config(vec![resolved_target("codex", target_skill_dir)]);
+    let sources = vec![
+        link_source("outer", outer_root, &[]),
+        link_source("inner", inner_root, &[]),
+    ];
+    let options = build_sync_target_options_with_sources(&config, &sources)?;
+    let link = options[0]
+        .links
+        .first()
+        .expect("skill link should be found");
+
+    assert_eq!(link.state, SkillLinkState::Linked);
+    assert_eq!(link.matched_source_ids, vec!["outer", "inner"]);
+
+    Ok(())
+}
+
+#[test]
+fn sync_target_options_do_not_duplicate_managed_directory_inheritance() -> Result<()> {
+    let root = TestDir::new("sync-target-directory-inheritance")?;
+    let source_root = root.path().join("source");
+    let owner_skill_dir = root.path().join("owner").join("skills");
+    let replica_skill_dir = root.path().join("replica").join("skills");
+
+    write_skill(&source_root, "alpha", "alpha")?;
+    fs::create_dir_all(&owner_skill_dir)?;
+    fs::create_dir_all(replica_skill_dir.parent().expect("replica parent"))?;
+    create_directory_symlink(&source_root.join("alpha"), &owner_skill_dir.join("alpha"))?;
+    create_directory_symlink(&owner_skill_dir, &replica_skill_dir)?;
+
+    // macOS 上 /var 是 /private/var 的软链接：链接解出的路径是 canonical 形态。
+    let expected_link_target = display_path(
+        &owner_skill_dir
+            .canonicalize()
+            .unwrap_or_else(|_| owner_skill_dir.clone()),
+    );
+    let config = resolved_config(vec![
+        resolved_target("owner", owner_skill_dir),
+        resolved_target("replica", replica_skill_dir),
+    ]);
+    let sources = vec![link_source("local", source_root, &[])];
+    let options = build_sync_target_options_with_sources(&config, &sources)?;
+    let owner = options
+        .iter()
+        .find(|target| target.id == "owner")
+        .expect("owner target should be found");
+    let replica = options
+        .iter()
+        .find(|target| target.id == "replica")
+        .expect("replica target should be found");
+
+    assert_eq!(owner.links.len(), 1);
+    assert_eq!(replica.linked_target_id.as_deref(), Some("owner"));
+    assert_eq!(
+        replica.skill_dir_link_target.as_deref(),
+        Some(expected_link_target.as_str())
+    );
+    assert!(replica.links.is_empty());
+
+    Ok(())
+}
+
+// 链接另一端不是受管 target（外部目录或断链）时，命名归属为空，但「落点是别名」
+// 这件事必须带给界面——否则前端会保持可勾，勾了之后后端静默跳过（用户可见的
+// 静默失效）。这里锁住归属字段仍然有值。
+#[test]
+fn sync_target_options_report_alias_skill_dir_without_named_owner() -> Result<()> {
+    let root = TestDir::new("sync-target-external-alias")?;
+    let external_skill_dir = root.path().join("external").join("skills");
+    let alias_skill_dir = root.path().join("project").join("skills");
+    let broken_skill_dir = root.path().join("broken").join("skills");
+    fs::create_dir_all(&external_skill_dir)?;
+    fs::create_dir_all(alias_skill_dir.parent().expect("alias parent"))?;
+    fs::create_dir_all(broken_skill_dir.parent().expect("broken parent"))?;
+    create_directory_symlink(&external_skill_dir, &alias_skill_dir)?;
+    create_directory_symlink(&root.path().join("gone"), &broken_skill_dir)?;
+
+    let plain_skill_dir = root.path().join("plain").join("skills");
+    fs::create_dir_all(&plain_skill_dir)?;
+
+    let config = resolved_config(vec![
+        resolved_target("plain", plain_skill_dir.clone()),
+        resolved_target("alias", alias_skill_dir),
+        resolved_target("broken", broken_skill_dir),
+    ]);
+    let options = build_sync_target_options_with_sources(
+        &config,
+        &[link_source("local", root.path().join("source"), &[])],
+    )?;
+    let by_id = |id: &str| {
+        options
+            .iter()
+            .find(|target| target.id == id)
+            .expect("target 应在列表里")
+    };
+
+    // 普通落点：没有归属，也就没有被跳过的理由。
+    assert!(by_id("plain").skill_dir_link_target.is_none());
+    assert!(by_id("plain").linked_target_id.is_none());
+
+    // 外部目录：叫不出名字，但归属字段有值（界面据此禁用并说明内容在哪）。
+    // canonicalize 在 Windows 产出 \\?\ 前缀，展示值经 display_path 剥离，
+    // 期望同样要走 display_path。
+    let alias = by_id("alias");
+    assert!(alias.linked_target_id.is_none());
+    assert_eq!(
+        alias.skill_dir_link_target.as_deref(),
+        Some(
+            display_path(
+                &external_skill_dir
+                    .canonicalize()
+                    .unwrap_or(external_skill_dir.clone())
+            )
+            .as_str()
+        )
+    );
+
+    // 断链：canonicalize 失败，回落到解析出的原路径，同样有值。
+    assert_eq!(
+        by_id("broken").skill_dir_link_target.as_deref(),
+        Some(root.path().join("gone").display().to_string().as_str())
+    );
+
+    Ok(())
+}
+
+#[cfg(windows)]
+#[test]
+fn read_directory_link_target_keeps_missing_junction_target() -> Result<()> {
+    let root = TestDir::new("missing-junction-target")?;
+    let source = root.path().join("source");
+    let destination = root.path().join("target").join("alpha");
+
+    fs::create_dir_all(&source)?;
+    fs::create_dir_all(destination.parent().expect("destination parent"))?;
+    create_directory_symlink(&source, &destination)?;
+    fs::remove_dir_all(&source)?;
+
+    let target = read_directory_link_target(&destination)?.expect("junction target should persist");
+    assert_eq!(target, source);
+
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn inspect_skill_destination_treats_symlink_to_another_skill_dir_as_conflict() -> Result<()> {
+    let root = TestDir::new("inspect-symlink")?;
+    let source = root.path().join("source");
+    let claude_dir = root.path().join("claude").join("skills").join("alpha");
+    let codex_destination = root.path().join("codex").join("skills").join("alpha");
+
+    fs::create_dir_all(&source)?;
+    fs::write(source.join("SKILL.md"), "alpha")?;
+    fs::create_dir_all(&claude_dir)?;
+    fs::write(claude_dir.join("SKILL.md"), "alpha")?;
+    fs::create_dir_all(codex_destination.parent().unwrap())?;
+    std::os::unix::fs::symlink(&claude_dir, &codex_destination)?;
+
+    let (state, _detail) = inspect_skill_destination(&source, &codex_destination);
+    assert_eq!(
+        state, "conflict",
+        "软链接指向另一份同名 skill（来自不同 source）应判 conflict",
+    );
+
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn inspect_skill_destination_treats_symlink_to_empty_dir_as_conflict() -> Result<()> {
+    let root = TestDir::new("inspect-symlink-empty")?;
+    let source = root.path().join("source");
+    let empty_dir = root.path().join("empty");
+    let destination = root.path().join("destination");
+
+    fs::create_dir_all(&source)?;
+    fs::write(source.join("SKILL.md"), "alpha")?;
+    fs::create_dir_all(&empty_dir)?;
+    std::os::unix::fs::symlink(&empty_dir, &destination)?;
+
+    let (state, _detail) = inspect_skill_destination(&source, &destination);
+    assert_eq!(state, "conflict", "软链接指向空目录应判 conflict");
+
+    Ok(())
+}
+
+#[test]
+fn create_directory_link_is_detected_as_installed() -> Result<()> {
+    let root = TestDir::new("directory-link-detect")?;
+    let source = root.path().join("source").join("alpha");
+    let destination = root.path().join("target").join("alpha");
+
+    fs::create_dir_all(&source)?;
+    fs::write(source.join("SKILL.md"), "alpha")?;
+    fs::create_dir_all(destination.parent().unwrap())?;
+
+    create_directory_symlink(&source, &destination)?;
+
+    let link_target = read_skill_dir_link(&destination)?.expect("directory link should exist");
+    assert_eq!(link_target, source.canonicalize()?);
+
+    let install = SkillInstall::new(&source);
+    let action = destination_snapshot(&install, &source, &destination);
+    assert_eq!(action.action, "unchanged");
+
+    remove_existing_path(&destination)?;
+    assert!(destination.symlink_metadata().is_err());
+    assert!(source.join("SKILL.md").exists());
+
+    Ok(())
+}
+
+#[test]
+fn remove_source_links_keeps_source_directory() -> Result<()> {
+    let root = TestDir::new("directory-link-cleanup")?;
+    let source_root = root.path().join("source");
+    let source_skill = source_root.join("alpha");
+    let target_skill_dir = root.path().join("target").join("skills");
+    let destination = target_skill_dir.join("alpha");
+
+    fs::create_dir_all(&source_skill)?;
+    fs::write(source_skill.join("SKILL.md"), "alpha")?;
+    fs::create_dir_all(&target_skill_dir)?;
+    create_directory_symlink(&source_skill, &destination)?;
+
+    let mut targets = BTreeMap::new();
+    targets.insert(
+        AgentTargetId("codex".to_string()),
+        ResolvedTargetConfig {
+            id: AgentTargetId("codex".to_string()),
+            is_project: false,
+            skill_dir: target_skill_dir,
+            config_path: None,
+            mcp_config_prefix: String::new(),
+            mcp_config_type: McpConfigType::Common,
+        },
+    );
+    let config = ResolvedManagerConfig {
+        targets,
+        projects: BTreeMap::new(),
+        skill_sources: BTreeMap::new(),
+        mcps: Vec::new(),
+    };
+
+    let removed = remove_source_symlinks_from_targets_with_root(&config, &source_root, None)?;
+
+    assert_eq!(removed.len(), 1);
+    assert!(destination.symlink_metadata().is_err());
+    assert!(source_skill.join("SKILL.md").exists());
+
+    Ok(())
+}
+
+// 两个 target + 一个 local 来源的最小 workspace 配置，供链接移除用例复用。
+fn write_link_store(root: &TestDir) -> Result<WorkspaceConfigStore> {
+    let store = WorkspaceConfigStore::at(root.path()).with_env(Environment::from_env());
+    let config = serde_json::json!({
+        "targets": {
+            "codex": {"skill_dir": root.path().join("target/skills").display().to_string()},
+            "other": {"skill_dir": root.path().join("other/skills").display().to_string()},
+        },
+        "skill_sources": [{
+            "id": "src",
+            "type": "local",
+            "root_path": root.path().join("source").display().to_string(),
+        }],
+    });
+    fs::write(store.config_path(), serde_yaml::to_string(&config)?)?;
+    Ok(store)
+}
+
+// 来源根目录还在、单独 skill 目录被删时，链接目标 canonicalize 会失败并退回
+// 原始路径，与规范化后的来源根目录在 /var → /private/var 这类系统软链接下失配，
+// 已被识别为待清理的链接会删不掉。
+#[test]
+fn remove_source_sync_clears_link_whose_skill_directory_is_gone() -> Result<()> {
+    let root = TestDir::new("remove-sync-missing-skill")?;
+    let source_root = root.path().join("source");
+    let target_skill_dir = root.path().join("target").join("skills");
+    write_skill(&source_root, "alpha", "alpha")?;
+    write_skill(&source_root, "beta", "beta")?;
+    fs::create_dir_all(&target_skill_dir)?;
+    create_directory_symlink(&source_root.join("alpha"), &target_skill_dir.join("alpha"))?;
+    create_directory_symlink(&source_root.join("beta"), &target_skill_dir.join("beta"))?;
+
+    let store = write_link_store(&root)?;
+    fs::remove_dir_all(source_root.join("alpha"))?;
+
+    let removed = remove_source_sync_inner(&store, "src", &["codex".to_string()])?.removed;
+
+    assert_eq!(removed.len(), 2);
+    assert!(target_skill_dir.join("alpha").symlink_metadata().is_err());
+    assert!(target_skill_dir.join("beta").symlink_metadata().is_err());
+    assert!(source_root.join("beta/SKILL.md").exists());
+
+    Ok(())
+}
+
+// 整个来源目录被删后，来源根目录也 canonicalize 不了；两侧都必须退回同一套
+// 规范化规则，否则删除同步会漏掉这些链接。
+#[test]
+fn remove_source_sync_clears_link_after_source_root_is_deleted() -> Result<()> {
+    let root = TestDir::new("remove-sync-deleted-root")?;
+    let source_root = root.path().join("source");
+    let target_skill_dir = root.path().join("target").join("skills");
+    write_skill(&source_root, "alpha", "alpha")?;
+    fs::create_dir_all(&target_skill_dir)?;
+    create_directory_symlink(&source_root.join("alpha"), &target_skill_dir.join("alpha"))?;
+
+    let store = write_link_store(&root)?;
+    fs::remove_dir_all(&source_root)?;
+
+    let removed = remove_source_sync_inner(&store, "src", &["codex".to_string()])?.removed;
+
+    assert_eq!(removed.len(), 1);
+    assert_eq!(removed[0].skill_name, "alpha");
+    assert!(target_skill_dir.join("alpha").symlink_metadata().is_err());
+
+    Ok(())
+}
+
+#[test]
+fn remove_target_skill_link_only_deletes_links_inside_target_skill_dir() -> Result<()> {
+    let root = TestDir::new("remove-single-skill-link")?;
+    let source_root = root.path().join("source");
+    let target_skill_dir = root.path().join("target").join("skills");
+    let other_skill_dir = root.path().join("other").join("skills");
+    write_skill(&source_root, "alpha", "alpha")?;
+    write_skill(&source_root, "beta", "beta")?;
+    fs::create_dir_all(&target_skill_dir)?;
+    fs::create_dir_all(&other_skill_dir)?;
+    create_directory_symlink(&source_root.join("alpha"), &target_skill_dir.join("alpha"))?;
+    create_directory_symlink(&source_root.join("beta"), &other_skill_dir.join("beta"))?;
+    fs::create_dir_all(target_skill_dir.join("real-dir"))?;
+
+    let store = write_link_store(&root)?;
+
+    let removed = remove_target_skill_link_inner(
+        &store,
+        "codex",
+        &display_path(&target_skill_dir.join("alpha")),
+    )?;
+    assert_eq!(removed.skill_name, "alpha");
+    assert!(target_skill_dir.join("alpha").symlink_metadata().is_err());
+    assert!(source_root.join("alpha/SKILL.md").exists());
+
+    // 真实目录不是链接，拒绝且不删除内容。
+    assert!(
+        remove_target_skill_link_inner(
+            &store,
+            "codex",
+            &display_path(&target_skill_dir.join("real-dir"))
+        )
+        .is_err()
+    );
+    assert!(target_skill_dir.join("real-dir").is_dir());
+
+    // 别的 target 目录下的链接不能借用 codex 的 id 删除。
+    assert!(
+        remove_target_skill_link_inner(
+            &store,
+            "codex",
+            &display_path(&other_skill_dir.join("beta"))
+        )
+        .is_err()
+    );
+    assert!(other_skill_dir.join("beta").symlink_metadata().is_ok());
+
+    assert!(
+        remove_target_skill_link_inner(
+            &store,
+            "missing",
+            &display_path(&target_skill_dir.join("alpha"))
+        )
+        .is_err()
+    );
+
+    Ok(())
+}
+
+// 弹窗把扫描出来的 destination_path 原样回传给单条移除命令，所以展示用的
+// 路径字符串必须能通过后端的目录归属校验。
+#[test]
+fn remove_target_skill_link_accepts_destination_path_from_sync_options() -> Result<()> {
+    let root = TestDir::new("remove-link-round-trip")?;
+    let unmanaged_root = root.path().join("external");
+    let target_skill_dir = root.path().join("target").join("skills");
+    write_skill(&unmanaged_root, "external", "external")?;
+    fs::create_dir_all(&target_skill_dir)?;
+    create_directory_symlink(
+        &unmanaged_root.join("external"),
+        &target_skill_dir.join("external"),
+    )?;
+
+    let store = write_link_store(&root)?;
+    let options = build_sync_target_options(&store)?;
+    let option = options
+        .iter()
+        .find(|option| option.id == "codex")
+        .expect("codex option exists");
+    let link = option.links.first().expect("unmanaged link is scanned");
+
+    assert_eq!(link.state, SkillLinkState::Unmanaged);
+    let removed = remove_target_skill_link_inner(&store, &option.id, &link.destination_path)?;
+
+    assert_eq!(removed.skill_name, "external");
+    assert!(
+        target_skill_dir
+            .join("external")
+            .symlink_metadata()
+            .is_err()
+    );
+    assert!(unmanaged_root.join("external/SKILL.md").exists());
+
+    Ok(())
+}
+
+// 目标目录读不出来时必须上报：静默跳过会让调用方把「链接没删掉」当成功。
+#[test]
+fn remove_source_sync_reports_unreadable_target_directory() -> Result<()> {
+    let root = TestDir::new("remove-sync-unreadable-target")?;
+    write_skill(&root.path().join("source"), "alpha", "alpha")?;
+    // skill_dir 指向一个真实文件：read_dir 会失败，且不是「目录不存在」。
+    let broken_skill_dir = root.path().join("target").join("skills");
+    fs::create_dir_all(broken_skill_dir.parent().expect("parent exists"))?;
+    fs::write(&broken_skill_dir, "not a directory")?;
+
+    let store = write_link_store(&root)?;
+
+    assert!(remove_source_sync_inner(&store, "src", &["codex".to_string()]).is_err());
+
+    Ok(())
+}
+
+#[test]
+fn parse_batch_git_skill_import_sources_requires_yaml_array() {
+    let result = parse_batch_git_skill_import_sources("repo: https://example.com/repo.git");
+    assert!(result.is_err());
+}
+
+#[test]
+fn parse_batch_git_skill_import_sources_rejects_invalid_item() {
+    let result = parse_batch_git_skill_import_sources(
+        "- repo: https://example.com/repo.git\n  include_name_patterns:\n    - ''\n",
+    );
+    assert!(result.is_err());
+}
+
+#[test]
+fn parse_batch_git_skill_import_sources_accepts_git_sources() -> Result<()> {
+    let sources = parse_batch_git_skill_import_sources(
+        "- repo: https://example.com/repo.git\n  ref: main\n  include_name_patterns:\n    - archive/*\n",
+    )?;
+
+    assert_eq!(sources.len(), 1);
+    let source = &sources[0];
+    assert_eq!(source.repo, "https://example.com/repo.git");
+    assert_eq!(source.r#ref, "main");
+    assert_eq!(source.include_name_patterns, vec!["archive/*".to_string()]);
+    Ok(())
+}
+
+#[test]
+fn include_patterns_match_name_and_path() -> Result<()> {
+    let root = TestDir::new("manager-include-skill-name")?;
+    write_skill(root.path(), "skills/beeper", "beeper")?;
+    write_skill(root.path(), "skills/agent-helper", "agent-helper")?;
+
+    let mut skills = discover_skills_in_directory(root.path())?;
+    apply_include_patterns(&mut skills, &["agent-*".to_string()], &[]);
+
+    let remaining_names = skills
+        .into_iter()
+        .map(|skill| skill.name)
+        .collect::<Vec<_>>();
+    assert_eq!(remaining_names, vec!["agent-helper".to_string()]);
+    Ok(())
+}
+
+#[test]
+fn discovered_skills_carry_frontmatter_description() -> Result<()> {
+    let root = TestDir::new("manager-skill-description")?;
+    write_skill(
+        root.path(),
+        "skills/tdd",
+        "---\nname: tdd\ndescription: Test-driven development for bugs.\n---\n\n# TDD\n",
+    )?;
+    write_skill(root.path(), "skills/legacy", "正文没有 frontmatter")?;
+
+    let skills = discover_skills_in_directory(root.path())?;
+
+    let tdd = skills
+        .iter()
+        .find(|skill| skill.name == "tdd")
+        .expect("tdd skill discovered");
+    assert_eq!(
+        tdd.description.as_deref(),
+        Some("Test-driven development for bugs.")
+    );
+    let legacy = skills
+        .iter()
+        .find(|skill| skill.name == "legacy")
+        .expect("legacy skill discovered");
+    assert_eq!(legacy.description, None);
+    Ok(())
+}
+
+#[test]
+fn skill_description_folds_whitespace_and_caps_length() {
+    let long = "词".repeat(600);
+    let contents = format!("---\ndescription: >-\n  第一行\n  第二行\n  {long}\n---\n\n正文\n");
+
+    let description = skill_description_from_contents(&contents).expect("description parsed");
+
+    assert!(description.starts_with("第一行 第二行 "));
+    assert_eq!(description.chars().count(), 500);
+}
+
+#[test]
+fn skill_source_description_normalizes_on_parse() -> Result<()> {
+    let env = Environment::from_env();
+    let config_path = PathBuf::from("/tmp/reins-source-description-test.yaml");
+    let raw = "\
+skill_sources:
+  - id: notes
+    type: local
+    root_path: /tmp/notes
+    description: \"  个人笔记技能库  \"
+  - id: blank
+    type: local
+    root_path: /tmp/blank
+    description: \"   \"
+  - id: missing
+    type: local
+    root_path: /tmp/missing
+";
+
+    let config = parse_manager_config(raw, &config_path, &env)?;
+
+    let description_of = |id: &str| {
+        config.skill_sources.get(id).and_then(|source| match source {
+            ResolvedSkillSourceDefinition::Local { description, .. } => description.clone(),
+            _ => None,
+        })
+    };
+    assert_eq!(description_of("notes").as_deref(), Some("个人笔记技能库"));
+    // 纯空白与缺字段都按未填处理。
+    assert_eq!(description_of("blank"), None);
+    assert_eq!(description_of("missing"), None);
+    Ok(())
+}
+
+#[test]
+fn partition_excluded_returns_skills_not_kept() {
+    let all = vec![
+        DiscoveredSkill {
+            name: "beeper".to_string(),
+            relative_path: "skills/beeper".to_string(),
+            skill_file_path: "/tmp/source/skills/beeper/SKILL.md".to_string(),
+            source_path: Some("/tmp/source/skills/beeper".to_string()),
+            description: None,
+        },
+        DiscoveredSkill {
+            name: "agent-helper".to_string(),
+            relative_path: "skills/agent-helper".to_string(),
+            skill_file_path: "/tmp/source/skills/agent-helper/SKILL.md".to_string(),
+            source_path: Some("/tmp/source/skills/agent-helper".to_string()),
+            description: None,
+        },
+    ];
+    let kept = vec![all[1].clone()];
+
+    let excluded = partition_excluded(&all, &kept);
+
+    assert_eq!(excluded.len(), 1);
+    assert_eq!(excluded[0].name, "beeper");
+}
+
+#[test]
+fn default_config_template_parses_with_builtin_targets() -> Result<()> {
+    // 读 ambient PI env 断言默认值,必须持全局锁防并行 pi 测试翻转 env。
+    let _guard = TestEnvGuard::lock();
+    let config_path = PathBuf::from("/tmp/reins-default-template-test.yaml");
+    let env = Environment::from_env();
+    let config = parse_manager_config(&default_config_template(&env), &config_path, &env)?;
+
+    assert_eq!(config.targets.len(), 6);
+    assert!(
+        config
+            .targets
+            .contains_key(&AgentTargetId("codex".to_string()))
+    );
+    assert!(
+        config
+            .targets
+            .contains_key(&AgentTargetId("claude".to_string()))
+    );
+    assert!(
+        config
+            .targets
+            .contains_key(&AgentTargetId("opencode".to_string()))
+    );
+    assert!(
+        config
+            .targets
+            .contains_key(&AgentTargetId("zcode".to_string()))
+    );
+    assert!(
+        config
+            .targets
+            .contains_key(&AgentTargetId("pi".to_string()))
+    );
+
+    for target in config.targets.values() {
+        assert!(!target.skill_dir.as_os_str().is_empty());
+    }
+
+    // 模板渲染与清单解析必须用同一份重定向判据：未设变量时 codex / claude
+    // 的路径都写 ~ 缩写（解析时按当前 HOME 展开），设了 env 重定向的工具
+    // 才固化绝对路径。两者分叉会让首次启动生成的 config.yaml 指向别处。
+    let home = user_home_dir().ok_or_else(|| anyhow!("测试环境缺少 HOME"))?;
+    let codex = config
+        .targets
+        .get(&AgentTargetId("codex".to_string()))
+        .expect("codex target exists");
+    // codex 的 skills 不随 CODEX_HOME 搬移：只有 config.toml 在 CODEX_HOME 下。
+    assert_eq!(codex.skill_dir, home.join(".agents/skills"));
+    assert_eq!(codex.config_path, Some(home.join(".codex/config.toml")));
+
+    let claude = config
+        .targets
+        .get(&AgentTargetId("claude".to_string()))
+        .expect("claude target exists");
+    assert_eq!(claude.skill_dir, home.join(".claude/skills"));
+    assert_eq!(claude.config_path, Some(home.join(".claude/.claude.json")));
+
+    assert!(
+        !config
+            .targets
+            .contains_key(&AgentTargetId("dsh".to_string())),
+        "dsh 不在默认模板（TemplateEntry::Absent）"
+    );
+
+    let opencode = config
+        .targets
+        .get(&AgentTargetId("opencode".to_string()))
+        .expect("opencode target exists");
+    assert!(opencode.skill_dir.ends_with(".config/opencode/skills"));
+    assert_eq!(
+        opencode.config_path.as_deref(),
+        user_home_dir()
+            .map(|home| home.join(".config/opencode/opencode.json"))
+            .as_deref()
+    );
+    assert_eq!(opencode.mcp_config_prefix, "mcp.servers");
+    assert_eq!(opencode.mcp_config_type, McpConfigType::OpenCode);
+
+    let zcode = config
+        .targets
+        .get(&AgentTargetId("zcode".to_string()))
+        .expect("zcode target exists");
+    assert!(zcode.skill_dir.ends_with(".zcode/skills"));
+    assert_eq!(
+        zcode.config_path.as_deref(),
+        user_home_dir()
+            .map(|home| home.join(".zcode/cli/config.json"))
+            .as_deref()
+    );
+    assert_eq!(zcode.mcp_config_prefix, "mcp.servers");
+    assert_eq!(zcode.mcp_config_type, McpConfigType::Common);
+
+    let pi = config
+        .targets
+        .get(&AgentTargetId("pi".to_string()))
+        .expect("pi target exists");
+    assert!(pi.skill_dir.ends_with(".pi/agent/skills"));
+    // pi ≥0.99 支持 MCP：模板固化 <agentDir>/mcp.json（env 视图与模板同源）。
+    assert_eq!(
+        pi.config_path,
+        env.value(crate::support::environment::Redirect::PiAgentDir)
+            .cloned()
+            .or_else(|| user_home_dir().map(|home| home.join(".pi/agent")))
+            .map(|dir| dir.join("mcp.json"))
+    );
+    assert_eq!(pi.mcp_config_prefix, "mcpServers");
+    assert_eq!(pi.mcp_config_type, McpConfigType::Common);
+
+    Ok(())
+}
+
+#[test]
+fn global_pi_target_without_mcp_section_falls_back_to_preset() -> Result<()> {
+    // 同上:两次读 PI env 的断言要防并行翻转。
+    let _guard = TestEnvGuard::lock();
+    let config_path = PathBuf::from("/tmp/reins-pi-target-parse-test.yaml");
+    let raw = r#"targets:
+  pi:
+    enabled: true
+    skill_dir: ~/.pi/agent/skills
+"#;
+
+    // 环境与解析同源：skill_dir 里的 ~ 按当前 HOME 展开（parse 侧口径），
+    // mcp 段缺失则回落内置默认（<agentDir>/mcp.json）。
+    let env = Environment::from_env();
+    let config = parse_manager_config(raw, &config_path, &env)?;
+    let pi = config
+        .targets
+        .get(&AgentTargetId("pi".to_string()))
+        .expect("pi target exists");
+
+    // 省略 mcp 段时回落到内置默认：<agentDir>/mcp.json + mcpServers。
+    let expected_pi_dir = env
+        .value(crate::support::environment::Redirect::PiAgentDir)
+        .cloned()
+        .or_else(|| user_home_dir().map(|home| home.join(".pi/agent")));
+    assert_eq!(
+        pi.config_path,
+        expected_pi_dir.map(|dir| dir.join("mcp.json"))
+    );
+    assert_eq!(pi.mcp_config_prefix, "mcpServers");
+
+    Ok(())
+}
+
+#[test]
+fn target_presets_cover_builtin_agents_with_env_resolved_paths() -> Result<()> {
+    // 预设路径在派生时读取 GROK_HOME / PI_CODING_AGENT_DIR，断言需持锁防并行翻转。
+    let _guard = TestEnvGuard::lock();
+    let grok_root = TestDir::new("presets-grok-home")?;
+    let pi_root = TestDir::new("presets-pi-agent-dir")?;
+    unsafe { std::env::set_var("GROK_HOME", grok_root.path()) };
+    unsafe { std::env::set_var("PI_CODING_AGENT_DIR", pi_root.path()) };
+
+    let presets = target_presets_inner(&Environment::from_env());
+    assert_eq!(presets.len(), 7, "七个内置工具各一条预设");
+    let by_id = |id: &str| {
+        presets
+            .iter()
+            .find(|preset| preset.target_id.as_str() == id)
+            .unwrap_or_else(|| panic!("缺少 {id} 预设"))
+    };
+
+    let home = user_home_dir().ok_or_else(|| anyhow!("测试环境缺少 HOME"))?;
+
+    let codex = by_id("codex");
+    assert_eq!(codex.label, "Codex");
+    assert_eq!(
+        codex.skill_dir,
+        home.join(".agents").join("skills").display().to_string()
+    );
+    assert_eq!(
+        codex.config_path.as_deref(),
+        Some(
+            home.join(".codex")
+                .join("config.toml")
+                .display()
+                .to_string()
+                .as_str()
+        )
+    );
+    assert_eq!(codex.mcp_config_prefix, "mcp_servers");
+
+    let claude = by_id("claude");
+    assert_eq!(claude.label, "Claude Code");
+    assert_eq!(
+        claude.skill_dir,
+        home.join(".claude").join("skills").display().to_string()
+    );
+    assert_eq!(
+        claude.config_path.as_deref(),
+        Some(
+            home.join(".claude")
+                .join(".claude.json")
+                .display()
+                .to_string()
+                .as_str()
+        )
+    );
+    assert_eq!(claude.mcp_config_prefix, "mcpServers");
+
+    let opencode = by_id("opencode");
+    assert_eq!(opencode.label, "OpenCode");
+    assert_eq!(
+        opencode.skill_dir,
+        home.join(".config")
+            .join("opencode")
+            .join("skills")
+            .display()
+            .to_string()
+    );
+    assert_eq!(
+        opencode.config_path.as_deref(),
+        Some(
+            home.join(".config")
+                .join("opencode")
+                .join("opencode.json")
+                .display()
+                .to_string()
+                .as_str()
+        )
+    );
+    assert_eq!(opencode.mcp_config_prefix, "mcp.servers");
+
+    let zcode = by_id("zcode");
+    assert_eq!(zcode.label, "ZCode");
+    assert_eq!(
+        zcode.skill_dir,
+        home.join(".zcode").join("skills").display().to_string()
+    );
+    assert_eq!(
+        zcode.config_path.as_deref(),
+        Some(
+            home.join(".zcode")
+                .join("cli")
+                .join("config.json")
+                .display()
+                .to_string()
+                .as_str()
+        )
+    );
+    assert_eq!(zcode.mcp_config_prefix, "mcp.servers");
+
+    // grokbuild / pi 的路径跟随 env 重定向：这正是前端静态预设无法预填、
+    // 需要后端下发的原因。
+    let grokbuild = by_id("grokbuild");
+    assert_eq!(grokbuild.label, "Grok Build");
+    assert_eq!(
+        grokbuild.skill_dir,
+        grok_root.path().join("skills").display().to_string()
+    );
+    assert_eq!(
+        grokbuild.config_path.as_deref(),
+        Some(
+            grok_root
+                .path()
+                .join("config.toml")
+                .display()
+                .to_string()
+                .as_str()
+        )
+    );
+    assert_eq!(grokbuild.mcp_config_prefix, "mcp_servers");
+
+    let pi = by_id("pi");
+    assert_eq!(pi.label, "Pi");
+    assert_eq!(
+        pi.skill_dir,
+        pi_root.path().join("skills").display().to_string()
+    );
+    assert_eq!(
+        pi.config_path.as_deref(),
+        Some(
+            pi_root
+                .path()
+                .join("mcp.json")
+                .display()
+                .to_string()
+                .as_str()
+        )
+    );
+    assert_eq!(pi.mcp_config_prefix, "mcpServers");
+
+    // dsh 按现状 defaults：cordis patch 路径 + 空 prefix。
+    let dsh = by_id("dsh");
+    assert_eq!(dsh.label, "DeepSeek Harness");
+    assert_eq!(
+        dsh.skill_dir,
+        home.join(".dsh").join("skills").display().to_string()
+    );
+    assert_eq!(
+        dsh.config_path.as_deref(),
+        Some(
+            home.join(".dsh")
+                .join("cordis.patch.yml")
+                .display()
+                .to_string()
+                .as_str()
+        )
+    );
+    assert_eq!(dsh.mcp_config_prefix, "");
+
+    Ok(())
+}
+
+// 编辑页展示的格式说明是面向用户的契约文案，逐字锁定，改动须有意为之。
+#[test]
+fn target_view_carries_mcp_format_description_per_config_type() {
+    let mut target = resolved_target("codex", PathBuf::from("/tmp/reins-skills"));
+    assert_eq!(
+        target_to_view(&target).mcp_format_description,
+        "通用 MCP 条目（标准 command/args/env），按配置文件扩展名写入 JSON 或 TOML 的 mcp 节点下。"
+    );
+
+    target.mcp_config_type = McpConfigType::OpenCode;
+    assert_eq!(
+        target_to_view(&target).mcp_format_description,
+        "OpenCode 专属格式（JSON，带 $schema 头，command 为数组、environment 键），写入 mcp.servers 根。"
+    );
+
+    target.mcp_config_type = McpConfigType::GrokBuild;
+    assert_eq!(
+        target_to_view(&target).mcp_format_description,
+        "Grok Build TOML 格式（远端类型用 headers 携带自定义头），写入 config.toml。"
+    );
+
+    target.mcp_config_type = McpConfigType::Dsh;
+    assert_eq!(
+        target_to_view(&target).mcp_format_description,
+        "DeepSeek Harness 的 Cordis patch YAML（insert/remove 操作列表，按 serverName 定位，无 configPrefix）。"
+    );
+}
+
+// 编辑页展示的格式示例与 desired 条目构造函数的产物形状逐字锁定，
+// 键名或结构调整时必须同步改示例并有意为之。
+#[test]
+fn target_view_carries_mcp_format_example_per_config_type() {
+    // 示例由 writer 的 desired 构造 + serde 序列化生成(dsh 条目的 cwd 读
+    // home),需与并行 env 测试互斥。
+    let _guard = TestEnvGuard::lock();
+    let home = user_home_dir().expect("测试环境缺少 HOME");
+
+    let labels = |view: &super::TargetConfigView| {
+        view.mcp_format_examples
+            .iter()
+            .map(|example| example.label.clone())
+            .collect::<Vec<_>>()
+    };
+    let body =
+        |view: &super::TargetConfigView, index: usize| view.mcp_format_examples[index].body.clone();
+
+    // codex:common 形态,本地与远端各一段。
+    let mut target = resolved_target("codex", PathBuf::from("/tmp/reins-skills"));
+    target.mcp_config_prefix = "mcpServers".to_string();
+    let view = target_to_view(&target);
+    assert_eq!(
+        labels(&view),
+        ["本地命令（stdio）", "远端地址（http / sse）"]
+    );
+    assert_eq!(
+        body(&view, 0),
+        r#"{
+  "mcpServers": {
+    "my-server": {
+      "args": [
+        "server.js"
+      ],
+      "command": "node",
+      "env": {
+        "KEY": "value"
+      },
+      "type": "stdio"
+    }
+  }
+}"#
+    );
+    assert_eq!(
+        body(&view, 1),
+        r#"{
+  "mcpServers": {
+    "my-server": {
+      "headers": {
+        "X-Key": "value"
+      },
+      "type": "http",
+      "url": "https://example.com/mcp"
+    }
+  }
+}"#
+    );
+
+    // zcode 的点分 prefix 结构化嵌套为 JSON 层级。
+    target.mcp_config_prefix = "mcp.servers".to_string();
+    assert_eq!(
+        body(&target_to_view(&target), 0),
+        r#"{
+  "mcp": {
+    "servers": {
+      "my-server": {
+        "args": [
+          "server.js"
+        ],
+        "command": "node",
+        "env": {
+          "KEY": "value"
+        },
+        "type": "stdio"
+      }
+    }
+  }
+}"#
+    );
+
+    // OpenCode:专属形态(local/remote,command 数组与 environment 键)。
+    target.mcp_config_type = McpConfigType::OpenCode;
+    let view = target_to_view(&target);
+    assert_eq!(
+        labels(&view),
+        ["本地命令（stdio）", "远端地址（http / sse）"]
+    );
+    assert_eq!(
+        body(&view, 0),
+        r#"{
+  "mcp": {
+    "servers": {
+      "my-server": {
+        "command": [
+          "node",
+          "server.js"
+        ],
+        "environment": {
+          "KEY": "value"
+        },
+        "type": "local"
+      }
+    }
+  }
+}"#
+    );
+    assert_eq!(
+        body(&view, 1),
+        r#"{
+  "mcp": {
+    "servers": {
+      "my-server": {
+        "headers": {
+          "X-Key": "value"
+        },
+        "type": "remote",
+        "url": "https://example.com/mcp"
+      }
+    }
+  }
+}"#
+    );
+
+    // GrokBuild:TOML 表头,本地与远端各一段。
+    target.mcp_config_type = McpConfigType::GrokBuild;
+    target.mcp_config_prefix = "mcp_servers".to_string();
+    let view = target_to_view(&target);
+    assert_eq!(
+        body(&view, 0),
+        r#"[mcp_servers.my-server]
+args = ["server.js"]
+command = "node"
+
+[mcp_servers.my-server.env]
+KEY = "value"
+"#
+    );
+    assert_eq!(
+        body(&view, 1),
+        r#"[mcp_servers.my-server]
+url = "https://example.com/mcp"
+
+[mcp_servers.my-server.headers]
+X-Key = "value"
+"#
+    );
+
+    // DSH:patch YAML,无 prefix 概念，stdio 与 streamable-http 各一段。
+    target.mcp_config_type = McpConfigType::Dsh;
+    let view = target_to_view(&target);
+    assert_eq!(
+        labels(&view),
+        ["本地命令（stdio）", "远端地址（http / sse）"]
+    );
+    assert_eq!(
+        body(&view, 1),
+        r#"- insert:
+  - id: reins-mcp-my-server
+    name: '@deepseek-ai/dsh-mcp-client'
+    config:
+      transport: streamable-http
+      serverName: my-server
+      url: https://example.com/mcp
+      headers:
+        X-Key: value
+"#
+    );
+    assert_eq!(
+        body(&view, 0),
+        format!(
+            r#"- insert:
+  - id: reins-mcp-my-server
+    name: '@deepseek-ai/dsh-mcp-client'
+    config:
+      serverName: my-server
+      transport: stdio
+      command: node
+      args:
+      - server.js
+      env:
+        KEY: value
+      cwd: {}
+      toolCallTimeoutMs: 60000
+      failOnStartupError: false
+"#,
+            home.display()
+        )
+    );
+}
+
+#[test]
+fn pi_preset_and_template_follow_pi_coding_agent_dir() -> Result<()> {
+    let _guard = TestEnvGuard::lock();
+    let redirected = PathBuf::from("/tmp/reins-pi-agent-dir-redirect");
+    unsafe { std::env::set_var("PI_CODING_AGENT_DIR", &redirected) };
+
+    let preset = target_presets_inner(&Environment::from_env())
+        .into_iter()
+        .find(|preset| preset.target_id.as_str() == "pi")
+        .ok_or_else(|| anyhow!("缺少 pi 预设"))?;
+    assert_eq!(
+        preset.config_path.as_deref(),
+        Some(redirected.join("mcp.json").display().to_string().as_str())
+    );
+    assert_eq!(preset.mcp_config_prefix, "mcpServers");
+
+    // 模板在生成时把重定向路径固化为具体值，config.yaml 是之后的权威。
+    let path = PathBuf::from("/tmp/reins-pi-defaults.yaml");
+    let env = Environment::from_env();
+    let config = parse_manager_config(&default_config_template(&env), &path, &env)?;
+    let pi = config
+        .targets
+        .get(&AgentTargetId("pi".to_string()))
+        .expect("pi target exists");
+    assert_eq!(pi.skill_dir, redirected.join("skills"));
+    assert_eq!(pi.config_path, Some(redirected.join("mcp.json")));
+
+    Ok(())
+}
+
+// target / MCP / 项目 agent 的启停开关已废弃：旧配置里的 enabled 键被忽略、
+// 不报错，也不再把目标当作「停用」。这条同时守住反序列化兼容与语义变化。
+#[test]
+fn legacy_enabled_key_is_ignored_and_never_disables() -> Result<()> {
+    let root = TestDir::new("legacy-enabled")?;
+    let store = WorkspaceConfigStore::at(root.path()).with_env(Environment::from_env());
+    let skill_dir = root.path().join("codex-skills");
+    fs::write(
+        store.config_path(),
+        format!(
+            r#"targets:
+  codex:
+    enabled: false
+    skill_dir: {}
+    mcp:
+      enabled: false
+      config_path: {}
+      config_prefix: mcp_servers
+      config_type: common
+projects:
+  my-app:
+    path: {}
+    agents:
+      codex:
+        enabled: false
+mcps:
+- name: fs-server
+  enabled: false
+  transport: stdio
+  command: npx
+"#,
+            skill_dir.display(),
+            root.path().join("codex.toml").display(),
+            root.path().join("my-app").display(),
+        ),
+    )?;
+
+    // 照常解析（旧键不报错），且线格式里不再出现 enabled 字段。
+    let state = workspace_state_inner(&store)?;
+    let view = state
+        .document
+        .as_ref()
+        .and_then(|document| document.config.as_ref())
+        .expect("config view");
+    let codex = view
+        .targets
+        .iter()
+        .find(|target| target.id.0 == "codex")
+        .expect("codex target view");
+    assert_eq!(
+        codex.config_path.as_deref(),
+        Some(
+            root.path()
+                .join("codex.toml")
+                .display()
+                .to_string()
+                .as_str()
+        )
+    );
+    assert_eq!(view.projects[0].agents.len(), 1);
+
+    // 不再有「停用目标」这一说：MCP 照常应用（此前会报「目标已禁用」）。
+    let applied = apply_mcp_to_target_inner(&store, "fs-server", "codex")?;
+    assert_eq!(applied.action, "apply");
+    assert!(root.path().join("codex.toml").exists());
+
+    Ok(())
+}
+
+// 项目 id 是复合地址的前半段：含 `:` 会让地址不可拆（前后端都按第一个冒号切），
+// 含 `/` 会破坏前端按展示 label 分组。写入与解析两侧都必须拒绝，且解析阶段就
+// 报清楚——不能等到用户点某个 target 才报「target 不存在」。
+#[test]
+fn project_id_rejects_colon_and_slash() -> Result<()> {
+    let root = TestDir::new("project-id-charset")?;
+    let store = WorkspaceConfigStore::at(root.path()).with_env(Environment::from_env());
+    fs::write(store.config_path(), "{}\n")?;
+
+    for bad in ["a:b", "web/apps"] {
+        let err = create_workspace_project_inner(
+            &store,
+            ProjectMutationInput {
+                project_id: bad.to_string(),
+                path: root.path().join("project").display().to_string(),
+                agents: vec!["codex".to_string()],
+            },
+        )
+        .expect_err("含 : 或 / 的 project id 必须被拒绝");
+        assert!(
+            err.to_string().contains("不能包含"),
+            "错误文案要说清原因：{err}"
+        );
+    }
+
+    // 手写的 config.yaml 同样在解析阶段被拦下，而不是留到寻址时才暴露。
+    fs::write(
+        store.config_path(),
+        format!(
+            "projects:\n  a:b:\n    path: {}\n    agents:\n      codex: {{}}\n",
+            root.path().join("project").display()
+        ),
+    )?;
+    let err = store
+        .parse()
+        .expect_err("解析阶段就要拒绝含 : 的 project id");
+    assert!(err.to_string().contains("不能包含"), "错误文案：{err}");
+
+    Ok(())
+}
+
+// agent 名在 config.yaml 里写成大写（或带下划线）时，id 会被规范成小写连字符，
+// 落点回退必须用规范化后的 id：否则会凭空造出一个 `<project>/Codex/skills`
+// 空目录，用户真正在用的 `<project>/codex/skills` 不被识别。
+#[test]
+fn project_agent_dir_follows_normalized_agent_id() -> Result<()> {
+    let root = TestDir::new("project-agent-normalized")?;
+    let store = WorkspaceConfigStore::at(root.path()).with_env(Environment::from_env());
+    let project_path = root.path().join("my-app");
+    fs::write(
+        store.config_path(),
+        format!(
+            "projects:\n  my-app:\n    path: {}\n    agents:\n      Custom: {{}}\n",
+            project_path.display()
+        ),
+    )?;
+
+    let config = store.parse()?;
+    let target = config
+        .target(&TargetRef::Project {
+            project_id: "my-app".to_string(),
+            agent_id: AgentTargetId("custom".to_string()),
+        })
+        .expect("规范化后的 id 应能寻址到该 target");
+
+    // 没有内置项目布局的 agent 走回退路径：目录名必须是规范化后的 id。
+    assert_eq!(target.skill_dir, project_path.join("custom/skills"));
+    assert_eq!(target.config_path, None);
+
+    Ok(())
+}
+
+// inspection 也要带上落点归属：目标面板的列表用它标注「这个落点不归它」，
+// 与同步弹窗同一份数据，不再让两个界面各自判断。
+#[test]
+fn inspection_reports_skill_dir_link_attribution() -> Result<()> {
+    let root = TestDir::new("inspect-skill-dir-link")?;
+    let store = WorkspaceConfigStore::at(root.path()).with_env(Environment::from_env());
+
+    let owner_skill_dir = root.path().join("owner/skills");
+    let alias_skill_dir = root.path().join("alias/skills");
+    let broken_skill_dir = root.path().join("broken/skills");
+    fs::create_dir_all(&owner_skill_dir)?;
+    fs::create_dir_all(alias_skill_dir.parent().expect("alias parent"))?;
+    fs::create_dir_all(broken_skill_dir.parent().expect("broken parent"))?;
+    create_directory_symlink(&owner_skill_dir, &alias_skill_dir)?;
+    create_directory_symlink(&root.path().join("gone"), &broken_skill_dir)?;
+
+    fs::write(
+        store.config_path(),
+        format!(
+            r#"targets:
+  owner:
+    skill_dir: {}
+  alias:
+    skill_dir: {}
+  broken:
+    skill_dir: {}
+"#,
+            owner_skill_dir.display(),
+            alias_skill_dir.display(),
+            broken_skill_dir.display(),
+        ),
+    )?;
+
+    let state = workspace_state_inner(&store)?;
+    let inspection = state.inspection.expect("inspection");
+    let by_id = |id: &str| {
+        inspection
+            .targets
+            .iter()
+            .find(|target| target.id.0 == id)
+            .expect("target 应在 inspection 里")
+    };
+
+    // 普通落点不标注。
+    assert!(by_id("owner").skill_dir_link.is_none());
+
+    // 指向受管 target：给出命名归属与真实目录。
+    let link = by_id("alias")
+        .skill_dir_link
+        .as_ref()
+        .expect("alias 应标注");
+    assert_eq!(link.linked_target_id.as_deref(), Some("owner"));
+    assert_eq!(
+        link.link_target,
+        display_path(
+            &owner_skill_dir
+                .canonicalize()
+                .unwrap_or_else(|_| owner_skill_dir.clone())
+        )
+    );
+
+    // 断链：叫不出名字，但仍要标注（内容在链接另一端）。
+    let broken = by_id("broken")
+        .skill_dir_link
+        .as_ref()
+        .expect("断链也要标注");
+    assert!(broken.linked_target_id.is_none());
+    assert_eq!(
+        broken.link_target,
+        root.path().join("gone").display().to_string()
+    );
+
+    // 两个别名各一条提示，普通 target 不提示（面板已按行标注，这里让其它消费方
+    // 也能看到「它为什么不参与分发」）。
+    assert_eq!(inspection.warnings.len(), 2);
+    assert!(
+        inspection
+            .warnings
+            .iter()
+            .any(|warning| warning.starts_with("alias ")),
+        "warnings 应说明是哪个 target：{:?}",
+        inspection.warnings
+    );
+
+    Ok(())
+}
+
+#[test]
+fn pi_mcp_apply_read_remove_roundtrip() -> Result<()> {
+    let root = TestDir::new("pi-mcp-roundtrip")?;
+    let store = WorkspaceConfigStore::at(root.path()).with_env(Environment::from_env());
+    let pi_mcp = root.path().join("mcp.json");
+    let config = serde_json::json!({
+        "targets": {
+            "pi": {"skill_dir": root.path().join("pi-skills").display().to_string(),
+                "mcp": {"config_path": pi_mcp.display().to_string(),
+                    "config_prefix": "mcpServers", "config_type": "common"}}
+        },
+        "mcps": [{"name": "fs-server", "transport": "stdio", "command": "npx",
+            "args": ["-y", "server-filesystem"]}]
+    });
+    fs::write(store.config_path(), serde_yaml::to_string(&config)?)?;
+
+    let preview = preview_mcp_target_inner(&store, "fs-server", "pi")?;
+    assert_eq!(preview.format, "json");
+    let entry: serde_json::Value = serde_json::from_str(&preview.content)?;
+    assert_eq!(entry["type"], "stdio");
+    assert_eq!(entry["command"], "npx");
+    assert_eq!(
+        entry["args"],
+        serde_json::json!(["-y", "server-filesystem"])
+    );
+
+    apply_mcp_to_target_inner(&store, "fs-server", "pi")?;
+    apply_mcp_to_target_inner(&store, "fs-server", "pi")?;
+    let written: serde_json::Value = serde_json::from_str(&fs::read_to_string(&pi_mcp)?)?;
+    assert_eq!(written["mcpServers"]["fs-server"]["command"], "npx");
+
+    remove_mcp_from_target_inner(&store, "fs-server", "pi")?;
+    assert!(!fs::read_to_string(&pi_mcp)?.contains("fs-server"));
+    assert_eq!(
+        remove_mcp_from_target_inner(&store, "fs-server", "pi")?.action,
+        "noop"
+    );
+
+    Ok(())
+}
+
+// CODEX_HOME 是 codex 官方支持的目录重定位：workspace 的 MCP 落点必须与
+// providers 认的配置文件是同一个。此前 workspace 只认 GROK_HOME /
+// PI_CODING_AGENT_DIR，用户设了 CODEX_HOME 后两个域会写两份配置。
+#[test]
+fn codex_mcp_apply_follows_codex_home_redirect() -> Result<()> {
+    let home = TestDir::new("codex-home-redirect-home")?;
+    let codex_home = TestDir::new("codex-home-redirect")?;
+    let _guard = TestEnvGuard::set_home(home.path());
+    unsafe { std::env::set_var("CODEX_HOME", codex_home.path()) };
+
+    let store = WorkspaceConfigStore::at(home.path()).with_env(Environment::from_env());
+    fs::write(
+        store.config_path(),
+        format!(
+            r#"targets:
+  codex:
+    skill_dir: {}
+mcps:
+- name: fs-server
+  transport: stdio
+  command: npx
+"#,
+            codex_home.path().join("skills").display(),
+        ),
+    )?;
+
+    // 省略 mcp 段 -> 回落内置默认：$CODEX_HOME/config.toml。
+    let preview = preview_mcp_target_inner(&store, "fs-server", "codex")?;
+    assert_eq!(preview.format, "toml");
+    assert_eq!(
+        PathBuf::from(&preview.config_path),
+        codex_home.path().join("config.toml")
+    );
+
+    let applied = apply_mcp_to_target_inner(&store, "fs-server", "codex")?;
+    let written = codex_home.path().join("config.toml");
+    assert_eq!(
+        applied.updated_path.as_deref(),
+        Some(display_path(&written).as_str())
+    );
+    assert!(fs::read_to_string(&written)?.contains("fs-server"));
+    assert!(
+        !home.path().join(".codex").join("config.toml").exists(),
+        "重定向生效时不该再写 ~/.codex"
+    );
+
+    Ok(())
+}
+
+#[test]
+fn project_pi_agent_uses_pi_project_layout() -> Result<()> {
+    let project_path = PathBuf::from("/tmp/reins-pi-project-layout-test");
+    let config_path = PathBuf::from("/tmp/reins-pi-project-layout-test.yaml");
+    let raw = format!(
+        r#"projects:
+  my-app:
+    path: {}
+    agents:
+      pi:
+        enabled: true
+"#,
+        project_path.display()
+    );
+
+    let config = parse_manager_config(&raw, &config_path, &Environment::default())?;
+    let project = config.projects.get("my-app").expect("project exists");
+    let target = project
+        .agents
+        .get(&AgentTargetId("pi".to_string()))
+        .expect("pi project agent exists");
+
+    assert_eq!(target.skill_dir, project_path.join(".pi/skills"));
+    assert_eq!(
+        target.config_path.as_ref(),
+        Some(&project_path.join(".pi/mcp.json"))
+    );
+    assert_eq!(target.mcp_config_prefix, "mcpServers");
+    assert_eq!(target.mcp_config_type, McpConfigType::Common);
+
+    Ok(())
+}
+
+#[test]
+fn project_opencode_agent_uses_opencode_project_layout() -> Result<()> {
+    let project_path = PathBuf::from("/tmp/reins-opencode-project-layout-test");
+    let config_path = PathBuf::from("/tmp/reins-opencode-project-layout-test.yaml");
+    let raw = format!(
+        r#"projects:
+  my-app:
+    path: {}
+    agents:
+      opencode:
+        enabled: true
+"#,
+        project_path.display()
+    );
+
+    let config = parse_manager_config(&raw, &config_path, &Environment::default())?;
+    let project = config.projects.get("my-app").expect("project exists");
+    let target = project
+        .agents
+        .get(&AgentTargetId("opencode".to_string()))
+        .expect("opencode project agent exists");
+    let mcp_config_path = project_path.join("opencode.json");
+
+    assert_eq!(target.skill_dir, project_path.join(".opencode/skills"));
+    assert_eq!(target.config_path.as_ref(), Some(&mcp_config_path));
+    assert_eq!(target.mcp_config_prefix, "mcp.servers");
+    assert_eq!(target.mcp_config_type, McpConfigType::OpenCode);
+
+    Ok(())
+}
+
+#[test]
+fn project_zcode_agent_uses_zcode_project_layout() -> Result<()> {
+    let project_path = PathBuf::from("/tmp/reins-zcode-project-layout-test");
+    let config_path = PathBuf::from("/tmp/reins-zcode-project-layout-test.yaml");
+    let raw = format!(
+        r#"projects:
+  my-app:
+    path: {}
+    agents:
+      zcode:
+        enabled: true
+"#,
+        project_path.display()
+    );
+
+    let config = parse_manager_config(&raw, &config_path, &Environment::default())?;
+    let project = config.projects.get("my-app").expect("project exists");
+    let target = project
+        .agents
+        .get(&AgentTargetId("zcode".to_string()))
+        .expect("zcode project agent exists");
+    let mcp_config_path = project_path.join(".zcode/config.json");
+
+    assert_eq!(target.skill_dir, project_path.join(".zcode/skills"));
+    assert_eq!(target.config_path.as_ref(), Some(&mcp_config_path));
+    assert_eq!(target.mcp_config_prefix, "mcp.servers");
+    assert_eq!(target.mcp_config_type, McpConfigType::Common);
+
+    Ok(())
+}
+
+#[test]
+fn delete_workspace_mcp_skips_targets_without_mcp_config() -> Result<()> {
+    let root = TestDir::new("mcp-delete-skips-unconfigured")?;
+    let store = WorkspaceConfigStore::at(root.path()).with_env(Environment::from_env());
+    let claude_config = root.path().join("claude.json");
+    fs::write(
+        store.config_path(),
+        format!(
+            r#"targets:
+  skillonly:
+    enabled: true
+    skill_dir: {}
+  claude:
+    enabled: true
+    skill_dir: {}
+    mcp:
+      enabled: true
+      config_path: {}
+      config_prefix: mcpServers
+      config_type: common
+mcps:
+- name: test-server
+  transport: stdio
+  command: node
+"#,
+            root.path().join("skillonly-skills").display(),
+            root.path().join("claude-skills").display(),
+            claude_config.display(),
+        ),
+    )?;
+    fs::write(
+        &claude_config,
+        r#"{"mcpServers": {"test-server": {"type": "stdio", "command": "node"}}}"#,
+    )?;
+
+    let result = delete_workspace_mcp_inner(&store, "test-server")?;
+
+    assert_eq!(result.server_name, "test-server");
+    // 无 MCP 配置文件的自定义 target（非内置 id，无 preset 兜底）删除时必须
+    // 被跳过而不是中断整个删除流程。
+    let cleaned = fs::read_to_string(&claude_config)?;
+    assert!(!cleaned.contains("test-server"));
+
+    Ok(())
+}
+
+// OpenCode 条目保留 transport 与 timeout；启用状态已不是 MCP 的字段，
+// 写出的条目里不该再出现 enabled 键。
+#[test]
+fn opencode_mcp_entry_writes_transport_and_timeout_without_enabled() -> Result<()> {
+    let server = ResolvedMcpConfig {
+        name: "probe-server".to_string(),
+        transport: McpTransport::Stdio,
+        created_at: None,
+        homepage: None,
+        command: Some("node".to_string()),
+        args: vec!["server.js".to_string()],
+        env: BTreeMap::new(),
+        url: None,
+        headers: BTreeMap::new(),
+        timeout: Some(3000),
+    };
+
+    let entry = desired_opencode_mcp(&server)?;
+
+    assert!(entry.get("enabled").is_none());
+    assert_eq!(entry["type"], "local");
+    assert_eq!(entry["command"], serde_json::json!(["node", "server.js"]));
+    assert_eq!(entry["timeout"], 3000);
+
+    Ok(())
+}
+
+#[test]
+fn parse_git_owner_repo_handles_common_url_forms() {
+    let cases: &[(&str, &str, &str)] = &[
+        ("https://github.com/owner/repo.git", "owner", "repo"),
+        ("https://github.com/owner/repo", "owner", "repo"),
+        ("git@github.com:owner/repo.git", "owner", "repo"),
+        ("ssh://git@github.com/owner/repo.git", "owner", "repo"),
+        ("ssh://git@github.com:22/owner/repo.git", "owner", "repo"),
+        ("https://gitlab.com/group/sub/repo.git", "sub", "repo"),
+        ("owner/repo", "owner", "repo"),
+    ];
+    for (input, want_owner, want_repo) in cases {
+        let (owner, repo) =
+            parse_git_owner_repo(input).unwrap_or_else(|| panic!("should parse: {input}"));
+        assert_eq!(owner, *want_owner, "owner for {input}");
+        assert_eq!(repo, *want_repo, "repo for {input}");
+    }
+}
+
+#[test]
+fn parse_git_owner_repo_rejects_malformed() {
+    assert!(parse_git_owner_repo("").is_none());
+    assert!(parse_git_owner_repo("just-a-name").is_none());
+}
+
+#[test]
+fn git_cache_dir_for_repo_uses_owner_name_layout() -> Result<()> {
+    let store = WorkspaceConfigStore::at(PathBuf::from("/tmp/reins-cache-layout"));
+    let dir = store.git_cache_dir_for_repo("https://github.com/acme/skills.git")?;
+    assert!(dir.ends_with("git/acme/skills"));
+    assert!(store.git_cache_dir_for_repo("just-a-name").is_err());
+    Ok(())
+}
+
+#[test]
+fn git_cache_last_fetched_at_reads_refresh_marker() -> Result<()> {
+    let root = TestDir::new("git-cache-last-fetched-at")?;
+    let store = WorkspaceConfigStore::at(root.path()).with_env(Environment::from_env());
+    let repo = "https://github.com/acme/skills.git";
+
+    assert_eq!(git_cache_last_fetched_at_ms(&store, repo), None);
+
+    let marker_path = store
+        .git_cache_dir_for_repo(repo)?
+        .join(".git")
+        .join("reins-last-fetch");
+    fs::create_dir_all(marker_path.parent().expect("marker parent"))?;
+    fs::write(&marker_path, "main")?;
+
+    let expected = i64::try_from(
+        fs::metadata(&marker_path)?
+            .modified()?
+            .duration_since(UNIX_EPOCH)?
+            .as_millis(),
+    )?;
+    assert_eq!(git_cache_last_fetched_at_ms(&store, repo), Some(expected));
+
+    Ok(())
+}
+
+#[test]
+fn git_cache_refresh_respects_24_hour_interval() {
+    let now = UNIX_EPOCH + Duration::from_secs(2_000_000);
+    let recent = now - Duration::from_secs(24 * 60 * 60 - 1);
+    let expired = now - Duration::from_secs(24 * 60 * 60);
+
+    assert!(!git_cache_refresh_is_due(
+        Some("main"),
+        Some("main"),
+        Some(recent),
+        now
+    ));
+    assert!(git_cache_refresh_is_due(
+        Some("main"),
+        Some("main"),
+        Some(expired),
+        now
+    ));
+    assert!(git_cache_refresh_is_due(
+        Some("main"),
+        Some("release"),
+        Some(recent),
+        now
+    ));
+    assert!(git_cache_refresh_is_due(
+        None,
+        Some("main"),
+        Some(recent),
+        now
+    ));
+    assert!(git_cache_refresh_is_due(
+        Some("main"),
+        Some("main"),
+        None,
+        now
+    ));
+    assert!(git_cache_refresh_is_due(
+        Some("main"),
+        Some("main"),
+        Some(now + Duration::from_secs(1)),
+        now,
+    ));
+}
+
+#[cfg(windows)]
+#[test]
+fn display_path_strips_windows_extended_length_prefix() {
+    assert_eq!(
+        display_path(Path::new(r"\\?\C:\Users\<user>\skills\agent-model-config")),
+        r"C:\Users\<user>\skills\agent-model-config",
+    );
+    assert_eq!(
+        display_path(Path::new(r"\\?\UNC\server\share\skills")),
+        r"\\server\share\skills",
+    );
+}
+
+// 旧配置兼容路径：target 的 mcp_config_prefix 为空时，读侧按 id 回落到内置布局
+// 再取条目（mcp_formats.rs::read_existing_entries 的文档承诺）。此前这条路径
+// 没有任何测试覆盖，删掉兜底实现全部用例仍然全绿。
+#[test]
+fn empty_mcp_prefix_falls_back_to_builtin_layout_when_reading() {
+    let _guard = TestEnvGuard::lock();
+    let env = Environment::from_env();
+    let root = TestDir::new("reins-empty-prefix-read").unwrap();
+
+    // 表名必须与内置布局一致才能命中；从内置默认值取，不写死 `mcp_servers`。
+    let builtin_prefix = crate::workspace::targets::builtin_target_defaults(&env)
+        .into_iter()
+        .find(|default| default.id.0 == "codex")
+        .expect("codex 应内置")
+        .config_prefix;
+    assert!(!builtin_prefix.trim().is_empty(), "内置前缀不该为空");
+
+    let config_path = root.path().join("codex.toml");
+    fs::write(
+        &config_path,
+        format!(
+            "[{builtin_prefix}.fs]\ncommand = \"npx\"\n\n[{builtin_prefix}.other]\ncommand = \"go\"\n"
+        ),
+    )
+    .unwrap();
+
+    let target = ResolvedTargetConfig {
+        id: AgentTargetId("codex".to_string()),
+        is_project: false,
+        skill_dir: root.path().join("skills"),
+        config_path: Some(config_path.clone()),
+        // 旧配置留下的空前缀：读侧必须自行补回内置布局。
+        mcp_config_prefix: String::new(),
+        mcp_config_type: McpConfigType::Common,
+    };
+
+    let entries = read_existing_mcp_entries(&target, &config_path, &env).unwrap();
+    assert!(
+        entries.contains_key("fs") && entries.contains_key("other"),
+        "空前缀时应回落到内置布局读到条目，实际：{:?}",
+        entries.keys().collect::<Vec<_>>()
+    );
+
+    // 未内置的 id 补不出布局，只能按空前缀读到空表——不报错、不猜测。
+    let unknown = ResolvedTargetConfig {
+        id: AgentTargetId("not-a-builtin".to_string()),
+        ..target
+    };
+    assert!(
+        read_existing_mcp_entries(&unknown, &config_path, &env)
+            .unwrap()
+            .is_empty()
+    );
+}

@@ -1,0 +1,40 @@
+.app-input {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  height: var(--control-height);
+  padding: 0 10px;
+  border: 1px solid var(--color-hairline);
+  border-radius: var(--radius-control);
+  background: var(--color-canvas);
+  color: var(--color-ink);
+  font-size: var(--font-size-lg);
+  line-height: 1.2;
+  box-shadow: none;
+  /* 与 AppSelect 的控件一致：隐藏 number 输入的原生微调按钮 */
+  appearance: none;
+  transition: border-color 0.18s ease;
+}
+
+@media (hover: hover) {
+  .app-input:hover:not(:disabled):not(:focus) {
+    border-color: var(--color-muted-soft);
+  }
+}
+
+.app-input:focus {
+  outline: 2px solid var(--color-focus-ring);
+  outline-offset: 1px;
+  border-color: var(--color-primary);
+}
+
+.app-input:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.app-input--sm {
+  height: var(--button-height-compact);
+  padding: 0 10px;
+  font-size: var(--font-size-md);
+}

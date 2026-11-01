@@ -1,0 +1,176 @@
+# 聚合平台模型管理模块（providers 域）实施计划
+
+- 日期：2026-09-24
+- 状态：方案已确认，未开始实现
+- 产物：新增一级业务域 `providers`，与 `session`、`workspace` 并列
+
+## 1. 模块定位
+
+- 前端：`src/features/providers/`；Rust：`src-tauri/src/providers/`。
+- 壳层新增第三个一级模式「模型配置」（`src/app/stores/app.ts` 的 `AppMode` 扩展，`AppModeRail.vue` 增加入口）。
+- 持久化：独立文件 `<Reins 数据目录>/providers.yaml`（与现有 `config.yaml` 同目录、互不解析）。
+- 独立 `ProviderConfigStore`，不依赖 `WorkspaceConfigStore`、`AgentTargetId`、workspace target、Skills、MCP 或会话数据。
+- DTO 由 ts-rs 导出到 `src/features/providers/generated/`，沿用现有契约模式。
+
+依赖红线：`providers` 域与 `sessions`、`workspace` 互不依赖；`shared`、`support` 保持现状约束。
+
+## 2. 范围（已确认）
+
+| 事项 | 结论 |
+| --- | --- |
+| 支持的工具应用 | Codex、Claude Code、OpenCode（仅 v2）、Pi、Grok Build |
+| 不支持 | ZCode；任何项目级配置（不读写项目目录下的工具配置） |
+| 官方 Provider | 仅 OpenAI、Anthropic；Reins 不管理（不存凭据/端点/模型），用户在各工具原生登录 |
+| 聚合平台 | 除 OpenAI、Anthropic 外的一切平台/自建网关，由 Reins 管理端点、协议、模型、API Key |
+| 部署记录 | 不持久化。工具配置文件是「已应用」状态的唯一事实来源，反显全部靠反读 |
+
+## 3. 数据模型（providers.yaml）
+
+```yaml
+version: 1
+providers:
+  openrouter:
+    label: OpenRouter
+    protocol: openai_chat_completions   # openai_responses | openai_chat_completions | anthropic_messages
+    base_url: https://openrouter.ai/api/v1
+    models:
+      - id: anthropic/claude-sonnet-4-5   # 发送给服务端的真实 model id
+        label: Claude Sonnet 4.5
+        # 以下全部可选；目标工具必填而未填时，该工具的「应用」按钮禁用
+        context_window: 200000      # models.dev limit.context
+        max_output_tokens: 64000    # models.dev limit.output
+        supports_images: true       # models.dev modalities.input 含 image
+        reasoning: true             # models.dev reasoning
+        reasoning_levels: [low, medium, high]  # models.dev reasoning_options[].values 归一化
+```
+
+归一化思考等级集合：`none / minimal / low / medium / high / xhigh / max`；写入各工具时取交集。
+
+## 4. 凭据（2026-09-28 变更：改为明文存 `providers.yaml`）
+
+- API Key 以**明文**存在 `providers.yaml` 的平台条目里（`api_key` 字段），与平台元数据同一个写入方、同一次原子写。
+- 编辑弹窗回显明文（列表接口也带 `apiKey`）；表单里的值就是落盘值，**清空保存即删除 Key**。
+- 用户点击「应用到工具」时，Reins 从 `providers.yaml` 读 Key，**明文写入目标工具的全局配置文件**。
+- 禁止出现在：日志、错误、预览（预览中显示 `******`）。
+- 首期仅支持 API Key 认证；不做 Bearer Token/OAuth/apiKeyHelper 类型区分。
+- Claude Code 凭据写 `ANTHROPIC_AUTH_TOKEN`（Authorization: Bearer 头；2026-09-28 由 `ANTHROPIC_API_KEY` 改为该键，只认 Bearer 的网关也能通，见验证文档 2026-09-28 补充（三））。
+
+变更原因（对照）：系统密钥管理（macOS Keychain）会在每次取明文时弹一次登录钥匙串密码，而列表反显、编辑回显、预览脱敏各需要一次读取，一次操作串起来要输多次密码；dev 构建的二进制签名每次编译都变，「始终允许」不生效。用户在知晓明文落盘风险后明确选择废弃密钥链，接受这里的安全降级：`providers.yaml` 即凭据文件，备份/同步/误提交会直接泄露 Key。
+
+随之废弃：`keychain.rs`、`ProviderKeyStore`、`set_provider_key` / `get_provider_key` 命令、`ProviderView.keyPresent`（改为下发 `apiKey`）、`keyring` 依赖，以及 Linux 无 Secret Service 的报错分支（不再存在）。旧版本写在系统钥匙串里的条目不做迁移（读取就会弹密码），需用户在编辑弹窗重新粘贴一次。
+
+## 5. 协议与工具能力
+
+协议固定三种：`openai_responses`、`openai_chat_completions`、`anthropic_messages`。
+
+| 工具 | 只操作的全局文件 | Provider 语义 | 接受协议 |
+| --- | --- | --- | --- |
+| Codex | `$CODEX_HOME/config.toml`（默认 `~/.codex/config.toml`） | 单活动 Provider，应用即替换 | 仅 `openai_responses` |
+| Claude Code | `$CLAUDE_CONFIG_DIR/settings.json`（默认 `~/.claude/settings.json`；官方支持该变量重定位，2026-09-28 接入） | 单活动，替换 | 仅 `anthropic_messages` |
+| OpenCode v2 | `~/.config/opencode/opencode.json(c)`（Windows 上 OpenCode 不认 `XDG_CONFIG_HOME`，v2.0.16 实测，统一按 `HOME/.config` 解析；两个文件都加载、`.jsonc` 顶层键覆盖 `.json`，写入目标选已存在的最高优先级文件，2026-09-28 接入） | 多 Provider 并存，新增 | `openai_chat_completions`、`openai_responses`（2026-09-27 复测后放行，apply 写 `openai/responses` 包）、`anthropic_messages` |
+| Pi | `$PI_CODING_AGENT_DIR/models.json` + `settings.json` | 多 Provider 并存，新增 | 三种均可 |
+| Grok Build | `$GROK_HOME/config.toml`（默认 `~/.grok/config.toml`） | 多 Provider 并存，新增；项目 `.grok/` 不加载模型配置 | 三种均可 |
+
+内部注册键统一 `reins-<平台ID>`，避免与工具内置 Provider 冲突；反显按该前缀识别 Reins 条目。
+
+## 6. 各工具写入契约
+
+| 工具 | 写入内容 |
+| --- | --- |
+| Codex | `model_provider="reins-x"`、`model=<id>`、`model_reasoning_effort`、`model_context_window`（模型有 `context_window` 元数据时写默认模型的窗口，否则清空 Reins 自己写入的值）、`model_catalog_json` 指向 `$CODEX_HOME/reins-models.json`（已选模型逐个生成目录条目，字段对齐 codex 0.158.0 的 ModelInfo、visibility=list 进选择器、`model_messages.instructions_template` 用内置兜底提示词；该键为整体替换语义，见验证文档 2026-09-28 补充（三）与 2026-09-29 补充（五））、`[model_providers.reins-x]`（name、base_url、wire_api="responses"、静态 Bearer Token 字段） |
+| Claude Code | `env.ANTHROPIC_BASE_URL`（聚合平台必写；不写官方端点）、`env.ANTHROPIC_AUTH_TOKEN`（2026-09-28 起由 `ANTHROPIC_API_KEY` 改写此键，旧键随重新应用清理）、`env.CLAUDE_CODE_MAX_CONTEXT_TOKENS` / `env.CLAUDE_CODE_MAX_OUTPUT_TOKENS`（取自默认模型元数据，缺失时清空）、`model`、`effortLevel`；保留文件中其他键 |
+| OpenCode v2 | `providers["reins-x"]`（v2 规范 schema：`name`、`package` 按协议选 `@opencode/ai/providers/openai-compatible` / `@opencode/ai/providers/responses` / `@opencode/ai/providers/anthropic`、`settings.baseURL`、`settings.apiKey` 明文、`models`）+ 顶层 `model="reins-x/<id>"`；`models.<id>` 逐模型写 `limit{context,output}`（两项都齐全才写）、`capabilities{tools,input,output}`（`supports_images` 决定输入模态）、`settings` 思考设置（openai 系写 `reasoningEffort`，anthropic 包写 `thinking` 预算，见下条）；写入只用 v2 规范格式，v1 遗留格式（`provider`/`npm`/`options`）只读展示、可删除，不写入 |
+| Pi | `models.json` 的 `providers["reins-x"]`（baseUrl、api、apiKey、models 含 reasoning 等元数据）+ `settings.json` 的 `defaultProvider`、`defaultModel`、`defaultThinkingLevel` |
+| Grok Build | `[model_providers.reins-x]`（base_url、api_backend；`anthropic_messages` 的 base_url 写入时规范化为 `/v1` 结尾，见验证文档 2026-09-27 实测）+ 每个 `[model."reins-x--<id>"]`（model、name、model_provider、api_key；`anthropic_messages` 用 `extra_headers` 携带 `x-api-key` 与 `anthropic-version`；模型有元数据时另写 `context_window` 与 `supports_reasoning_effort = true`，见下条）+ `[models] default`、`default_reasoning_effort`（`Max` 档映射写出 `"xhigh"`：Grok UI 无 max 档且请求层两者等价）。模型的最大输出与图像输入在该工具无落点，应用弹窗明示 |
+
+逐模型元数据的写入口径（能力表 `unwritten_model_fields` 与各适配器 apply 同源）：
+
+- Grok Build：`context_window` 有元数据就写；grok 1.0.41 实测缺该字段时按 200000 兜底，而自动压缩按该窗口计算（默认阈值 85%），对非 200K 模型时机失准。`supports_reasoning_effort = true` 在模型 `reasoning` 为真时写；实测未声明该字段的模型被判为不支持思考等级，`[models].default_reasoning_effort` 被静默忽略（`model does not support effort; ignoring it`），即该声明是默认档生效的前提。
+- Pi：逐模型写 `reasoning`、`contextWindow`、`maxTokens`、`input`（text/image），四类元数据全覆盖。
+- Codex：写默认模型的 `model_context_window`（官方 schema 顶层键，聚合模型不在内置目录时会走兜底元数据 272000 并告警 `Unknown model`）；最大输出与图像输入没有模型级字段，推理能力只有全局默认档、无 per-model 开关。
+- Claude Code：写 `env.CLAUDE_CODE_MAX_CONTEXT_TOKENS` 与 `env.CLAUDE_CODE_MAX_OUTPUT_TOKENS`（官方为网关模型提供的纠正入口：不写时输出按 32000、窗口按内置同名 ID 推断）；图像输入与 per-model 推理能力无对应键。
+- OpenCode v2：`limit.context`/`limit.output`、`capabilities.input`（由 `supports_images` 决定是否含 image）、思考设置三者都写。思考等级按协议分写：openai 系包写 `settings.reasoningEffort`（档位 none/minimal/low/medium/high/xhigh，实测请求体带 `reasoning_effort`），anthropic 包写 `settings.thinking`（`{type:"enabled",budgetTokens}`，`off` 写 `{type:"disabled"}`；实测该包不消费 `reasoningEffort`，且 `enabled` 必须带预算）。档位到预算取固定阶梯（minimal 1024 / low 2048 / medium 8192 / high 16384 / xhigh 与 max 32768），官方与 OpenCode 都没有该映射，属 Reins 的产品取值；models.dev 亦只给 anthropic budget_tokens `min: 1024`、无推荐阶梯（2026-09-29 查证，见验证文档后续动作第 6 条），维持现值。`max` 不放行（openai 侧无此档）。
+- Grok 的最大输出（`max_completion_tokens` 属采样上限，非元数据落点）与图像输入（配置无对应字段，1.0.41 实测 `supports_images`/`input`/`supports_vision` 均被静默忽略）不写。
+- 应用弹窗展示 `ProviderAppState.unwritten_model_fields`，明示本次应用不写入哪些模型元数据，避免用户误以为填写值已生效。
+
+移除规则：
+
+- 只删 `reins-` 前缀且内容仍可识别的条目；用户手工改过的漂移配置不自动删。
+- Claude Code 仅当 `ANTHROPIC_BASE_URL` 与该平台一致才清（避免读密钥比对）。
+- OpenCode/Pi/Grok 的默认模型引用待删条目时，先要求切换默认再移除。
+- Codex/Claude 应用新平台即替换旧聚合平台配置。
+
+## 7. 操作流程
+
+- **应用**：能力校验（协议兼容 + 该工具必填高级参数齐全，缺失则按钮禁用并列出缺失项）→ 勾选模型 + 指定默认模型 + 可选默认思考等级（取模型 `reasoning_levels` ∩ 工具支持集）→ 从 `providers.yaml` 读 Key → 预览（文件路径 + 变更 diff + 能力警告，密钥脱敏）→ 确认 → 原子写入目标文件。
+- **反显**：`get_providers_state` 反读五个工具配置；条目状态 `已应用 / 漂移 / 外部配置 / 不支持`。外部配置（非 `reins-` 前缀、Claude 的非匹配 base_url）只展示不纳管。
+- **删除平台**：删元数据连同其中的明文 Key；反读提示仍被引用的工具并要求用户确认，不自动清理外部配置。
+- **模型目录**：平台拉取 + 手工新增并存。拉取：显式触发、固定超时（约 10s）、Key 只用于本次请求不落日志；返回列表由用户勾选后加入目录，失败可回退手工新增。
+- **models.dev 元数据补全**：运行时按需拉取 `https://models.dev/api.json` 并缓存到 Reins 数据目录；平台/模型编辑页提供「从 models.dev 补全」。匹配规则：模型 id 去掉 `provider/` 前缀后优先在 models.dev 同名 provider 下精确匹配，否则全库按 id 搜索，多候选列出供用户选择；只预填空缺字段，不覆盖用户已填值。
+
+## 8. 实现结构
+
+```
+src-tauri/src/providers/
+  mod.rs          # 域入口、re-export
+  config.rs       # ProviderConfigStore：providers.yaml 读写（含明文 api_key）、进程内锁、原子写（复用 write_atomic 模式）
+  types.rs        # ts-rs 导出 DTO（RawProvider.api_key 为明文落盘字段）
+  commands.rs     # Tauri 命令（不含单独的密钥读写命令）
+  catalog.rs      # 按协议拉取模型列表 + models.dev 缓存与匹配（Key 取自 providers.yaml）
+  apps/
+    mod.rs        # 适配器注册表 + 能力表（协议、必填字段、思考等级、替换/并存语义）
+    codex.rs / claude.rs / opencode.rs / pi.rs / grokbuild.rs
+```
+
+命令：`get_providers_state`、Provider CRUD（含明文 Key 字段）、`fetch_provider_models_direct`、`fetch_modelsdev_catalog`、`apply_provider_to_app`、`remove_provider_from_app`。
+
+> 注：原计划里的 `fetch_provider_models`（按已保存平台 ID 拉取）已删除。拉取统一走 `fetch_provider_models_direct`，用表单当前值（含未保存的改动），不再读 `providers.yaml`。
+
+新增依赖：`reqwest`（模型/目录拉取，blocking + rustls）。
+
+前端：
+
+- `AppMode` 增加 `"providers"`，rail 图标与文案「模型配置」。
+- `src/features/providers/ProvidersWorkspace.vue`：两个页签——`平台`（聚合平台 CRUD、明文 Key、模型目录、拉取、models.dev 补全）、`Agent`（五个应用卡片，反读状态、应用弹窗、移除）。
+- `api.ts` 封装全部 invoke；类型只来自 `generated/`。
+
+## 9. 实施顺序
+
+1. 域骨架：`providers` 模块 + `AppMode` 第三项 + 空页面 + `pnpm codegen`。
+2. Provider CRUD（含明文 Key 字段，一次 upsert 落盘）。
+3. 模型目录：手工新增 + 协议拉取。
+4. 五个工具的只读反读 inspection。
+5. 逐个实现 apply/remove：Codex → OpenCode → Pi → Grok Build → Claude Code，每个都在隔离目录验证后进入下一个。
+6. models.dev 补全与前端完整 UI。
+7. 文档：更新 `2026-05-22-domain-boundaries.md` 增补 providers 域红线、README 功能说明。
+
+## 10. 测试与验收
+
+- 单测：providers.yaml 解析/序列化往返；各适配器「生成 → 解析 → 幂等」；协议/必填字段门控；默认模型引用移除拒绝；漂移识别。
+- 存储：trait 抽象 + 测试走真实 upsert 路径（含留空清除 Key 的语义）。
+- 隔离环境端到端（虚拟 HOME / `CODEX_HOME` / `PI_CODING_AGENT_DIR` / `XDG_CONFIG_HOME` / `GROK_HOME` + 写入 providers.yaml 的测试 Key）：
+  apply → 目标 CLI 解析成功 → 反读 = 已应用 → 再次 apply 无变更 → remove → 配置还原。
+  - Codex：`codex --strict-config doctor`
+  - OpenCode：`opencode debug config`
+  - Pi：`pi --list-models`
+  - Grok Build：`grok inspect --json`
+  - Claude Code：`claude doctor` / `/status`
+- 安全验收：日志、错误、预览、命令输出不泄露密钥明文（`providers.yaml` 作为凭据文件本身除外）。
+- 工程门禁：`pnpm codegen`、`cargo fmt --check`、`cargo test`、`pnpm test`、`vue-tsc`、`pnpm build` 全绿。
+
+## 11. unverified 项（2026-09-25 二次核对后更新，详见 context/2026-09-25-providers-contract-verification.md）
+
+- Codex `model_reasoning_effort`：官方值域 `low/medium/high/xhigh/max/ultra`（非穷举）；我们写出的 `none/minimal` 在 codex-cli 0.145.0 客户端可加载（doctor + debug prompt-input），请求时行为需真实端点未验证。models.dev 数据源级佐证（2026-09-29）：`none`（gpt-5.3-codex 等）与 `minimal`（gpt-5-mini / gpt-5-nano）均为真实 effort 值，`max` 仅最新模型（gpt-5.6）提供。
+- Claude Code：`effortLevel` 键名与值域已按官方确认（low/medium/high/xhigh/max），能力表已收窄；本机未装 CLI，端到端仍未验证。
+- OpenCode：v2 规范 schema 运行时接受性已真机验证（v2.0.16 全局条目 + `opencode models`）；`openai_responses` 曾因 v2.0.16 对照实验静默加载失败关闭放行，2026-09-27 v2.0.18 复测 `openai/responses` 端到端可用恢复放行（`openai-compatible/responses` 同版初始化报 `Cannot find package '@opencode/ai'`，不采用）；思考等级已从能力表移除（apply 本就不消费）。
+- Grok：`default_reasoning_effort` / `reasoning_efforts` 合法取值未验证；`[model_providers]` 表 + `model_provider` 字段官方文档未记载（官方简化式为 `[model.<id>]` 直接带 base_url），我们的写法来自 1.0.40 实测且同版复测通过，存在未来版本变更风险。models.dev 数据源级佐证（2026-09-29）：xai 模型 effort 值域为 low/medium/high/xhigh（grok-4.3 另含 none），无 max——与「Max 档映射写 xhigh」的既有处置一致。
+- 各聚合平台模型列表接口差异（`/v1/models` 形态、鉴权头）。
+- ~~models.dev `reasoning_options` 取值与各工具等级的映射表~~ 已查证（2026-09-29）：models.dev 不提供跨工具映射，只按 `{type: effort|budget_tokens|toggle}` 三形态记录各模型原始值域——anthropic 新模型 effort 为 low/medium/high/xhigh/max（opus-4.5/4.6 等 early 款是 low/medium/high 或 +max）、xai 为 low/medium/high/xhigh、openai 各模型不一（none/minimal 起步、max 仅最新款）；budget_tokens 仅 `min: 1024`（anthropic 旧模型）；`toggle` 即开/关（sonnet-5）。与 Reins 归一化档位的对应：effort 各档同名对应，`toggle`≈off；`minimal` 仅 openai 系部分模型（gpt-5-mini / gpt-5-nano）有同名值，anthropic 无。
+
+## 12. 背景与取舍记录
+
+- `applications` 部署表方案已否决：不持久化应用关系，反显以工具配置文件为准。
+- 「官方」口径按产品定义：仅 OpenAI、Anthropic；其余一律归聚合平台管理（即使底层是单一自有模型的服务商）。
+- 凭据写入工具配置采用明文，是用户在知晓项目安全约束后对「应用时明文落盘」的明确确认；2026-09-28 进一步确认存储侧也放弃加密：Key 明文存 `providers.yaml`，理由见第 4 节。
+- OpenCode 仅支持 v2 运行时。写入一律用 v2 规范 schema（`providers`/`package`/`settings`）；v1 遗留 schema（`provider`/`npm`/`options`）只读展示、可删除——v2 运行时官方承诺继续兼容 v1 配置，用户手工配置或旧版 Reins 写入的条目可能留在 v1 节点；不向 v1 写入、不迁移。
+- 思考等级参考 models.dev 的 `reasoning` / `reasoning_options` 字段口径，归一化后存储，写入时按工具取交集。

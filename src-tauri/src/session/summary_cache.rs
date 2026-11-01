@@ -1,0 +1,306 @@
+//! 持久化会话摘要缓存（SQLite）。
+//!
+//! 首次加载时 codex/claude 的每个会话根转录文件要整文件解析一次才能拿到
+//! 标题（如用户机器上 1233 个文件共 2.1GB）。这份缓存按 (来源, 路径, mtime)
+//! 存解析结果：进程重启后 mtime 未变的文件直接命中缓存，只有新增或变更过的
+//! 文件才重新解析。缓存键的失效语义与各后端的内存摘要缓存完全一致（都信任
+//! 文件 mtime），缓存只是把同一份结果延伸到了进程生命周期之外。
+//!
+//! 错误契约：缓存是加速层，转录文件才是权威数据源；任何缓存读写失败都记日志
+//! 并按 miss 处理（load 返回 None、store 放弃写入），不得阻断列表加载。
+
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::sync::Mutex;
+
+use anyhow::{Context, Result};
+use rusqlite::Connection;
+
+use super::model::{SessionSummary, SourceApp};
+
+// 解析逻辑变更时（如标题提取规则调整）必须 bump 文件名里的版本号：
+// 旧版本库文件整体失效，新版本从空库全量重建一次。
+// v3：summary 增加 archived/compressed 状态位，旧行反序列化后两个标志恒为
+// false，而缓存键只看 mtime，不重建就会一直漏掉角标。
+// v4：summary 增加 models（会话用过的模型与供应商），同理旧行恒为空。
+// v5：标题不再截断（normalize_title 去掉了 72 字符上限），旧的截断标题
+// 同样会被 mtime 缓存一直沿用。
+pub(crate) const DB_FILE_NAME: &str = "session-summary-cache_v5.db";
+
+/// 实例级句柄:目录随读取器引擎实例注入(测试传临时目录),连接惰性打开。
+/// SQL 与全局层同源,两张脸共享同一份库文件格式。
+pub(crate) struct SummaryDb {
+    dir: PathBuf,
+    connection: Mutex<Option<Connection>>,
+}
+
+impl SummaryDb {
+    /// 生产路径的库目录（`~/.reins`）：引擎与 pi 实例都从这里取，口径只有一处。
+    pub(crate) fn at_store_dir() -> Result<Self> {
+        let home =
+            crate::support::fs::user_home_dir().context("Unable to determine home directory")?;
+        Ok(Self::at(home.join(".reins")))
+    }
+
+    pub(crate) fn at(dir: PathBuf) -> Self {
+        Self {
+            dir,
+            connection: Mutex::new(None),
+        }
+    }
+
+    pub(crate) fn load(
+        &self,
+        source_app: SourceApp,
+        path: &Path,
+        mtime: i64,
+    ) -> Option<SessionSummary> {
+        self.with_connection(|connection| lookup_summary(connection, source_app, path, mtime))
+            .ok()
+    }
+
+    pub(crate) fn store(
+        &self,
+        source_app: SourceApp,
+        path: &Path,
+        mtime: i64,
+        summary: &SessionSummary,
+    ) {
+        let result = self.with_connection(|connection| {
+            insert_summary(connection, source_app, path, mtime, summary)
+        });
+
+        if let Err(error) = result {
+            crate::logger::log_error(format!("summary cache store failed: {error}"));
+        }
+    }
+
+    /// 清空整表（用户触发的刷新是「全量重建」的逃生通道）。
+    /// 跨来源共用同一份库文件，所以清一次即覆盖所有用到持久摘要的来源。
+    pub(crate) fn clear_all(&self) {
+        let result = self.with_connection(|connection| {
+            connection.execute("DELETE FROM session_summary_cache", [])?;
+            Ok(())
+        });
+        if let Err(error) = result {
+            crate::logger::log_error(format!("summary cache clear failed: {error}"));
+        }
+    }
+
+    fn with_connection<T>(&self, operation: impl FnOnce(&Connection) -> Result<T>) -> Result<T> {
+        let mut guard = self
+            .connection
+            .lock()
+            .map_err(|_| anyhow::anyhow!("summary cache connection lock was poisoned"))?;
+
+        if guard.is_none() {
+            *guard = Some(open_connection(&self.dir)?);
+        }
+
+        operation(guard.as_ref().expect("connection was just ensured"))
+    }
+}
+
+// 与 family 索引的 path map 一致，用 canonicalize 后的路径做键，
+// 避免同一文件因分隔符拼写不同而重复缓存。
+fn path_key(path: &Path) -> String {
+    crate::support::fs::path_key(path)
+}
+
+fn lookup_summary(
+    connection: &Connection,
+    source_app: SourceApp,
+    path: &Path,
+    mtime: i64,
+) -> Result<SessionSummary> {
+    let summary_json = connection
+        .query_row(
+            "SELECT summary FROM session_summary_cache WHERE source_app = ?1 AND path = ?2 AND mtime = ?3",
+            rusqlite::params![source_app.as_str(), path_key(path), mtime],
+            |row| row.get::<_, String>(0),
+        )
+        .map_err(|error| anyhow::anyhow!("summary cache lookup failed: {error}"))?;
+
+    serde_json::from_str(&summary_json)
+        .map_err(|error| anyhow::anyhow!("summary cache row failed to parse: {error}"))
+}
+
+fn insert_summary(
+    connection: &Connection,
+    source_app: SourceApp,
+    path: &Path,
+    mtime: i64,
+    summary: &SessionSummary,
+) -> Result<()> {
+    let summary_json = serde_json::to_string(summary)?;
+    connection.execute(
+        "INSERT INTO session_summary_cache (source_app, path, mtime, summary) VALUES (?1, ?2, ?3, ?4)
+         ON CONFLICT(source_app, path) DO UPDATE SET mtime = excluded.mtime, summary = excluded.summary",
+        rusqlite::params![source_app.as_str(), path_key(path), mtime, summary_json],
+    )?;
+    Ok(())
+}
+
+fn open_connection(dir: &Path) -> Result<Connection> {
+    fs::create_dir_all(dir).with_context(|| format!("Failed to create {}", dir.display()))?;
+    remove_stale_db_files(dir);
+
+    let path = dir.join(DB_FILE_NAME);
+    let connection =
+        Connection::open(&path).with_context(|| format!("Failed to open {}", path.display()))?;
+    connection.pragma_update(None, "journal_mode", "WAL")?;
+    connection.pragma_update(None, "synchronous", "NORMAL")?;
+
+    connection.execute(
+        "CREATE TABLE IF NOT EXISTS session_summary_cache (
+            source_app TEXT NOT NULL,
+            path TEXT NOT NULL,
+            mtime INTEGER NOT NULL,
+            summary TEXT NOT NULL,
+            PRIMARY KEY (source_app, path)
+        )",
+        [],
+    )?;
+
+    Ok(connection)
+}
+
+// 清掉旧版本（含版本化之前的无后缀命名）残留的库文件，避免 bump 后旧库
+// 永远占着磁盘。失败不影响主流程——残留只是多占空间，不影响正确性。
+fn remove_stale_db_files(dir: &Path) {
+    const DB_FILE_STEM: &str = "session-summary-cache";
+
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else {
+            continue;
+        };
+
+        let is_cache_db = name
+            .strip_suffix("-wal")
+            .or_else(|| name.strip_suffix("-shm"))
+            .unwrap_or(name)
+            .starts_with(DB_FILE_STEM);
+
+        if is_cache_db && !name.starts_with(DB_FILE_NAME) {
+            fs::remove_file(entry.path()).ok();
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn summary(title: &str) -> SessionSummary {
+        SessionSummary {
+            source_app: SourceApp::Codex,
+            source_session_id: "test-session".to_string(),
+            title: title.to_string(),
+            cwd: None,
+            git_branch: None,
+            transcript_path: "/tmp/does-not-exist.jsonl".to_string(),
+            created_at: Some(1),
+            updated_at: Some(2),
+            token_usage: None,
+            models: Vec::new(),
+            archived: false,
+            compressed: false,
+        }
+    }
+
+    #[test]
+    fn store_then_load_round_trips_and_mtime_gates_hits() {
+        let temp_home = std::env::temp_dir().join(format!("reins-test-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&temp_home).unwrap();
+        let _guard = crate::test_support::TestEnvGuard::set_home(&temp_home);
+
+        let db = SummaryDb::at_store_dir().unwrap();
+        let path = std::path::Path::new("/tmp/some-transcript.jsonl");
+
+        // mtime 未变时命中，变化后失效。
+        db.store(SourceApp::Codex, path, 100, &summary("cached title"));
+        let loaded = db.load(SourceApp::Codex, path, 100).expect("cache hit");
+        assert_eq!(loaded.title, "cached title");
+        assert!(db.load(SourceApp::Codex, path, 101).is_none());
+
+        // 覆盖写入后按新 mtime 命中。
+        db.store(SourceApp::Codex, path, 200, &summary("updated title"));
+        let reloaded = db
+            .load(SourceApp::Codex, path, 200)
+            .expect("cache hit after update");
+        assert_eq!(reloaded.title, "updated title");
+        assert!(db.load(SourceApp::Codex, path, 100).is_none());
+
+        std::fs::remove_dir_all(&temp_home).ok();
+    }
+
+    #[test]
+    fn rows_are_isolated_per_source_app() {
+        let temp_home = std::env::temp_dir().join(format!("reins-test-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&temp_home).unwrap();
+        let _guard = crate::test_support::TestEnvGuard::set_home(&temp_home);
+
+        let db = SummaryDb::at_store_dir().unwrap();
+        let path = std::path::Path::new("/tmp/some-transcript.jsonl");
+        db.store(SourceApp::Codex, path, 100, &summary("codex title"));
+
+        assert!(db.load(SourceApp::ClaudeCode, path, 100).is_none());
+
+        std::fs::remove_dir_all(&temp_home).ok();
+    }
+
+    #[test]
+    fn clear_all_invalidates_every_row() {
+        let temp_home = std::env::temp_dir().join(format!("reins-test-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&temp_home).unwrap();
+        let _guard = crate::test_support::TestEnvGuard::set_home(&temp_home);
+
+        let db = SummaryDb::at_store_dir().unwrap();
+        let path = std::path::Path::new("/tmp/some-transcript.jsonl");
+        db.store(SourceApp::Codex, path, 100, &summary("codex title"));
+        db.clear_all();
+
+        assert!(db.load(SourceApp::Codex, path, 100).is_none());
+
+        std::fs::remove_dir_all(&temp_home).ok();
+    }
+
+    #[test]
+    fn opening_current_db_removes_stale_version_files() {
+        let temp_home = std::env::temp_dir().join(format!("reins-test-{}", uuid::Uuid::new_v4()));
+        let cache_dir = temp_home.join(".reins");
+        std::fs::create_dir_all(&cache_dir).unwrap();
+        let _guard = crate::test_support::TestEnvGuard::set_home(&temp_home);
+
+        // 版本化之前的无后缀命名和旧版本号文件都应在打开当前库时被清掉。
+        for stale in [
+            "session-summary-cache.db",
+            "session-summary-cache.db-wal",
+            "session-summary-cache_v1.db",
+            "session-summary-cache_v1.db-shm",
+        ] {
+            std::fs::write(cache_dir.join(stale), b"stale").unwrap();
+        }
+
+        let db = SummaryDb::at_store_dir().unwrap();
+        let path = std::path::Path::new("/tmp/some-transcript.jsonl");
+        db.store(SourceApp::Codex, path, 100, &summary("codex title"));
+
+        let remaining = std::fs::read_dir(&cache_dir)
+            .unwrap()
+            .flatten()
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        assert!(
+            remaining.iter().all(|name| name.starts_with(DB_FILE_NAME)),
+            "stale cache db files survived: {remaining:?}"
+        );
+
+        std::fs::remove_dir_all(&temp_home).ok();
+    }
+}

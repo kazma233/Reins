@@ -1,0 +1,1096 @@
+.detail-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  min-height: 0;
+}
+
+.detail-empty {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.detail-section {
+  padding: 0 0 24px;
+  border-bottom: 1px solid var(--color-hairline-soft);
+  background: transparent;
+}
+
+.detail-header,
+.section-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.detail-header-actions {
+  display: flex;
+  flex: 0 0 auto;
+  flex-direction: row;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.detail-header h2,
+.detail-section h3 {
+  margin: 0;
+}
+
+/* 头部保持固定两行：标题和会话 ID 超长时截断，悬停可见全文 */
+.detail-header-info {
+  min-width: 0;
+}
+
+.detail-header h2 {
+  /* 同上:标题不按字符数截断,只挡极端长的粘贴内容;全文在 tooltip */
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 6;
+  overflow: hidden;
+  font-size: var(--font-size-xl);
+  font-weight: 600;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.detail-header p {
+  overflow: hidden;
+  margin: 2px 0 0;
+  color: var(--color-muted);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-sm);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.summary-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 18px;
+  margin: 10px 0 0;
+}
+
+.summary-grid > div {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+}
+
+.summary-grid__wide {
+  flex: 1 1 100%;
+}
+
+.summary-grid dt {
+  flex: 0 0 auto;
+  color: var(--color-muted);
+  font-size: var(--font-size-sm);
+}
+
+.summary-grid dd {
+  min-width: 0;
+  margin: 0;
+  font-size: var(--font-size-md);
+  white-space: nowrap;
+}
+
+/* 路径类字段不截断，超长部分在自身范围内横向滚动查看，滚动条不显示 */
+.summary-grid__wide dd {
+  flex: 1 1 auto;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.summary-grid__wide dd::-webkit-scrollbar {
+  display: none;
+}
+
+/* token 用量四项并排,窄面板下按项换行(覆盖 dd 的 nowrap 防溢出) */
+.summary-grid dd.token-usage-detail {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 14px;
+  font-variant-numeric: tabular-nums;
+}
+
+.skeleton-card .summary-grid > div {
+  flex: 0 1 180px;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
+}
+
+.skeleton-card .summary-grid__wide {
+  flex: 1 1 100%;
+}
+
+.path-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.path-list.compact {
+  max-height: 220px;
+  overflow: auto;
+}
+
+.path-list code {
+  display: block;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-soft);
+  word-break: break-all;
+}
+
+.pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: var(--color-surface-strong);
+  color: var(--color-ink);
+  font-size: var(--font-size-sm);
+}
+
+
+
+
+.tool-tag {
+  color: var(--color-primary);
+  background: var(--color-primary-tint);
+}
+
+.error-box {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--color-danger-line);
+  border-radius: var(--radius-md);
+  background: var(--color-danger-tint);
+}
+
+.error-box strong {
+  color: var(--color-danger);
+}
+
+.danger-pill {
+  background: var(--color-danger-tint);
+  color: var(--color-danger);
+}
+
+.timeline-controls {
+  position: sticky;
+  /* 吸附在详情页顶栏(返回入口)之下:偏移量为 0 时,滚动中是紧贴正文列顶部,
+     不会钻到顶栏下面被切掉。负外边距是旧的带内边距面板留下的,现在留白由
+     .content-panel__inner 统一给。 */
+  top: 0;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0 0 14px;
+  padding: 8px 0 14px;
+  border-bottom: 1px solid var(--color-hairline-soft);
+  background: var(--color-canvas);
+}
+
+.timeline-tab-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+/* 筛选输入框内联在消息/事件标签后，撑满剩余空间，高度与标签齐平。
+   聚焦环用 box-shadow 而非 outline：该输入是 flex 子项 + sticky 容器结构，
+   WebKit 对 search 输入框的 outline 绘制在这种结构下不可靠。 */
+.timeline-search-input {
+  flex: 1 1 200px;
+  min-width: 0;
+  min-height: var(--control-height);
+  padding: 0 10px;
+  border: 1px solid var(--color-hairline);
+  border-radius: var(--radius-control);
+  background: var(--color-canvas);
+  color: var(--color-ink);
+  font-size: var(--font-size-md);
+  line-height: 1.4;
+}
+
+.timeline-search-input::placeholder {
+  color: var(--color-muted);
+}
+
+.timeline-search-input:focus {
+  outline: none;
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 3px var(--color-focus-ring);
+}
+
+.timeline-toggle-control {
+  margin-left: auto;
+  flex: 0 0 auto;
+}
+
+/* 「只看对话」:勾选框而不是标签页——它不切换视图,只是把过程行收进组行。
+   原生 checkbox 承载勾选语义与无障碍名称,样式沿用工具栏的控件语言。 */
+.conversation-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: var(--tab-height);
+  padding: 0 12px;
+  border: 1px solid var(--color-hairline);
+  border-radius: var(--radius-button);
+  background: var(--color-canvas);
+  color: var(--color-body);
+  font-size: var(--button-font-size);
+  white-space: nowrap;
+  cursor: pointer;
+  font-weight: var(--button-font-weight);
+}
+
+@media (hover: hover) {
+  .conversation-toggle:hover {
+    background: var(--color-surface-soft);
+  }
+}
+
+.conversation-toggle.active {
+  border-color: var(--color-primary-line);
+  background: var(--color-primary-tint);
+  color: var(--color-primary);
+}
+
+.conversation-toggle input {
+  margin: 0;
+  accent-color: var(--color-primary);
+}
+
+.agent-tab-group {
+  display: flex;
+  align-items: center;
+  /* 子代理多的会话会有几十个 tab，换行铺开会占掉大半屏；固定单行横向滚动 */
+  flex-wrap: nowrap;
+  gap: 4px;
+  overflow-x: auto;
+  padding-bottom: 2px;
+}
+
+.agent-tab-group .timeline-tab {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.timeline-tab {
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--tab-height);
+  padding: 0 12px;
+  border: 1px solid var(--color-hairline);
+  border-radius: var(--radius-button);
+  background: var(--color-canvas);
+  color: var(--color-muted);
+  font-size: var(--button-font-size);
+  font-weight: var(--button-font-weight);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+@media (hover: hover) {
+  .timeline-tab:hover {
+    border-color: var(--color-hairline);
+    background: var(--color-surface-soft);
+  }
+}
+
+.timeline-tab.active {
+  background: var(--color-primary-tint);
+  color: var(--color-primary);
+  border-color: var(--color-primary-line);
+  font-weight: 600;
+}
+
+.timeline {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  overflow: visible;
+}
+
+.timeline-card {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.timeline-card.compact {
+  gap: 8px;
+}
+
+.detail-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 14px;
+}
+
+
+
+
+/* 用户消息的角色标签用主题色凸显，助手保持中性色不抢视觉 */
+.message-card-meta strong.message-role-user {
+  color: var(--color-primary);
+}
+
+.message-source-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: var(--color-primary-tint);
+  border: 1px solid var(--color-primary-line);
+  color: var(--color-primary);
+  max-width: min(100%, 380px);
+}
+
+.message-source-chip-label {
+  font-size: var(--font-size-xs);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--color-primary);
+}
+
+.message-source-chip-value {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+}
+
+
+/* markdown 正文排版（marked 输出的原生元素），替代原 markstream 的整套样式 */
+.message-markdown {
+  overflow-wrap: break-word;
+}
+
+/* 单行消息块首尾不留白 */
+.message-block-body .message-markdown > :first-child {
+  margin-top: 0;
+}
+
+.message-block-body .message-markdown > :last-child {
+  margin-bottom: 0;
+}
+
+.message-markdown p {
+  margin: 0 0 10px;
+}
+
+.message-markdown h1,
+.message-markdown h2,
+.message-markdown h3,
+.message-markdown h4,
+.message-markdown h5,
+.message-markdown h6 {
+  margin: 18px 0 8px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.message-markdown h1 {
+  font-size: 1.5em;
+}
+
+.message-markdown h2 {
+  font-size: 1.3em;
+}
+
+.message-markdown h3 {
+  font-size: 1.15em;
+}
+
+.message-markdown h4,
+.message-markdown h5,
+.message-markdown h6 {
+  font-size: 1em;
+}
+
+.message-markdown ul,
+.message-markdown ol {
+  margin: 0 0 10px;
+  padding-left: 1.5em;
+}
+
+.message-markdown li {
+  margin: 2px 0;
+}
+
+.message-markdown li > ul,
+.message-markdown li > ol {
+  margin: 2px 0;
+}
+
+.message-markdown li input[type="checkbox"] {
+  margin-right: 5px;
+  vertical-align: -1px;
+}
+
+.message-markdown blockquote {
+  margin: 0 0 10px;
+  padding: 2px 12px;
+  border-left: 3px solid var(--color-hairline);
+  color: var(--color-muted);
+}
+
+.message-markdown code {
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: var(--color-surface-strong);
+  font-family: var(--font-mono);
+  font-size: 0.875em;
+}
+
+.message-markdown pre {
+  margin: 0 0 10px;
+  padding: 10px 12px;
+  border-radius: var(--radius-control);
+  background: var(--color-surface-soft);
+  overflow-x: auto;
+}
+
+.message-markdown pre code {
+  padding: 0;
+  background: transparent;
+  font-size: var(--font-size-md);
+}
+
+.message-markdown table {
+  display: block;
+  margin: 0 0 10px;
+  border-collapse: collapse;
+  overflow-x: auto;
+}
+
+.message-markdown th,
+.message-markdown td {
+  padding: 4px 10px;
+  border: 1px solid var(--color-hairline);
+}
+
+.message-markdown th {
+  background: var(--color-surface-soft);
+  font-weight: 600;
+}
+
+.message-markdown a {
+  color: var(--color-primary);
+  text-decoration: none;
+}
+
+@media (hover: hover) {
+  .message-markdown a:hover {
+    text-decoration: underline;
+  }
+}
+
+.message-markdown hr {
+  margin: 14px 0;
+  border: 0;
+  border-top: 1px solid var(--color-hairline);
+}
+
+.message-markdown img {
+  max-width: 100%;
+}
+
+.text-button {
+  padding: 0;
+  color: var(--color-primary);
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+}
+
+@media (hover: hover) {
+  .text-button:hover {
+    color: var(--color-primary-active);
+  }
+}
+
+.event-card {
+  padding: 10px 12px;
+  border-radius: var(--radius-md);
+  background: var(--color-surface-soft);
+  border: 1px solid var(--color-hairline-soft);
+}
+
+.event-card-header {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.event-card-header .message-source-chip {
+  margin-left: auto;
+}
+
+.event-kind {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: var(--radius-sm);
+  background: var(--color-primary-tint);
+  color: var(--color-primary);
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.event-summary {
+  margin: 6px 0 0;
+  font-size: var(--font-size-md);
+  color: var(--color-body);
+}
+
+.event-payload {
+  margin: 8px 0 0;
+  padding: 8px 10px;
+  border-radius: var(--radius-control);
+  background: var(--color-surface-strong);
+  font-size: var(--font-size-sm);
+  max-height: 200px;
+  overflow: auto;
+}
+
+
+
+.subagent-badge {
+  display: inline-flex;
+  align-items: center;
+  /* 中文逐字可断行，flex 收缩时徽章会被压成一字宽竖排 */
+  white-space: nowrap;
+  padding: 2px 10px;
+  border-radius: 999px;
+  background: var(--color-primary-tint);
+  color: var(--color-primary);
+  font-size: var(--font-size-xs);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.subagent-badge.strong {
+  background: var(--color-primary-tint-strong);
+  color: var(--color-primary);
+}
+
+
+.delete-dialog-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 16px 18px;
+  border: 1px solid var(--color-danger-line);
+  border-radius: var(--radius-md);
+  background: var(--color-danger-tint);
+}
+
+.delete-dialog-summary code {
+  display: inline-flex;
+  width: fit-content;
+  max-width: 100%;
+  padding: 6px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--color-canvas);
+  color: var(--color-danger);
+  word-break: break-all;
+}
+
+.delete-dialog-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  color: var(--color-body);
+  padding: 0 2px;
+}
+
+.delete-dialog-method-box {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px 16px;
+  border: 1px solid var(--color-hairline-soft);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-soft);
+}
+
+.delete-dialog-method-title {
+  color: var(--color-ink);
+  font-size: var(--font-size-md);
+  font-weight: 600;
+}
+
+.delete-dialog-method-list {
+  margin: 0;
+  padding-left: 18px;
+  color: var(--color-body);
+  line-height: 1.6;
+}
+
+.delete-dialog-command-block {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.delete-dialog-command-title {
+  color: var(--color-ink);
+  font-size: var(--font-size-md);
+  font-weight: 600;
+}
+
+.delete-dialog .path-list.compact {
+  margin-top: 0;
+  padding-right: 2px;
+}
+
+.delete-dialog-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 0 2px;
+}
+
+.detail-header .danger-button {
+  flex: 0 0 auto;
+  min-width: fit-content;
+}
+
+@media (max-width: 1024px) {
+  .delete-dialog {
+    max-height: min(92vh, 860px);
+  }
+}
+
+/* --- 文档流时间线 --- */
+
+/* 助手/工具内容靠左,用户输入右侧气泡;工具与思考默认折叠成一行 */
+.flow {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  overflow: visible;
+}
+
+.flow-user {
+  align-self: flex-end;
+  max-width: min(85%, 720px);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 14px;
+  border-radius: var(--radius-md);
+  border-bottom-right-radius: var(--radius-sm);
+  background: var(--color-primary-tint);
+}
+
+.flow-text {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 2px 4px;
+}
+
+/* 只看对话下的过程组:一行摘要,展开后逐条过程,左侧竖线标出从属关系 */
+.flow-process-group__body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 6px 0 0 10px;
+  padding-left: 10px;
+  border-left: 2px solid var(--color-hairline);
+}
+
+/* 组行摘要沿用过程行的外观,靠行首 tag 区分 */
+.flow-tool-row.process-group {
+  background: var(--color-surface-strong);
+}
+
+/* 消息级模型标签:挂在输入与输出首段文本的顶部,过程行不挂;同一消息被过程行
+   切成多段时只出现一次。用户标签收在气泡内右上,不飘到对面像挂在别人身上。 */
+.flow-model {
+  align-self: flex-start;
+  color: var(--color-muted);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xs);
+  font-variant-numeric: tabular-nums;
+}
+
+.flow-user .flow-model {
+  align-self: flex-end;
+  color: var(--color-primary);
+}
+
+.flow-tool-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  text-align: left;
+  padding: 5px 10px;
+  border: 0;
+  border-radius: var(--radius-control);
+  background: var(--color-surface-soft);
+  color: var(--color-body);
+  cursor: pointer;
+  font-size: var(--font-size-sm);
+}
+
+/* 消息只有错误没有正文：用错误条的样式替代原来那行「原始报文」折叠行。
+   高度对齐相邻的工具行：工具行 padding 5px，这里 4px + 1px 边框 */
+.flow-message-error {
+  padding: 4px 10px;
+  border: 1px solid var(--color-danger-line);
+  border-radius: var(--radius-control);
+  background: var(--color-danger-tint);
+}
+
+.flow-message-error__head {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--color-danger);
+  cursor: pointer;
+  font-size: var(--font-size-sm);
+  text-align: left;
+}
+
+/* 行首标签：时间线里每行的类型/状态共用同一个 pill，颜色区分语义
+   （灰=类型、绿=成功、红=失败、黄=无结果）。行高与正文一致，不能把行撑高。 */
+.flow-row-tag {
+  flex: 0 0 auto;
+  line-height: 18px;
+  padding: 0 8px;
+  border-radius: var(--radius-pill);
+  background: var(--color-surface-strong);
+  color: var(--color-muted);
+  font-size: var(--font-size-xs);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.flow-row-tag--success {
+  background: var(--color-success-tint);
+  color: var(--color-success);
+}
+
+.flow-row-tag--danger {
+  background: var(--color-danger-tint);
+  color: var(--color-danger);
+}
+
+.flow-row-tag--warning {
+  background: var(--color-warning-tint);
+  color: var(--color-warning-ink);
+}
+
+
+.flow-message-error__text {
+  min-width: 0;
+  flex: 1 1 auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+@media (hover: hover) {
+  .flow-tool-row:hover {
+    background: var(--color-surface-strong);
+  }
+}
+
+
+/* 点色即状态：绿=成功、红=失败、黄=无结果，行尾不再挂文案 */
+
+
+
+.flow-tool-summary {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.flow-tool-chevron {
+  flex: 0 0 auto;
+  margin-left: auto;
+  color: var(--color-muted-soft);
+  font-size: var(--font-size-xs);
+}
+
+.flow-tool-detail {
+  margin: 4px 0 0;
+  padding: 10px 12px;
+  border-radius: var(--radius-control);
+  background: var(--color-surface-soft);
+  color: var(--color-body);
+  font-size: var(--font-size-sm);
+  max-height: 320px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* 会话里的图片：data: URL 直接渲染，外链/路径只给引用行 */
+.flow-image {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  min-width: 0;
+}
+
+.flow-image__preview {
+  max-width: 100%;
+  max-height: 320px;
+  /* 会话截图的内容描边用中性黑而非色板灰:浅底截图贴浅色页面时色板边
+     会被读成图片内容的一部分,10% 纯黑内缩描边在任何截图上都只标边界 */
+  outline: 1px solid oklch(0 0 0 / 0.1);
+  outline-offset: -1px;
+  border-radius: var(--radius-md);
+  background: var(--color-surface-soft);
+}
+
+.flow-image__caption {
+  color: var(--color-muted);
+  font-size: var(--font-size-xs);
+}
+
+/* 引用行与工具行同高：padding 5px + 正文行高 18px */
+.flow-image-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 5px 10px;
+  border: 0;
+  border-radius: var(--radius-control);
+  background: var(--color-surface-soft);
+  color: var(--color-body);
+  cursor: pointer;
+  font-size: var(--font-size-sm);
+  text-align: left;
+}
+
+
+.flow-image__reference {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+}
+
+
+.flow-thinking-body {
+  padding: 6px 12px;
+}
+
+.flow-thinking-pre {
+  margin: 0;
+  color: var(--color-body);
+  font-size: var(--font-size-sm);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.flow-subagent-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  text-align: left;
+  padding: 6px 10px;
+  border: 1px solid var(--color-primary-line);
+  border-radius: var(--radius-control);
+  background: var(--color-primary-tint);
+  cursor: pointer;
+}
+
+@media (hover: hover) {
+  .flow-subagent-row:hover {
+    background: var(--color-primary-tint-strong);
+  }
+}
+
+.flow-subagent-name {
+  flex: 0 0 auto;
+  color: var(--color-primary);
+  font-size: var(--font-size-md);
+}
+
+.flow-subagent-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--color-body);
+  font-size: var(--font-size-sm);
+}
+
+.flow-marker {
+  align-self: flex-start;
+  padding: 3px 10px;
+  border-radius: var(--radius-pill);
+  background: var(--color-surface-strong);
+  color: var(--color-muted);
+  font-size: var(--font-size-xs);
+  font-weight: 600;
+}
+
+/* --- 子代理入口/过程弹窗共用 --- */
+
+.subagent-run-state {
+  flex: 0 0 auto;
+  padding: 2px 8px;
+  border-radius: var(--radius-pill);
+  font-size: var(--font-size-xs);
+  font-weight: 600;
+}
+
+.subagent-run-state.ok {
+  color: var(--color-success);
+  background: var(--color-success-tint);
+}
+
+.subagent-run-state.error {
+  color: var(--color-danger);
+  background: var(--color-danger-tint);
+}
+
+/* 弹窗顶部的单次运行概况：代理名 + 状态 + 退出码 + 模型 */
+.subagent-run-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.subagent-run-exit {
+  font-size: var(--font-size-xs);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--color-danger);
+}
+
+.subagent-run-stderr {
+  margin: 0 0 8px;
+  max-height: 160px;
+  overflow: auto;
+  padding: 6px 8px;
+  border-radius: var(--radius-sm);
+  color: var(--color-danger);
+  background: var(--color-danger-tint);
+  font-size: var(--font-size-xs);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.subagent-run-usage {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.subagent-usage-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: var(--radius-pill);
+  background: var(--color-surface-strong);
+  font-size: var(--font-size-xs);
+}
+
+.subagent-usage-label {
+  color: var(--color-muted);
+}
+
+.subagent-usage-value {
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+/* 子代理过程大弹窗：单次运行可达上百条嵌套消息，高度要跟着窗口走。
+   .dialog-card 默认的 min(88vh, 860px) 会在高屏上被 860px 封顶，这里改成
+   撜满 backdrop 可用高度（100% = 视口高 − backdrop 上下 padding，随断点自适应）*/
+.subagent-run-dialog {
+  width: min(96vw, 1100px);
+  height: 100%;
+  max-height: 100%;
+}
+
+/* 高度固定后改由 flex 分配：滚动区吃掉表头以外的全部剩余空间 */
+.subagent-run-dialog .dialog-body {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.subagent-run-dialog .dialog-scroll {
+  height: 100%;
+  max-height: none;
+}
+
+.subagent-dialog-usage {
+  margin-bottom: 4px;
+}
+
+/* 弹窗顶部的完整任务描述,不截断 */
+.subagent-dialog-task {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0 0 8px;
+  padding: 8px 10px;
+  border-radius: var(--radius-control);
+  background: var(--color-primary-tint);
+}
+
+.subagent-dialog-task-label {
+  font-size: var(--font-size-xs);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--color-primary);
+}
+
+.subagent-dialog-task > span:last-child {
+  font-size: var(--font-size-md);
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+

@@ -1,0 +1,662 @@
+/* providers 域样式：与 workspace 的 manager-* 同一套视觉语言，
+   但类名自持，避免跨 feature 的样式依赖。 */
+
+.providers-shell {
+  display: flex;
+  min-height: 0;
+  flex: 1 1 auto;
+}
+
+.providers-content {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  min-height: 0;
+  overflow: auto;
+  background: var(--color-canvas);
+}
+
+.providers-content__header {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  /* 顶部留白由自身 padding 提供：吸顶时条带背景盖住顶端，
+     若用 sticky top 留缝，滚动内容会从缝隙里穿出来。 */
+  padding: 14px 16px 12px;
+  /* 背景必须不透明：内容从半透明底色下滚过会透出来。 */
+  background: var(--color-canvas);
+  border-bottom: 1px solid var(--color-hairline);
+}
+
+.providers-nav {
+  display: flex;
+  flex: 0 0 auto;
+  flex-direction: row;
+  gap: 8px;
+}
+
+.providers-nav__button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: var(--tab-height);
+  padding: 0 12px;
+  border: 1px solid var(--color-hairline);
+  border-radius: var(--radius-button);
+  background: var(--color-surface-soft, rgba(255, 255, 255, 0.9));
+  color: var(--color-body);
+  font-size: var(--button-font-size);
+  font-weight: var(--button-font-weight);
+  cursor: pointer;
+}
+
+@media (hover: hover) {
+  .providers-nav__button:hover {
+    border-color: var(--color-muted-soft);
+    color: var(--color-ink);
+    background: var(--color-surface-soft);
+  }
+}
+
+/* 页签选中态与左栏一致:淡蓝 tint,不再用实心蓝盖满 */
+.providers-nav__button.is-active {
+  border-color: var(--color-primary-line);
+  background: var(--color-primary-tint);
+  color: var(--color-primary);
+  font-weight: 600;
+}
+
+.providers-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 16px;
+}
+
+.providers-section-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.providers-section-title {
+  margin: 0;
+  color: var(--color-ink);
+  font-size: var(--font-size-2xl);
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+.providers-section-hint {
+  margin: 0;
+  color: var(--color-muted);
+  font-size: var(--font-size-sm);
+  line-height: 1.5;
+}
+
+/* 应用弹窗的弱边框提示块（不写入的模型元数据、档位说明等）：与普通说明
+   区分，但不做成阻塞警告的视觉权重。 */
+.providers-unwritten-fields,
+.providers-apply-note {
+  padding: 8px 10px;
+  border: 1px solid var(--color-hairline);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-soft);
+}
+
+/* 提示块内的多条提示纵排。 */
+.providers-apply-note {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.providers-card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 12px;
+}
+
+/* 卡片结构（header 条 + 右侧 ext / 内容 / actions 条）由 shared 的
+   AppCard 提供，这里只保留内容样式。 */
+
+.providers-card__title {
+  margin: 0;
+  color: var(--color-ink);
+  font-size: var(--font-size-lg);
+  font-weight: 600;
+}
+
+.providers-card__models {
+  color: var(--color-muted);
+  font-size: var(--font-size-sm);
+  white-space: nowrap;
+}
+
+.providers-card__meta {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  color: var(--color-muted);
+  font-size: var(--font-size-sm);
+}
+
+.providers-card__meta > div {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+}
+
+/* Base URL 带域名的长值：标签与值分两行，避免挤在右侧被硬断 */
+.providers-card__meta > .providers-card__meta--wide {
+  flex-direction: column;
+  /* 覆盖基线对齐：列布局下 baseline 会让长值撑到内容宽，超出卡片 */
+  align-items: stretch;
+  gap: 2px;
+}
+
+.providers-card__meta dt {
+  color: var(--color-ink);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.providers-card__meta dd {
+  margin: 0;
+  color: var(--color-body);
+  /* 只在必要时断行：break-all 会把 URL 断在字符中间 */
+  overflow-wrap: break-word;
+}
+
+/* Base URL 是外部服务地址，用等宽和普通描述文本区分开 */
+.providers-card__meta .providers-card__url {
+  font-family: var(--font-mono);
+}
+
+/* 同步结果常驻在提供商卡片内，直到该提供商下一次同步。 */
+/* 动作失败的回执放在操作行左端，与卡片提示同一口径。
+   flex-basis 0：长文案只在自己这一格换行，不把按钮挤到下一行 */
+.providers-apply-hint {
+  flex: 1 1 0;
+  min-width: 0;
+  margin: 0;
+  color: var(--color-danger);
+  font-size: var(--font-size-sm);
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.providers-card__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.providers-entry-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.providers-entry__note {
+  margin: 0;
+  color: var(--color-muted);
+  font-size: var(--font-size-sm);
+}
+
+.providers-entry__note--error {
+  color: var(--color-danger);
+}
+
+/* 卡片刷新失败：错误说明与重试同排常驻。 */
+.providers-app__refresh-error {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.providers-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 8px;
+  border: 1px solid var(--color-hairline);
+  border-radius: 999px;
+  color: var(--color-body);
+  font-size: var(--font-size-xs);
+  line-height: 18px;
+  white-space: nowrap;
+}
+
+.providers-badge--applied {
+  border-color: var(--color-success-line);
+  color: var(--color-success);
+}
+
+.providers-badge--drifted {
+  border-color: var(--color-warning-line);
+  color: var(--color-warning-ink);
+}
+
+.providers-badge--external {
+  border-color: var(--color-hairline);
+  color: var(--color-muted);
+}
+
+.providers-badge--muted {
+  border-color: var(--color-hairline);
+  color: var(--color-muted);
+}
+
+.providers-empty {
+  padding: 26px 16px;
+  border: 1px dashed var(--color-hairline);
+  border-radius: var(--radius-sm);
+  color: var(--color-muted);
+  font-size: var(--font-size-md);
+  text-align: center;
+}
+
+.providers-loading {
+  color: var(--color-muted);
+  font-size: var(--font-size-md);
+  padding: 8px 0;
+}
+
+/* 表单（编辑弹窗 / 应用弹窗共用） */
+
+.providers-field {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.providers-field span {
+  color: var(--color-body);
+  font-size: var(--font-size-md);
+}
+
+/* 字段错误跟在 label 同一行：出现时不会把下方内容顶下去 */
+.providers-field__error {
+  margin-left: 6px;
+}
+
+/* 列表级错误（模型目录）跟在标题右侧，不参与 space-between 的分布 */
+.providers-section-header .providers-field__error {
+  margin-right: auto;
+}
+
+.providers-field__hint {
+  margin: -2px 0 0;
+  color: var(--color-muted);
+  font-size: var(--font-size-sm);
+  line-height: 1.5;
+}
+
+/* 表单内的 select 统一由 AppSelect 自绘（含下拉箭头背景），
+   这里不再写 .providers-field select 规则，避免与 app-select.css 级联冲突。 */
+
+.providers-form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px 16px;
+}
+
+.providers-form-grid--full {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.providers-model-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.providers-model-row {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--color-hairline-soft);
+  border-radius: var(--radius-sm);
+  background: var(--color-canvas);
+}
+
+.providers-model-row__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.providers-model-row__id {
+  color: var(--color-ink);
+  font-size: var(--font-size-md);
+  font-weight: 600;
+  word-break: break-all;
+}
+
+.providers-model-row__grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.providers-check {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: var(--button-height-compact);
+  cursor: pointer;
+}
+
+/* 勾选框：收窄为原生小方块样式，避免继承外层控件的拉满宽。 */
+.providers-check input[type="checkbox"] {
+  width: 13px;
+  height: 13px;
+  min-height: 0;
+  margin: 0;
+  padding: 0;
+  appearance: auto;
+  accent-color: var(--color-primary);
+  cursor: pointer;
+}
+
+/* 思考等级多选下拉由 shared/ui/AppMultiSelect 提供，样式随组件自持。 */
+
+.providers-model-row__grid .providers-field span {
+  font-size: var(--font-size-sm);
+}
+
+.providers-fetched-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 180px;
+  overflow: auto;
+  padding: 8px 10px;
+  border: 1px solid var(--color-hairline-soft);
+  border-radius: var(--radius-md, 8px);
+}
+
+.providers-fetched-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--color-body);
+  font-size: var(--font-size-md);
+}
+
+.providers-fetched-item--existing {
+  color: var(--color-muted);
+}
+
+.providers-diff {
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--color-hairline);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-soft);
+  color: var(--color-ink);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-sm);
+  line-height: 1.55;
+  overflow: auto;
+  max-height: 320px;
+  white-space: pre;
+}
+
+.providers-warnings {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  color: var(--color-warning-ink);
+  font-size: var(--font-size-sm);
+}
+
+.providers-blockers {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  color: var(--color-danger);
+  font-size: var(--font-size-sm);
+}
+
+/* ---------------------------------------------------------------------------
+   Agent 页：全宽分区面板。
+   每个工具一块，块头放主动作，条目为紧凑行（左状态色条 + 等宽键名），
+   危险操作用描边小按钮降低视觉权重。仅此页使用，提供商页仍用 providers-card。
+   --------------------------------------------------------------------------- */
+
+.providers-app-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* 卡片结构（header 条 / 内容区 / footer 条）由 shared 的 AppCard 提供，
+   这里只保留页面内的标题、元信息与候选按钮样式。 */
+
+.providers-app__title {
+  margin: 0;
+  color: var(--color-ink);
+  font-size: var(--font-size-lg);
+}
+
+/* 前置"应用"标签：比按钮文字更大更醒目 */
+.providers-app__actions-label {
+  align-self: center;
+  color: var(--color-ink);
+  font-size: var(--font-size-lg);
+  font-weight: 600;
+}
+
+/* 提供商按钮缩小尺寸，避免在标签旁显得过于笨重 */
+.providers-app__chip {
+  min-height: var(--button-height-compact);
+  padding: 0 10px;
+  font-size: var(--button-font-size-compact);
+  font-weight: var(--button-font-weight);
+}
+
+.providers-app__meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 14px;
+  color: var(--color-muted);
+  font-size: var(--font-size-sm);
+}
+
+.providers-app__meta span {
+  word-break: break-all;
+}
+
+.providers-app__meta .providers-app__path {
+  font-family: var(--font-mono);
+  font-size: var(--font-size-sm);
+}
+
+.providers-app__meta strong {
+  font-weight: 400;
+  color: var(--color-muted-soft);
+  margin-right: 4px;
+}
+
+/* header 右上角的工具级默认思考等级：紧凑内联，与徽标/按钮同排 */
+.providers-app__level {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.providers-app__level-label {
+  color: var(--color-muted);
+  font-size: var(--font-size-sm);
+  white-space: nowrap;
+}
+
+.providers-app__level-select {
+  flex: 0 0 auto;
+  width: 230px;
+}
+
+/* 覆盖浮动变体的留白：本控件不带 label 文本，按普通小控件对齐 header 行高 */
+.providers-app__level-select select {
+  height: var(--button-height-compact);
+  padding: 0 26px 0 10px;
+  font-size: var(--font-size-sm);
+  font-weight: 400;
+}
+
+/* 工具名旁的「?」行为说明入口 */
+.providers-app__help {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  margin-left: 6px;
+  padding: 0;
+  border: 1px solid var(--color-hairline);
+  border-radius: 50%;
+  background: transparent;
+  color: var(--color-muted);
+  font-size: var(--font-size-xs);
+  line-height: 1;
+  cursor: pointer;
+  vertical-align: 2px;
+}
+
+@media (hover: hover) {
+  .providers-app__help:hover {
+    color: var(--color-ink);
+    border-color: var(--color-muted);
+  }
+}
+
+.providers-help-list {
+  margin: 0;
+  padding-left: 18px;
+  display: grid;
+  gap: 8px;
+  color: var(--color-body);
+  font-size: var(--font-size-md);
+}
+
+/* 低调小按钮：行内低频操作用；危险变体只描边不实心。 */
+.providers-mini-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: var(--button-height-compact);
+  padding: 0 10px;
+  border: 1px solid var(--color-hairline);
+  border-radius: var(--radius-button);
+  background: var(--color-canvas);
+  color: var(--color-body);
+  font-size: var(--button-font-size-compact);
+  cursor: pointer;
+  font-weight: var(--button-font-weight);
+}
+
+@media (hover: hover) {
+  .providers-mini-button:hover {
+    border-color: var(--color-primary);
+    color: var(--color-primary);
+  }
+}
+
+.providers-mini-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.providers-mini-button--danger {
+  color: var(--color-danger);
+}
+
+@media (hover: hover) {
+  .providers-mini-button--danger:hover {
+    border-color: var(--color-danger);
+    background: var(--color-danger-tint);
+    color: var(--color-danger);
+  }
+}
+
+.providers-entry-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0 -8px;
+  padding: 9px 8px;
+  border-radius: var(--radius-sm);
+}
+
+.providers-entry-row + .providers-entry-row {
+  border-top: 1px solid var(--color-hairline-soft);
+}
+
+/* 悬停时整行泛起浅背景，帮助长列表扫读定位；负 margin 让高亮出格到面板内边距。 */
+@media (hover: hover) {
+  .providers-entry-row:hover {
+    background: var(--color-surface-soft);
+  }
+}
+
+.providers-entry-row__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+}
+
+.providers-entry-row__key {
+  color: var(--color-ink);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-md);
+  font-weight: 600;
+  word-break: break-all;
+}
+
+.providers-entry-row__spacer {
+  flex: 1 1 auto;
+}
+
+/* 事实数据（URL/模型）与说明文字分两层：说明用更淡一级。 */
+.providers-entry-row__sub {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 16px;
+  color: var(--color-muted);
+  font-size: var(--font-size-sm);
+}
+
+.providers-entry-row__sub span {
+  word-break: break-all;
+}
+
+.providers-entry-row__sub .providers-entry-row__url {
+  font-family: var(--font-mono);
+  font-size: var(--font-size-sm);
+}
+
+.providers-entry-row__note {
+  color: var(--color-muted-soft);
+  font-size: var(--font-size-sm);
+  word-break: break-all;
+}

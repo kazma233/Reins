@@ -1,0 +1,301 @@
+.dialog-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-dialog);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  background: rgba(15, 18, 26, 0.44);
+  backdrop-filter: blur(2px);
+}
+
+.dialog-card {
+  width: min(100%, 680px);
+  max-height: min(88vh, 860px);
+  border: 1px solid var(--color-hairline);
+  border-radius: var(--radius-xl);
+  overflow: hidden;
+  background: var(--color-canvas);
+  box-shadow: var(--shadow-overlay);
+}
+
+.dialog-panel {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.dialog-panel h3,
+.dialog-panel p {
+  margin: 0;
+}
+
+.dialog-header,
+.dialog-actions {
+  flex: 0 0 auto;
+}
+
+.dialog-header {
+  padding: 14px 16px 12px;
+  border-bottom: 1px solid var(--color-hairline-soft);
+}
+
+.dialog-body {
+  min-height: 0;
+  padding: 0 16px;
+}
+
+.dialog-scroll {
+  max-height: min(68vh, 640px);
+  overflow: auto;
+  /* 滚到弹窗内容尽头不再把背后的页面一起滚动 */
+  overscroll-behavior: contain;
+  padding: 12px 4px 14px 0;
+  /* stable（单侧）：滚动条出现时不产生布局跳动，也不在左侧留出永久空槽 */
+  scrollbar-gutter: stable;
+}
+
+.dialog-scroll-content {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.dialog-hero {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.dialog-hero-spacer,
+.dialog-close-button {
+  flex: 0 0 28px;
+  width: 28px;
+  height: 28px;
+}
+
+.dialog-close-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 1px solid var(--color-hairline);
+  border-radius: var(--radius-button);
+  color: var(--color-muted);
+  background: var(--color-canvas);
+  cursor: pointer;
+  transition:
+    color 0.16s ease,
+    border-color 0.16s ease,
+    background 0.16s ease,
+    transform 0.15s ease-out;
+}
+
+@media (hover: hover) {
+  .dialog-close-button:hover {
+    color: var(--color-ink);
+    border-color: var(--color-primary);
+    background: var(--color-surface-soft);
+  }
+}
+
+.dialog-close-button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.dialog-close-button svg {
+  width: 18px;
+  height: 18px;
+  fill: currentColor;
+}
+
+.dialog-title-group {
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.dialog-title-group-centered {
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+}
+
+.dialog-title-group h3 {
+  line-height: 1.2;
+}
+
+.dialog-hero-centered {
+  align-items: center;
+}
+
+.dialog-eyebrow {
+  margin-bottom: 2px;
+  color: var(--color-danger);
+  font-size: var(--font-size-xs);
+  font-weight: 600;
+  /* 文案按传入的大小写展示（如 mcp / Target），不再强制转大写 */
+  letter-spacing: 0.02em;
+}
+
+.dialog-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 10px 16px 12px;
+  border-top: 1px solid var(--color-hairline-soft);
+  background: var(--color-canvas);
+}
+
+.dialog-actions__group {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.primary-button,
+.secondary-button,
+.danger-button,
+.warning-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: var(--button-height);
+  padding: 6px 12px;
+  border-radius: var(--radius-button);
+  cursor: pointer;
+  white-space: nowrap;
+  font-size: var(--button-font-size);
+  font-weight: var(--button-font-weight-strong);
+  line-height: 1.2;
+  transition:
+    border-color 0.16s ease,
+    background 0.16s ease,
+    color 0.16s ease,
+    box-shadow 0.16s ease,
+    transform 0.15s ease-out;
+}
+
+.primary-button {
+  color: var(--color-on-primary);
+  background: var(--color-primary);
+  border-color: var(--color-primary);
+}
+
+.secondary-button {
+  color: var(--color-ink);
+  background: var(--color-canvas);
+  border-color: var(--color-hairline);
+}
+
+/* 破坏性操作统一描边红：降噪，同时保留红色警示语义 */
+.danger-button {
+  color: var(--color-danger);
+  background: var(--color-canvas);
+  border-color: var(--color-danger-line);
+}
+
+/* 警告与危险同构:描边琥珀而不是实底——实底琥珀上的白字对比度不足,
+   且警告通常是破坏性的前一级,视觉权重不应高于危险按钮 */
+.warning-button {
+  color: var(--color-warning-ink);
+  background: var(--color-canvas);
+  border-color: var(--color-warning-line);
+}
+
+@media (hover: hover) {
+  .primary-button:hover:not(:disabled) {
+    background: var(--color-primary-active);
+    border-color: var(--color-primary-active);
+  }
+}
+
+@media (hover: hover) {
+  .secondary-button:hover:not(:disabled) {
+    background: var(--color-surface-soft);
+    border-color: var(--color-muted-soft);
+  }
+}
+
+@media (hover: hover) {
+  .danger-button:hover:not(:disabled) {
+    background: var(--color-danger-tint);
+    border-color: var(--color-danger);
+  }
+}
+
+@media (hover: hover) {
+  .warning-button:hover:not(:disabled) {
+    background: var(--color-warning-tint);
+    border-color: var(--color-warning);
+  }
+}
+
+/* 按压回缩:只在允许动效时生效;禁用态不缩 */
+@media (prefers-reduced-motion: no-preference) {
+  .primary-button:not(:disabled):active,
+  .secondary-button:not(:disabled):active,
+  .danger-button:not(:disabled):active,
+  .warning-button:not(:disabled):active,
+  .dialog-close-button:not(:disabled):active {
+    transform: scale(0.96);
+  }
+}
+
+.primary-button:active:not(:disabled) {
+  background: var(--color-primary-active);
+  border-color: var(--color-primary-active);
+}
+
+.primary-button:disabled,
+.secondary-button:disabled,
+.danger-button:disabled,
+.warning-button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.dialog-actions .primary-button,
+.dialog-actions .secondary-button,
+.dialog-actions .danger-button {
+  flex: 0 0 auto;
+  min-width: fit-content;
+}
+
+@media (max-width: 1024px) {
+  .dialog-backdrop {
+    padding: 12px;
+  }
+
+  .dialog-header {
+    padding: 12px 14px 10px;
+  }
+
+  .dialog-body {
+    padding: 0 14px;
+  }
+
+  .dialog-scroll {
+    max-height: min(70vh, 640px);
+    padding: 10px 4px 12px 0;
+  }
+
+  .dialog-hero {
+    align-items: stretch;
+  }
+
+  .dialog-hero-centered {
+    align-items: center;
+  }
+
+  .dialog-actions {
+    padding: 10px 14px 12px;
+  }
+}
